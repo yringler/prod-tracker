@@ -18,7 +18,11 @@ import { PushService } from '../push.service';
         @if (pending().length > 0) {
           <button [disabled]="clearing()" (click)="clearAll()">Clear all</button>
         }
-        <button (click)="enablePush()">{{ pushMsg() || 'Enable notifications' }}</button>
+        @if (pushOn()) {
+          <span class="tag">{{ pushMsg() || 'Notifications on' }}</span>
+        } @else {
+          <button (click)="enablePush()">{{ pushMsg() || 'Enable notifications' }}</button>
+        }
       </div>
     </div>
 
@@ -58,9 +62,11 @@ export class TrackerComponent implements OnInit {
   busy = signal<string | null>(null);
   clearing = signal(false);
   pushMsg = signal<string>('');
+  pushOn = signal(false);
 
   ngOnInit(): void {
     this.refresh();
+    this.push.status().then((s) => this.pushOn.set(s === 'granted'));
   }
 
   refresh(): void {
@@ -99,6 +105,7 @@ export class TrackerComponent implements OnInit {
   async enablePush(): Promise<void> {
     this.pushMsg.set('…');
     const r = await this.push.enable();
+    this.pushOn.set(r === 'granted');
     this.pushMsg.set(
       r === 'granted' ? 'Notifications on' : r === 'denied' ? 'Blocked' : 'Unsupported',
     );

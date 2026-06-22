@@ -8,6 +8,17 @@ import { ApiService } from './api.service';
 export class PushService {
   private api = inject(ApiService);
 
+  // Checks current state without prompting, so callers can hide the
+  // "Enable" button on reload when notifications are already on.
+  async status(): Promise<'granted' | 'denied' | 'unsupported' | 'default'> {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+    if (Notification.permission !== 'granted') return Notification.permission;
+
+    const reg = await navigator.serviceWorker.getRegistration('/sw-push.js');
+    const sub = await reg?.pushManager.getSubscription();
+    return sub ? 'granted' : 'default';
+  }
+
   async enable(): Promise<'granted' | 'denied' | 'unsupported'> {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
 
