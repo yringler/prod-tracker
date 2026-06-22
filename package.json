@@ -1,6 +1,6 @@
 {
     "name": "storypoint-tracker",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "private": true,
     "type": "module",
     "description": "Personal/peer story-point effort tracker on top of Jira Cloud",
