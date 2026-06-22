@@ -17,7 +17,7 @@ crons = ["*/3 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "storypoint-tracker"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "80bb229d-7a2c-4ca2-bedb-65bef36c410a"
 
 # Secrets (set via `wrangler secret put`), NOT vars:
 #   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY

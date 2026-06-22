@@ -1,42 +1,42 @@
 {
-  "name": "storypoint-tracker",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Personal/peer story-point effort tracker on top of Jira Cloud",
-  "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p shared/tsconfig.json --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "eslint . --ext .ts",
-    "dev": "wrangler dev",
-    "deploy": "npm run build:client && wrangler deploy",
-    "build:client": "cd client && ng build --configuration production"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240620.0",
-    "@typescript-eslint/eslint-plugin": "^8.18.0",
-    "@typescript-eslint/parser": "^8.18.0",
-    "better-sqlite3": "^12.11.1",
-    "eslint": "^8.57.0",
-    "typescript": "^5.9.0",
-    "vitest": "^2.1.0",
-    "wrangler": "^3.60.0"
-  },
-  "dependencies": {
-    "@angular/common": "^21.2.0",
-    "@angular/compiler": "^21.2.0",
-    "@angular/core": "^21.2.0",
-    "@angular/forms": "^21.2.0",
-    "@angular/platform-browser": "^21.2.0",
-    "@angular/router": "^21.2.0",
-    "rxjs": "^7.8.0",
-    "tslib": "^2.6.0",
-    "zone.js": "~0.15.0"
-  },
-  "optionalDependencies": {
-    "@angular-devkit/build-angular": "^21.2.0",
-    "@angular/cli": "^21.2.0",
-    "@angular/compiler-cli": "^21.2.0"
-  }
+    "name": "storypoint-tracker",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Personal/peer story-point effort tracker on top of Jira Cloud",
+    "scripts": {
+        "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p shared/tsconfig.json --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "lint": "eslint . --ext .ts",
+        "dev": "wrangler dev",
+        "deploy": "npm run build:client && wrangler deploy",
+        "build:client": "cd client && ng build --configuration production"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^4.20240620.0",
+        "@typescript-eslint/eslint-plugin": "^8.18.0",
+        "@typescript-eslint/parser": "^8.18.0",
+        "better-sqlite3": "^12.11.1",
+        "eslint": "^8.57.0",
+        "typescript": "^5.9.0",
+        "vitest": "^2.1.0",
+        "wrangler": "^4.103.0"
+    },
+    "dependencies": {
+        "@angular/common": "^21.2.0",
+        "@angular/compiler": "^21.2.0",
+        "@angular/core": "^21.2.0",
+        "@angular/forms": "^21.2.0",
+        "@angular/platform-browser": "^21.2.0",
+        "@angular/router": "^21.2.0",
+        "rxjs": "^7.8.0",
+        "tslib": "^2.6.0",
+        "zone.js": "~0.15.0"
+    },
+    "optionalDependencies": {
+        "@angular-devkit/build-angular": "^21.2.0",
+        "@angular/cli": "^21.2.0",
+        "@angular/compiler-cli": "^21.2.0"
+    }
 }
