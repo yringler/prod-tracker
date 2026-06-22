@@ -153,6 +153,25 @@ export class Dao {
     return r?.display_name ?? accountId;
   }
 
+  /** Everyone in an org (whose token reaches `cloudId`), with display name, for
+   *  the admin member-picker dropdowns. Org boundary = user_sites (same as
+   *  accountHasSite/listSites). Erased accounts are gone from both tables. */
+  async listOrgMembers(
+    cloudId: string,
+  ): Promise<Array<{ accountId: string; displayName: string }>> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT us.account_id AS account_id, u.display_name AS display_name
+         FROM user_sites us
+         JOIN users u ON u.account_id = us.account_id
+         WHERE us.cloud_id = ?
+         ORDER BY u.display_name`,
+      )
+      .bind(cloudId)
+      .all<{ account_id: string; display_name: string }>();
+    return results.map((r) => ({ accountId: r.account_id, displayName: r.display_name }));
+  }
+
   async listMemberships(
     teamId: string,
   ): Promise<Array<{ accountId: string; effectiveFrom: string; effectiveTo: string | null }>> {

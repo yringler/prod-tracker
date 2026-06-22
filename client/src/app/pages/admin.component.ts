@@ -1,8 +1,18 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import {
+  CUSTOM_ELEMENTS_SCHEMA,
+  ChangeDetectionStrategy,
+  Component,
+  OnInit,
+  inject,
+  signal,
+} from '@angular/core';
 import { FormField, form, required } from '@angular/forms/signals';
-import type { ConfigResponse, Team, TeamMembership } from '@shared/contracts';
+import type { ConfigResponse, OrgMember, Team, TeamMembership } from '@shared/contracts';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
+// Register the webawesome custom elements used in this template.
+import '@awesome.me/webawesome/dist/components/select/select.js';
+import '@awesome.me/webawesome/dist/components/option/option.js';
 
 // Admin screens: teams, effective-dated memberships, admin appointment (with the
 // last-admin guard surfaced from the API), and the done-status set. Built with
@@ -13,6 +23,7 @@ import { AuthService } from '../auth.service';
   selector: 'sp-admin',
   standalone: true,
   imports: [FormField],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h2>Admin</h2>
@@ -47,11 +58,25 @@ import { AuthService } from '../auth.service';
     <div class="panel">
       <h3>Assign member to team</h3>
       <div class="row">
-        <input [formField]="adminForm.assignAccountId" placeholder="accountId" />
-        <select [formField]="adminForm.assignTeamId">
-          <option value="" disabled>team…</option>
-          @for (t of teams(); track t.teamId) { <option [value]="t.teamId">{{ t.name }}</option> }
-        </select>
+        <wa-select
+          with-clear
+          placeholder="member…"
+          [value]="adminModel().assignAccountId"
+          (change)="setField('assignAccountId', $event)"
+        >
+          @for (mem of orgMembers(); track mem.accountId) {
+            <wa-option [value]="mem.accountId">{{ mem.displayName }}</wa-option>
+          }
+        </wa-select>
+        <wa-select
+          placeholder="team…"
+          [value]="adminModel().assignTeamId"
+          (change)="setField('assignTeamId', $event)"
+        >
+          @for (t of teams(); track t.teamId) {
+            <wa-option [value]="t.teamId">{{ t.name }}</wa-option>
+          }
+        </wa-select>
         <button
           class="primary"
           [disabled]="adminForm.assignAccountId().invalid() || adminForm.assignTeamId().invalid()"
@@ -66,13 +91,31 @@ import { AuthService } from '../auth.service';
     <div class="panel">
       <h3>Admins</h3>
       <div class="row">
-        <input [formField]="adminForm.appointAccountId" placeholder="accountId to appoint" />
+        <wa-select
+          with-clear
+          placeholder="member to appoint…"
+          [value]="adminModel().appointAccountId"
+          (change)="setField('appointAccountId', $event)"
+        >
+          @for (mem of orgMembers(); track mem.accountId) {
+            <wa-option [value]="mem.accountId">{{ mem.displayName }}</wa-option>
+          }
+        </wa-select>
         <button class="primary" [disabled]="adminForm.appointAccountId().invalid()" (click)="appoint()">
           Appoint admin
         </button>
       </div>
       <div class="row" style="margin-top:8px">
-        <input [formField]="adminForm.revokeAccountId" placeholder="accountId to revoke" />
+        <wa-select
+          with-clear
+          placeholder="member to revoke…"
+          [value]="adminModel().revokeAccountId"
+          (change)="setField('revokeAccountId', $event)"
+        >
+          @for (mem of orgMembers(); track mem.accountId) {
+            <wa-option [value]="mem.accountId">{{ mem.displayName }}</wa-option>
+          }
+        </wa-select>
         <button [disabled]="adminForm.revokeAccountId().invalid()" (click)="revoke()">Revoke admin</button>
       </div>
       @if (adminMsg()) { <p class="muted">{{ adminMsg() }}</p> }
@@ -93,6 +136,7 @@ export class AdminComponent implements OnInit {
   private auth = inject(AuthService);
 
   teams = signal<Team[]>([]);
+  orgMembers = signal<OrgMember[]>([]);
   members = signal<TeamMembership[]>([]);
   openTeam = signal<string | null>(null);
   adminMsg = signal('');
@@ -118,6 +162,7 @@ export class AdminComponent implements OnInit {
 
   ngOnInit(): void {
     this.refreshTeams();
+    this.api.orgMembers().subscribe((r) => this.orgMembers.set(r.members));
     this.api.adminConfig().subscribe((c: ConfigResponse) =>
       this.adminModel.update((m) => ({ ...m, doneNames: c.doneStatusNames.join(', ') })),
     );
@@ -125,6 +170,16 @@ export class AdminComponent implements OnInit {
 
   private refreshTeams(): void {
     this.api.teams().subscribe((r) => this.teams.set(r.teams));
+  }
+
+  /** Bridge a webawesome <wa-select> change into the Signal Forms model. The
+   *  `required` validators derive from the model, so button-gating still works. */
+  setField(
+    key: 'assignAccountId' | 'assignTeamId' | 'appointAccountId' | 'revokeAccountId',
+    ev: Event,
+  ): void {
+    const value = (ev.target as HTMLSelectElement).value;
+    this.adminModel.update((m) => ({ ...m, [key]: value }));
   }
 
   createTeam(): void {

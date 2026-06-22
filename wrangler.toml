@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 # it runs for `wrangler deploy`, `wrangler dev`, and Workers Builds (whose default
 # deploy command is `npx wrangler deploy`). Output dir matches [assets].directory.
 [build]
-command = "npm run build:client"
+command = "npm run test && npm run build:client"
 
 # Built Angular SPA ships as the Worker's static assets — same origin, no CORS.
 [assets]

@@ -9,6 +9,7 @@ import type {
   ConfigResponse,
   CreateTeamRequest,
   DoneStatusConfigRequest,
+  OrgMembersResponse,
   Team,
   TeamMembership,
 } from '@shared/contracts';
@@ -25,6 +26,11 @@ export async function createTeam(req: Request, ctx: AuthedCtx): Promise<Response
 export async function listTeams(ctx: AuthedCtx): Promise<Response> {
   const teams = await ctx.dao.listTeams(ctx.cloudId);
   return json({ teams } satisfies { teams: Team[] });
+}
+
+export async function listOrgMembers(ctx: AuthedCtx): Promise<Response> {
+  const members = await ctx.dao.listOrgMembers(ctx.cloudId);
+  return json({ members } satisfies OrgMembersResponse);
 }
 
 export async function listMemberships(ctx: AuthedCtx, teamId: string): Promise<Response> {

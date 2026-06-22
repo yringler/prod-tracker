@@ -11,6 +11,7 @@ import type {
   DoneStatusConfigRequest,
   MeResponse,
   MyRatingsResponse,
+  OrgMembersResponse,
   PendingRatingsResponse,
   PushSubscriptionRequest,
   SubmitRatingRequest,
@@ -67,6 +68,9 @@ export class ApiService {
   // --- admin ---
   createTeam(body: CreateTeamRequest): Observable<Team> {
     return this.http.post<Team>('/api/admin/teams', body);
+  }
+  orgMembers(): Observable<OrgMembersResponse> {
+    return this.http.get<OrgMembersResponse>('/api/admin/users');
   }
   memberships(teamId: string): Observable<{ members: TeamMembership[] }> {
     return this.http.get<{ members: TeamMembership[] }>(

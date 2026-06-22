@@ -17,6 +17,7 @@ import {
   createTeam,
   getConfig as adminGetConfig,
   listMemberships,
+  listOrgMembers,
   listTeams as adminListTeams,
   revokeAdmin,
   setDoneStatuses,
@@ -89,6 +90,7 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p.startsWith('/api/admin/')) {
     if (!(await requireAdmin(ctx))) return error(403, 'admin required');
 
+    if (p === '/api/admin/users' && m === 'GET') return listOrgMembers(ctx);
     if (p === '/api/admin/teams' && m === 'POST') return createTeam(req, ctx);
     if (p === '/api/admin/memberships' && m === 'POST') return assignMembership(req, ctx);
     if (p === '/api/admin/admins' && m === 'POST') return appointAdmin(req, ctx);

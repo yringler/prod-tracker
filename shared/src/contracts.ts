@@ -117,6 +117,16 @@ export interface TeamMembership {
   effectiveTo: string | null;
 }
 
+/** A person in the admin's current org (cloudId), for member-picker dropdowns. */
+export interface OrgMember {
+  accountId: string;
+  displayName: string;
+}
+
+export interface OrgMembersResponse {
+  members: OrgMember[];
+}
+
 export interface CreateTeamRequest {
   cloudId: string;
   name: string;
