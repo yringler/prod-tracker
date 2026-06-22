@@ -1,0 +1,15 @@
+{
+  // Root tsconfig: the file esbuild (wrangler) and editors auto-discover. It must
+  // carry the @shared/* path mapping explicitly (not only via `extends`) so the
+  // Worker bundle and the language server both resolve shared imports.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["shared/src/*"]
+    },
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true
+  },
+  "include": ["worker/src/**/*.ts", "shared/src/**/*.ts"]
+}
