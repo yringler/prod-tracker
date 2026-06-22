@@ -3,6 +3,7 @@ import type { Env } from './env';
 import { authenticate, error, requireAdmin } from './http';
 import { runPoll } from './cron/poller';
 import { reportPersonalData } from './cron/pd-report';
+import { log, errFields } from './log';
 import {
   authCallback,
   authLogout,
@@ -36,20 +37,29 @@ export default {
     try {
       return await route(req, env, url);
     } catch (e) {
-      console.error('unhandled route error:', e);
+      log.error('route: unhandled error', { method: req.method, path: url.pathname, ...errFields(e) });
       return error(500, 'internal error');
     }
   },
 
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     const dao = new Dao(env.DB);
-    await runPoll(env, dao);
+    // One id per tick so every poll line correlates in Logs Explorer.
+    const tick = log.child({ runId: crypto.randomUUID() });
+    const startedAt = Date.now();
+    // runPoll was unguarded: any throw aborted the whole tick invisibly.
+    try {
+      await runPoll(env, dao, tick);
+    } catch (e) {
+      tick.error('poll: runPoll threw', errFields(e));
+    }
     // GDPR personal-data reporting. Must never break polling, so it's isolated.
     try {
       await reportPersonalData(env, dao);
     } catch (e) {
-      console.error('pd-report failed:', e);
+      tick.error('pd-report failed', errFields(e));
     }
+    tick.info('tick: done', { ms: Date.now() - startedAt });
   },
 };
 

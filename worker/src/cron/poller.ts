@@ -15,25 +15,36 @@ import {
   searchChangedIssues,
 } from '../jira/search';
 import { sendPush } from '../push/webpush';
+import { log as rootLog, errFields, type Logger } from '../log';
 
-export async function runPoll(env: Env, dao: Dao): Promise<void> {
+export async function runPoll(env: Env, dao: Dao, log: Logger = rootLog): Promise<void> {
   const tokens = await dao.allTokens();
   const refreshedClouds = new Set<string>();
+  log.info('poll: start', { tokens: tokens.length });
 
   // One grant per account; poll each site (cloud) that grant can reach.
   for (const token of tokens) {
-    if (await dao.getUserNeedsReauth(token.accountId)) continue;
+    if (await dao.getUserNeedsReauth(token.accountId)) {
+      // Silent skip was invisible: a stale grant simply produced no data.
+      log.warn('poll: skip account (needs reauth)', { accountId: token.accountId });
+      continue;
+    }
     const sites = await dao.listSites(token.accountId);
     for (const site of sites) {
+      const slog = log.child({ accountId: token.accountId, cloudId: site.cloudId });
       try {
         const client = new JiraClient(env, dao, token, site.cloudId);
-        await pollOneSite(env, dao, client, token, site.cloudId, refreshedClouds);
+        await pollOneSite(env, dao, client, token, site.cloudId, refreshedClouds, slog);
       } catch (e) {
-        if (e instanceof ReauthRequiredError) break; // grant dead — skip its sites
-        console.error(`poll failed for ${token.accountId}/${site.cloudId}:`, e);
+        if (e instanceof ReauthRequiredError) {
+          slog.warn('poll: grant dead, skipping account sites');
+          break; // grant dead — skip its sites
+        }
+        slog.error('poll: site failed', errFields(e));
       }
     }
   }
+  log.info('poll: done');
 }
 
 async function pollOneSite(
@@ -43,6 +54,7 @@ async function pollOneSite(
   token: OAuthTokenRow,
   cloudId: string,
   refreshedClouds: Set<string>,
+  log: Logger,
 ): Promise<void> {
   let config = await dao.getConfig(cloudId);
 
@@ -51,18 +63,28 @@ async function pollOneSite(
     const disc = await discoverFields(client);
     if (disc.ambiguous.storyPoints.length || disc.ambiguous.sprint.length) {
       // Flag rather than guess — see "Things to flag" in the spec.
-      console.warn(`field discovery ambiguous on ${cloudId}:`, disc.ambiguous);
+      log.warn('poll: field discovery ambiguous', { ambiguous: disc.ambiguous });
     }
     if (disc.storyPointsFieldId && disc.sprintFieldId) {
       await dao.setFieldIds(cloudId, disc.storyPointsFieldId, disc.sprintFieldId);
       config = await dao.getConfig(cloudId);
+      log.info('poll: field ids discovered', {
+        storyPointsFieldId: disc.storyPointsFieldId,
+        sprintFieldId: disc.sprintFieldId,
+      });
+    } else {
+      // The poll continues, but with null field ids points/sprints stay empty.
+      log.warn('poll: field ids unresolved', {
+        storyPoints: disc.storyPointsFieldId,
+        sprint: disc.sprintFieldId,
+      });
     }
   }
 
   // Refresh sprint windows once per cloud per poll run.
   if (!refreshedClouds.has(cloudId)) {
     refreshedClouds.add(cloudId);
-    await refreshSprints(dao, client, cloudId);
+    await refreshSprints(dao, client, cloudId, log);
   }
   const sprints = await dao.sprintWindows(cloudId);
 
@@ -70,11 +92,18 @@ async function pollOneSite(
     storyPointsFieldId: config.storyPointsFieldId,
     sprintFieldId: config.sprintFieldId,
   });
+  log.info('poll: search', { issues: issues.length });
 
   for (const issue of issues) {
     const transitions = extractStatusTransitions(issue);
     const cursor = await dao.getLastSeenChangelogId(cloudId, issue.key);
     const { toEmit, newLastSeen } = diffNewTransitions(transitions, cursor);
+    log.debug('poll: issue', {
+      issueKey: issue.key,
+      transitions: transitions.length,
+      cursor,
+      toEmit: toEmit.length,
+    });
     if (toEmit.length === 0) continue;
 
     const storyPoints = readStoryPoints(issue, config.storyPointsFieldId);
@@ -97,12 +126,17 @@ async function pollOneSite(
         changelogId: t.changelogId,
         transitionedAt: t.at,
       });
+      log.info('poll: pending inserted', {
+        issueKey: issue.key,
+        changelogId: t.changelogId,
+        toStatus: t.toStatus,
+      });
       await pushPending(env, dao, token.accountId, {
         pendingId,
         issueKey: issue.key,
         title,
         toStatus: t.toStatus,
-      });
+      }, log);
 
       // Separately, record done-status transitions into the done series,
       // bucketed by the CHANGELOG timestamp's sprint window (not current sprint).
@@ -130,9 +164,15 @@ async function pollOneSite(
   }
 }
 
-async function refreshSprints(dao: Dao, client: JiraClient, cloudId: string): Promise<void> {
+async function refreshSprints(
+  dao: Dao,
+  client: JiraClient,
+  cloudId: string,
+  log: Logger,
+): Promise<void> {
   try {
     const boards = await listBoards(client);
+    let n = 0;
     for (const board of boards) {
       const sprints = await listSprints(client, board.id);
       for (const s of sprints) {
@@ -144,10 +184,12 @@ async function refreshSprints(dao: Dao, client: JiraClient, cloudId: string): Pr
           startAt: s.startDate ?? null,
           endAt: s.endDate ?? null,
         });
+        n++;
       }
     }
+    log.info('poll: sprints refreshed', { boards: boards.length, sprints: n });
   } catch (e) {
-    console.warn(`sprint refresh failed for ${cloudId}:`, e);
+    log.warn('poll: sprint refresh failed', errFields(e));
   }
 }
 
@@ -156,8 +198,13 @@ async function pushPending(
   dao: Dao,
   accountId: string,
   data: { pendingId: string; issueKey: string; title: string; toStatus: string },
+  log: Logger,
 ): Promise<void> {
   const subs = await dao.subscriptionsFor(accountId);
+  if (subs.length === 0) {
+    log.warn('push: no subscriptions', { accountId, issueKey: data.issueKey });
+    return;
+  }
   for (const sub of subs) {
     try {
       const r = await sendPush(
@@ -171,11 +218,12 @@ async function pushPending(
           toStatus: data.toStatus,
         },
       );
+      log.info('push: sent', { accountId, issueKey: data.issueKey, status: r.status });
       if (r.status === 404 || r.status === 410) {
         await dao.deleteSubscription(accountId, sub.endpoint); // gone — prune
       }
     } catch (e) {
-      console.warn(`push failed for ${accountId}:`, e);
+      log.warn('push: failed', { accountId, ...errFields(e) });
     }
   }
 }

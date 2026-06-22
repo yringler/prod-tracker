@@ -2,6 +2,11 @@
 // and Agile-API sprint discovery. The query window is wider than the cron
 // interval so a missed tick doesn't drop transitions — idempotency (by
 // changelog id) makes the overlap safe.
+//
+// Uses the enhanced search endpoint /rest/api/3/search/jql. The legacy
+// /rest/api/3/search was removed by Atlassian (returns 410 Gone) — the new
+// endpoint is token-paginated and signals the last page by omitting
+// nextPageToken (it does not return a total).
 
 import type { JiraClient } from './client';
 import type { JiraIssue } from './changelog';
@@ -10,8 +15,7 @@ import type { JiraIssue } from './changelog';
 export const POLL_WINDOW_MINUTES = 10;
 
 interface SearchResponse {
-  issues: JiraIssue[];
-  isLast?: boolean;
+  issues?: JiraIssue[];
   nextPageToken?: string;
 }
 
@@ -37,16 +41,17 @@ export async function searchChangedIssues(
     fields: fields.join(','),
   });
   const all: JiraIssue[] = [];
-  // Page defensively; most polls return a handful of issues.
+  // Page defensively; most polls return a handful of issues. The enhanced
+  // endpoint ends a result set by omitting nextPageToken, so loop on that.
   let guard = 0;
-  let path = `/rest/api/3/search?${params.toString()}`;
+  let path = `/rest/api/3/search/jql?${params.toString()}`;
   for (;;) {
     const res = await client.get<SearchResponse>(path);
-    all.push(...res.issues);
-    if (res.isLast !== false || !res.nextPageToken || ++guard > 20) break;
+    all.push(...(res.issues ?? []));
+    if (!res.nextPageToken || ++guard > 20) break;
     const p = new URLSearchParams(params);
     p.set('nextPageToken', res.nextPageToken);
-    path = `/rest/api/3/search?${p.toString()}`;
+    path = `/rest/api/3/search/jql?${p.toString()}`;
   }
   return all;
 }
