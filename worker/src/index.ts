@@ -2,6 +2,7 @@ import { Dao } from './db/dao';
 import type { Env } from './env';
 import { authenticate, error, requireAdmin } from './http';
 import { runPoll } from './cron/poller';
+import { reportPersonalData } from './cron/pd-report';
 import {
   authCallback,
   authLogout,
@@ -40,7 +41,14 @@ export default {
   },
 
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
-    await runPoll(env, new Dao(env.DB));
+    const dao = new Dao(env.DB);
+    await runPoll(env, dao);
+    // GDPR personal-data reporting. Must never break polling, so it's isolated.
+    try {
+      await reportPersonalData(env, dao);
+    } catch (e) {
+      console.error('pd-report failed:', e);
+    }
   },
 };
 

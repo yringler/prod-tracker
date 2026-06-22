@@ -575,6 +575,113 @@ export class Dao {
       .run();
   }
 
+  // --- GDPR personal-data reporting & erasure --------------------------------
+  //
+  // CRON-ONLY. accountsForReport/accountsDueForReport return account-level data
+  // and MUST NOT be reachable from any HTTP route — that would re-create the
+  // surveillance read-path the privacy invariant forbids. They feed the
+  // report-accounts cron (worker/src/cron/pd-report.ts) exclusively.
+
+  /**
+   * Every accountId we store ANY personal data for, with the age (updatedAt) of
+   * that data. The accountId itself is PD, so this is the union across every
+   * account-bearing table. `updatedAt` is users.last_seen_at (when we fetched the
+   * display name — the only non-id PD) or, for accounts with no profile row, now.
+   * Already-anonymized rows (`erased:*`) are excluded.
+   */
+  async accountsForReport(): Promise<Array<{ accountId: string; updatedAt: string }>> {
+    const { results } = await this.db
+      .prepare(
+        `WITH ids(account_id) AS (
+                 SELECT account_id      FROM oauth_tokens
+           UNION SELECT account_id      FROM user_sites
+           UNION SELECT account_id      FROM users
+           UNION SELECT account_id      FROM admins
+           UNION SELECT appointed_by    FROM admins WHERE appointed_by IS NOT NULL
+           UNION SELECT account_id      FROM team_memberships
+           UNION SELECT rater_account_id FROM ratings
+           UNION SELECT account_id      FROM done_events WHERE account_id IS NOT NULL
+           UNION SELECT account_id      FROM pending_ratings
+           UNION SELECT account_id      FROM push_subscriptions
+           UNION SELECT account_id      FROM sessions
+         )
+         SELECT i.account_id AS account_id, u.last_seen_at AS last_seen_at
+         FROM ids i LEFT JOIN users u ON u.account_id = i.account_id
+         WHERE i.account_id NOT LIKE 'erased:%'`,
+      )
+      .all<{ account_id: string; last_seen_at: string | null }>();
+    const fallback = now();
+    return results.map((r) => ({
+      accountId: r.account_id,
+      updatedAt: r.last_seen_at ?? fallback,
+    }));
+  }
+
+  /** Accounts whose personal data is due to be (re-)reported: never reported, or
+   *  last reported longer ago than the cycle period. */
+  async accountsDueForReport(
+    cycleMs: number,
+    nowMs: number,
+  ): Promise<Array<{ accountId: string; updatedAt: string }>> {
+    const all = await this.accountsForReport();
+    const { results } = await this.db
+      .prepare(`SELECT account_id, last_reported_at FROM pd_report_state`)
+      .all<{ account_id: string; last_reported_at: string }>();
+    const lastReported = new Map(results.map((r) => [r.account_id, Date.parse(r.last_reported_at)]));
+    return all.filter((a) => {
+      const last = lastReported.get(a.accountId);
+      return last === undefined || nowMs - last >= cycleMs;
+    });
+  }
+
+  /** Record that these accounts were reported at `at` (resets the cycle clock). */
+  async markReported(accountIds: string[], at: string): Promise<void> {
+    if (accountIds.length === 0) return;
+    await this.db.batch(
+      accountIds.map((id) =>
+        this.db
+          .prepare(
+            `INSERT INTO pd_report_state (account_id, last_reported_at) VALUES (?, ?)
+             ON CONFLICT(account_id) DO UPDATE SET last_reported_at = excluded.last_reported_at`,
+          )
+          .bind(id, at),
+      ),
+    );
+  }
+
+  /**
+   * Right to erasure. Hard-deletes the account's personal data everywhere, EXCEPT
+   * ratings/done_events: those keep their aggregate value but have the accountId
+   * irreversibly replaced by one fresh opaque `erased:*` id (no mapping retained →
+   * anonymized, outside GDPR), so historical claimed-vs-done charts and
+   * distinct-rater counts stay correct. admins.appointed_by references are nulled.
+   */
+  async eraseAccount(accountId: string): Promise<void> {
+    const pseudonym = `erased:${uuid()}`;
+    await this.db.batch([
+      this.db.prepare(`DELETE FROM oauth_tokens      WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM user_sites        WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM users             WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM admins            WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`UPDATE admins SET appointed_by = NULL WHERE appointed_by = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM team_memberships  WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM pending_ratings   WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM push_subscriptions WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM sessions          WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM pd_report_state   WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`UPDATE ratings     SET rater_account_id = ? WHERE rater_account_id = ?`).bind(pseudonym, accountId),
+      this.db.prepare(`UPDATE done_events SET account_id = ?       WHERE account_id = ?`).bind(pseudonym, accountId),
+    ]);
+  }
+
+  /** Replace our stored copy of an account's display name (the "updated" case). */
+  async refreshDisplayName(accountId: string, displayName: string, at: string): Promise<void> {
+    await this.db
+      .prepare(`UPDATE users SET display_name = ?, last_seen_at = ? WHERE account_id = ?`)
+      .bind(displayName, at, accountId)
+      .run();
+  }
+
   // --- AGGREGATES (team-grouped, sums only; never per-account) ---------------
 
   /**

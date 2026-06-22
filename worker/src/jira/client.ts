@@ -29,6 +29,16 @@ export class JiraClient {
     return !!(t.accessToken && t.expiresAt && Date.parse(t.expiresAt) > Date.now());
   }
 
+  /**
+   * Mint a valid bearer token for this account, refreshing (and persisting the
+   * rotated refresh token) if needed. The token is account-scoped, not
+   * cloud-scoped, so callers that only need a token — e.g. the GDPR
+   * report-accounts cron — may construct a client with any (or empty) cloudId.
+   */
+  async bearer(): Promise<string> {
+    return this.accessToken();
+  }
+
   private async accessToken(): Promise<string> {
     if (this.isFresh(this.token)) return this.token.accessToken as string;
 

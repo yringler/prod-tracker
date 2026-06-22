@@ -147,3 +147,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at  TEXT NOT NULL,
   expires_at  TEXT NOT NULL
 );
+
+-- GDPR personal-data reporting cadence. One row per accountId we've reported to
+-- Atlassian's report-accounts API; last_reported_at gates the >=7-day cycle
+-- period so the 3-minute cron re-reports each account at most that often.
+CREATE TABLE IF NOT EXISTS pd_report_state (
+  account_id        TEXT PRIMARY KEY,
+  last_reported_at  TEXT NOT NULL
+);

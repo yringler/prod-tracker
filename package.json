@@ -11,7 +11,9 @@
         "lint": "eslint . --ext .ts",
         "dev": "wrangler dev",
         "deploy": "wrangler deploy",
-        "build:client": "cd client && ng build --configuration production"
+        "build:client": "cd client && ng build --configuration production",
+        "db:apply": "wrangler d1 execute storypoint-tracker --local --file worker/src/db/schema.sql",
+        "db:apply:remote": "wrangler d1 execute storypoint-tracker --remote --file worker/src/db/schema.sql"
     },
     "devDependencies": {
         "@angular-devkit/build-angular": "^21.2.0",
