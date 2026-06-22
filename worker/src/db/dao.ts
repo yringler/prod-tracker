@@ -609,30 +609,42 @@ export class Dao {
    * Already-anonymized rows (`erased:*`) are excluded.
    */
   async accountsForReport(): Promise<Array<{ accountId: string; updatedAt: string }>> {
-    const { results } = await this.db
-      .prepare(
-        `WITH ids(account_id) AS (
-                 SELECT account_id      FROM oauth_tokens
-           UNION SELECT account_id      FROM user_sites
-           UNION SELECT account_id      FROM users
-           UNION SELECT account_id      FROM admins
-           UNION SELECT appointed_by    FROM admins WHERE appointed_by IS NOT NULL
-           UNION SELECT account_id      FROM team_memberships
-           UNION SELECT rater_account_id FROM ratings
-           UNION SELECT account_id      FROM done_events WHERE account_id IS NOT NULL
-           UNION SELECT account_id      FROM pending_ratings
-           UNION SELECT account_id      FROM push_subscriptions
-           UNION SELECT account_id      FROM sessions
-         )
-         SELECT i.account_id AS account_id, u.last_seen_at AS last_seen_at
-         FROM ids i LEFT JOIN users u ON u.account_id = i.account_id
-         WHERE i.account_id NOT LIKE 'erased:%'`,
-      )
+    // Collect ids per account-bearing table and union in JS. A single SQL
+    // statement UNION-ing all of these exceeded D1's compound-SELECT term limit.
+    // The (table, column) pairs are hardcoded constants — no injection surface.
+    const sources: Array<[table: string, column: string]> = [
+      ['oauth_tokens', 'account_id'],
+      ['user_sites', 'account_id'],
+      ['users', 'account_id'],
+      ['admins', 'account_id'],
+      ['admins', 'appointed_by'],
+      ['team_memberships', 'account_id'],
+      ['ratings', 'rater_account_id'],
+      ['done_events', 'account_id'],
+      ['pending_ratings', 'account_id'],
+      ['push_subscriptions', 'account_id'],
+      ['sessions', 'account_id'],
+    ];
+    const ids = new Set<string>();
+    for (const [table, column] of sources) {
+      const { results } = await this.db
+        .prepare(`SELECT DISTINCT ${column} AS id FROM ${table} WHERE ${column} IS NOT NULL`)
+        .all<{ id: string }>();
+      for (const r of results) {
+        if (r.id && !r.id.startsWith('erased:')) ids.add(r.id); // skip already-anonymized
+      }
+    }
+
+    // last_seen_at (the only non-id PD) ages each account; id-only accounts fall
+    // back to a fresh timestamp.
+    const { results: userRows } = await this.db
+      .prepare(`SELECT account_id, last_seen_at FROM users`)
       .all<{ account_id: string; last_seen_at: string | null }>();
+    const lastSeen = new Map(userRows.map((r) => [r.account_id, r.last_seen_at]));
     const fallback = now();
-    return results.map((r) => ({
-      accountId: r.account_id,
-      updatedAt: r.last_seen_at ?? fallback,
+    return [...ids].map((accountId) => ({
+      accountId,
+      updatedAt: lastSeen.get(accountId) ?? fallback,
     }));
   }
 

@@ -17,11 +17,13 @@ import {
   assignMembership,
   createTeam,
   getConfig as adminGetConfig,
+  listFields,
   listMemberships,
   listOrgMembers,
   listTeams as adminListTeams,
   revokeAdmin,
   setDoneStatuses,
+  setFields,
 } from './routes/admin';
 import { allAggregates, teamAggregate } from './routes/aggregates';
 import { getPending, myRatings, submitRating } from './routes/ratings';
@@ -106,6 +108,8 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (p === '/api/admin/admins' && m === 'POST') return appointAdmin(req, ctx);
     if (p === '/api/admin/config' && m === 'GET') return adminGetConfig(ctx);
     if (p === '/api/admin/config/done-statuses' && m === 'PUT') return setDoneStatuses(req, ctx);
+    if (p === '/api/admin/fields' && m === 'GET') return listFields(ctx);
+    if (p === '/api/admin/config/fields' && m === 'PUT') return setFields(req, ctx);
 
     const memMatch = p.match(/^\/api\/admin\/teams\/([^/]+)\/memberships$/);
     if (memMatch && m === 'GET') return listMemberships(ctx, decodeURIComponent(memMatch[1]!));

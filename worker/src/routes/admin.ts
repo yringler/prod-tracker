@@ -9,11 +9,15 @@ import type {
   ConfigResponse,
   CreateTeamRequest,
   DoneStatusConfigRequest,
+  FieldCandidatesResponse,
   OrgMembersResponse,
+  SetFieldsRequest,
   Team,
   TeamMembership,
 } from '@shared/contracts';
 import { type AuthedCtx, error, json, readJson } from '../http';
+import { JiraClient } from '../jira/client';
+import { listFieldCandidates } from '../jira/fields';
 
 export async function createTeam(req: Request, ctx: AuthedCtx): Promise<Response> {
   const body = await readJson<CreateTeamRequest>(req);
@@ -98,4 +102,34 @@ export async function getConfig(ctx: AuthedCtx): Promise<Response> {
     doneStatusNames: c.doneStatusNames,
   };
   return json(body);
+}
+
+/** Candidate Story Points / Sprint custom fields (id + name) for the picker,
+ *  plus the currently-configured ids. Hits Jira live with the admin's token. */
+export async function listFields(ctx: AuthedCtx): Promise<Response> {
+  const token = await ctx.dao.getToken(ctx.accountId);
+  if (!token) return error(409, 'no Jira grant for this admin', 'NO_GRANT');
+  const client = new JiraClient(ctx.env, ctx.dao, token, ctx.cloudId);
+  const candidates = await listFieldCandidates(client);
+  const config = await ctx.dao.getConfig(ctx.cloudId);
+  const body: FieldCandidatesResponse = {
+    storyPoints: candidates.storyPoints,
+    sprint: candidates.sprint,
+    current: {
+      storyPointsFieldId: config.storyPointsFieldId,
+      sprintFieldId: config.sprintFieldId,
+    },
+  };
+  return json(body);
+}
+
+/** Persist the admin's chosen Story Points + Sprint field ids. Once set, the
+ *  poller stops re-discovering (it only discovers while either id is null). */
+export async function setFields(req: Request, ctx: AuthedCtx): Promise<Response> {
+  const body = await readJson<SetFieldsRequest>(req);
+  if (!body?.cloudId || !body.storyPointsFieldId || !body.sprintFieldId) {
+    return error(400, 'cloudId, storyPointsFieldId and sprintFieldId required');
+  }
+  await ctx.dao.setFieldIds(body.cloudId, body.storyPointsFieldId, body.sprintFieldId);
+  return json({ ok: true });
 }

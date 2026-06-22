@@ -7,7 +7,7 @@ import {
   signal,
 } from '@angular/core';
 import { FormField, form, required } from '@angular/forms/signals';
-import type { ConfigResponse, OrgMember, Team, TeamMembership } from '@shared/contracts';
+import type { ConfigResponse, FieldOption, OrgMember, Team, TeamMembership } from '@shared/contracts';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
 // Register the webawesome custom elements used in this template.
@@ -129,6 +129,47 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
         <button class="primary" (click)="saveDone()">Save</button>
       </div>
     </div>
+
+    <div class="panel">
+      <h3>Custom fields</h3>
+      <p class="muted" style="font-size:12px">
+        Jira's Story Points / Sprint field ids vary per instance. Auto-detection picks them
+        when unambiguous; when more than one matches, choose here. Story points and sprints
+        stay empty until both are set.
+      </p>
+      <div class="row">
+        <label style="min-width:90px">Story Points</label>
+        <wa-select
+          placeholder="Story Points field…"
+          [value]="adminModel().spFieldId"
+          (change)="setField('spFieldId', $event)"
+        >
+          @for (f of spOptions(); track f.id) {
+            <wa-option [value]="f.id">{{ f.name }} ({{ f.id }})</wa-option>
+          }
+        </wa-select>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label style="min-width:90px">Sprint</label>
+        <wa-select
+          placeholder="Sprint field…"
+          [value]="adminModel().sprintFieldId"
+          (change)="setField('sprintFieldId', $event)"
+        >
+          @for (f of sprintOptions(); track f.id) {
+            <wa-option [value]="f.id">{{ f.name }} ({{ f.id }})</wa-option>
+          }
+        </wa-select>
+        <button
+          class="primary"
+          [disabled]="!adminModel().spFieldId || !adminModel().sprintFieldId"
+          (click)="saveFields()"
+        >
+          Save
+        </button>
+      </div>
+      @if (fieldsMsg()) { <p class="muted">{{ fieldsMsg() }}</p> }
+    </div>
   `,
 })
 export class AdminComponent implements OnInit {
@@ -140,6 +181,9 @@ export class AdminComponent implements OnInit {
   members = signal<TeamMembership[]>([]);
   openTeam = signal<string | null>(null);
   adminMsg = signal('');
+  spOptions = signal<FieldOption[]>([]);
+  sprintOptions = signal<FieldOption[]>([]);
+  fieldsMsg = signal('');
 
   // Signal Forms model — all string fields, no null/undefined initial values.
   protected readonly adminModel = signal({
@@ -149,6 +193,8 @@ export class AdminComponent implements OnInit {
     appointAccountId: '',
     revokeAccountId: '',
     doneNames: '',
+    spFieldId: '',
+    sprintFieldId: '',
   });
 
   protected readonly adminForm = form(this.adminModel, (s) => {
@@ -166,6 +212,22 @@ export class AdminComponent implements OnInit {
     this.api.adminConfig().subscribe((c: ConfigResponse) =>
       this.adminModel.update((m) => ({ ...m, doneNames: c.doneStatusNames.join(', ') })),
     );
+    this.api.adminFields().subscribe({
+      next: (r) => {
+        this.spOptions.set(r.storyPoints);
+        this.sprintOptions.set(r.sprint);
+        // Pre-select the configured id, else the sole candidate (nothing when
+        // ambiguous, so the admin is forced to choose).
+        const pick = (cur: string | null, opts: FieldOption[]) =>
+          cur ?? (opts.length === 1 ? opts[0]!.id : '');
+        this.adminModel.update((m) => ({
+          ...m,
+          spFieldId: pick(r.current.storyPointsFieldId, r.storyPoints),
+          sprintFieldId: pick(r.current.sprintFieldId, r.sprint),
+        }));
+      },
+      error: (e) => this.fieldsMsg.set(e?.error?.error ?? 'Could not load Jira fields'),
+    });
   }
 
   private refreshTeams(): void {
@@ -175,7 +237,13 @@ export class AdminComponent implements OnInit {
   /** Bridge a webawesome <wa-select> change into the Signal Forms model. The
    *  `required` validators derive from the model, so button-gating still works. */
   setField(
-    key: 'assignAccountId' | 'assignTeamId' | 'appointAccountId' | 'revokeAccountId',
+    key:
+      | 'assignAccountId'
+      | 'assignTeamId'
+      | 'appointAccountId'
+      | 'revokeAccountId'
+      | 'spFieldId'
+      | 'sprintFieldId',
     ev: Event,
   ): void {
     const value = (ev.target as HTMLSelectElement).value;
@@ -240,5 +308,17 @@ export class AdminComponent implements OnInit {
     this.api
       .setDoneStatuses({ cloudId, doneStatusNames: names })
       .subscribe(() => this.adminMsg.set('Done statuses saved.'));
+  }
+
+  saveFields(): void {
+    const cloudId = this.auth.me()?.cloudId;
+    const { spFieldId, sprintFieldId } = this.adminModel();
+    if (!cloudId || !spFieldId || !sprintFieldId) return;
+    this.api
+      .setFields({ cloudId, storyPointsFieldId: spFieldId, sprintFieldId })
+      .subscribe({
+        next: () => this.fieldsMsg.set('Custom fields saved. They apply on the next poll.'),
+        error: (e) => this.fieldsMsg.set(e?.error?.error ?? 'Save failed'),
+      });
   }
 }

@@ -9,11 +9,13 @@ import type {
   ConfigResponse,
   CreateTeamRequest,
   DoneStatusConfigRequest,
+  FieldCandidatesResponse,
   MeResponse,
   MyRatingsResponse,
   OrgMembersResponse,
   PendingRatingsResponse,
   PushSubscriptionRequest,
+  SetFieldsRequest,
   SubmitRatingRequest,
   SubmitRatingResponse,
   SwitchSiteRequest,
@@ -91,5 +93,11 @@ export class ApiService {
   }
   setDoneStatuses(body: DoneStatusConfigRequest): Observable<unknown> {
     return this.http.put('/api/admin/config/done-statuses', body);
+  }
+  adminFields(): Observable<FieldCandidatesResponse> {
+    return this.http.get<FieldCandidatesResponse>('/api/admin/fields');
+  }
+  setFields(body: SetFieldsRequest): Observable<unknown> {
+    return this.http.put('/api/admin/config/fields', body);
   }
 }

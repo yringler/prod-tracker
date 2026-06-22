@@ -155,6 +155,29 @@ export interface ConfigResponse {
   doneStatusNames: string[];
 }
 
+/** A Jira custom field the admin can pick (id + human-readable name). */
+export interface FieldOption {
+  id: string;
+  name: string;
+}
+
+/** Candidate Story Points / Sprint fields for the admin picker, plus the
+ *  currently-configured ids so the UI can pre-select them. */
+export interface FieldCandidatesResponse {
+  storyPoints: FieldOption[];
+  sprint: FieldOption[];
+  current: {
+    storyPointsFieldId: string | null;
+    sprintFieldId: string | null;
+  };
+}
+
+export interface SetFieldsRequest {
+  cloudId: string;
+  storyPointsFieldId: string;
+  sprintFieldId: string;
+}
+
 export interface ApiError {
   error: string;
   code?: string;

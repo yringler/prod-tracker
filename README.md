@@ -83,16 +83,48 @@ npm run deploy                 # build client + wrangler deploy
 
 ### Atlassian app setup
 
-OAuth 2.0 (3LO) app with scopes:
-`read:jira-work read:jira-user read:board-scope:jira-software read:sprint:jira-software offline_access`,
-callback `https://<your-worker>/api/auth/callback`. Set `JIRA_CLIENT_ID/SECRET` as
-secrets. VAPID keypair (base64url raw) as `VAPID_PUBLIC_KEY/PRIVATE_KEY`.
+OAuth 2.0 (3LO) app, callback `https://<your-worker>/api/auth/callback`. Set
+`JIRA_CLIENT_ID/SECRET` as secrets; VAPID keypair (base64url raw) as
+`VAPID_PUBLIC_KEY/PRIVATE_KEY`.
+
+**Scopes.** Each maps to an endpoint the poller actually calls (see
+`worker/src/jira/`). Three are selectable in the developer console; `offline_access`
+is not (see below).
+
+| Scope | Where it's set | Grants | Used by |
+| --- | --- | --- | --- |
+| `read:jira-user` | console — Jira platform REST API (classic) | current user / display name (`GET /rest/api/3/myself`) | `jira/oauth.ts` (login), `cron/pd-report.ts` |
+| `read:jira-work` | console — Jira platform REST API (classic) | read fields + JQL search (`GET /rest/api/3/field`, `GET /rest/api/3/search/jql`) | `jira/fields.ts`, `jira/search.ts` |
+| `read:board-scope:jira-software` | console — Jira Software API (granular) | read boards + sprints (`GET /rest/agile/1.0/board`, `.../sprint`) | `cron/poller.ts` → `jira/search.ts` |
+| `offline_access` | **authorize URL only** (not the console) | rotating refresh tokens | `jira/client.ts` |
+
+So in the developer console, under *Permissions*, add **two APIs** — "Jira platform
+REST API" (tick `read:jira-user`, `read:jira-work`) and "Jira Software API" (tick
+`read:board-scope:jira-software`). You **won't find `offline_access` in either
+list** — it's a standard OAuth 2.0 scope, not a Jira permission. It's requested in
+the `/authorize` URL's `scope` param, which the app already does via `OAUTH_SCOPES`
+in `worker/src/env.ts`. The full string the app sends at consent:
+
+`read:jira-user read:jira-work read:board-scope:jira-software offline_access`
+
+Notes that bit us in practice:
+
+- **Classic + granular mix is fine** — Atlassian's guidance is "classic where it
+  exists, granular only where it doesn't." Jira Software has **no** classic scopes,
+  so the Agile (`/rest/agile`) calls *must* use the granular
+  `read:board-scope:jira-software`. The platform calls use classic scopes.
+- **The Jira Software API must be added to the app**, not just the scope ticked. If
+  it isn't, `/rest/agile/1.0/board` returns **401** (boards/sprints silently stay
+  empty — aggregates won't get a real "done" line).
+- **A token's scopes are frozen at consent.** After changing scopes you must
+  **re-authorize** (log out and back in) — existing grants keep their old scopes.
+  An `invalid_grant` flags the user `needsReauth`; a *scope* change does not, so
+  re-auth is manual.
+- If sprint reads still 401 after the above, also add `read:sprint:jira-software`
+  (board-scope is documented to cover both, but instances vary).
 
 ## Open flags (decide against your Jira)
 
-- **Search endpoint/pagination**: `worker/src/jira/search.ts` uses
-  `/rest/api/3/search` with token paging. Atlassian is migrating to
-  `/rest/api/3/search/jql`; confirm which your instance expects.
 - **Done-event team attribution**: the raw `done_events` model carries no team, so a
   per-team done line needs one. We snapshot the polling assignee's team at done-time
   (`team_id_at_done`), mirroring the rating snapshot. Flagged because it's a refinement
