@@ -3,6 +3,13 @@ main = "worker/src/index.ts"
 compatibility_date = "2024-06-20"
 compatibility_flags = ["nodejs_compat"]
 
+# Build the Angular SPA before every deploy/dev so [assets] below is populated.
+# client/dist is gitignored, so this is the single source of "how to build" —
+# it runs for `wrangler deploy`, `wrangler dev`, and Workers Builds (whose default
+# deploy command is `npx wrangler deploy`). Output dir matches [assets].directory.
+[build]
+command = "npm run build:client"
+
 # Built Angular SPA ships as the Worker's static assets — same origin, no CORS.
 [assets]
 directory = "client/dist/client/browser"
