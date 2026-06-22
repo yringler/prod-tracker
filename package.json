@@ -11,7 +11,7 @@
     "lint": "eslint . --ext .ts",
     "dev": "wrangler dev",
     "deploy": "npm run build:client && wrangler deploy",
-    "build:client": "ng build --configuration production --project client"
+    "build:client": "cd client && ng build --configuration production"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240620.0",
