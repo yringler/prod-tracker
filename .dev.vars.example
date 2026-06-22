@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `wrangler dev`. Production: use `wrangler secret put`.
+JIRA_CLIENT_ID=
+JIRA_CLIENT_SECRET=
+# VAPID keys are base64url raw: public = 65-byte uncompressed point, private = 32-byte d.
+# Generate with: npx web-push generate-vapid-keys  (then base64url, no padding)
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=

@@ -1,0 +1,28 @@
+name = "storypoint-tracker"
+main = "worker/src/index.ts"
+compatibility_date = "2024-06-20"
+compatibility_flags = ["nodejs_compat"]
+
+# Built Angular SPA ships as the Worker's static assets — same origin, no CORS.
+[assets]
+directory = "client/dist/client/browser"
+binding = "ASSETS"
+# SPA fallback: unmatched non-/api routes serve index.html.
+not_found_handling = "single-page-application"
+
+# Poller runs ~every 3 minutes; JQL window is wider (see jira/poller.ts).
+[triggers]
+crons = ["*/3 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "storypoint-tracker"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Secrets (set via `wrangler secret put`), NOT vars:
+#   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY
+[vars]
+APP_ORIGIN = "http://localhost:8787"
+OAUTH_REDIRECT_PATH = "/api/auth/callback"
+VAPID_SUBJECT = "mailto:admin@example.com"
+BOOTSTRAP_ADMIN_ACCOUNT_ID = ""

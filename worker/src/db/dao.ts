@@ -1,0 +1,688 @@
+// Data-access layer. THE PRIVACY INVARIANT IS ENFORCED HERE.
+//
+//   - The ONLY method that returns individual rating rows is `getRatingsForOwner`,
+//     and it REQUIRES the owner's accountId and filters by it in SQL. Route layer
+//     passes req.user.accountId; there is no code path that passes someone else's.
+//   - Every aggregate method groups by team and selects sums only. None of them
+//     accept a raterAccountId parameter, so no caller can request a per-developer
+//     slice. The return rows carry no account column.
+//
+// If you add a method here that returns per-account rows, it MUST take the owner
+// id and filter on it, OR it breaks the "not a surveillance tool" guarantee.
+
+import type {
+  ClaimedVsDone,
+  Role,
+  SprintWindow,
+} from '@shared/domain';
+import { computeRatio } from '@shared/domain';
+import type { D1Like } from './driver';
+
+const now = () => new Date().toISOString();
+const uuid = () => crypto.randomUUID();
+
+export interface OAuthTokenRow {
+  accountId: string;
+  refreshToken: string;
+  accessToken: string | null;
+  expiresAt: string | null;
+}
+
+export interface SiteRow {
+  cloudId: string;
+  name: string;
+  siteUrl: string;
+}
+
+export interface PendingRow {
+  pendingId: string;
+  cloudId: string;
+  accountId: string;
+  issueKey: string;
+  title: string;
+  url: string;
+  storyPoints: number | null;
+  toStatus: string;
+  changelogId: string;
+  transitionedAt: string;
+}
+
+export interface DoneEventInput {
+  cloudId: string;
+  issueKey: string;
+  storyPoints: number | null;
+  sprintId: number | null;
+  transitionedToDoneAt: string;
+  changelogId: string;
+  accountId: string;
+  teamIdAtDone: string | null;
+}
+
+export class Dao {
+  constructor(private readonly db: D1Like) {}
+
+  // --- OAuth tokens (rotating refresh) ---------------------------------------
+
+  async upsertToken(t: OAuthTokenRow): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO oauth_tokens (account_id, refresh_token, access_token, expires_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET
+           refresh_token = excluded.refresh_token,
+           access_token  = excluded.access_token,
+           expires_at    = excluded.expires_at`,
+      )
+      .bind(t.accountId, t.refreshToken, t.accessToken, t.expiresAt)
+      .run();
+  }
+
+  async getToken(accountId: string): Promise<OAuthTokenRow | null> {
+    const r = await this.db
+      .prepare(`SELECT * FROM oauth_tokens WHERE account_id = ?`)
+      .bind(accountId)
+      .first();
+    return r ? mapToken(r) : null;
+  }
+
+  async allTokens(): Promise<OAuthTokenRow[]> {
+    const { results } = await this.db.prepare(`SELECT * FROM oauth_tokens`).all();
+    return results.map(mapToken);
+  }
+
+  // --- User sites (cloudIds reachable by the account's token) -----------------
+
+  async upsertSite(accountId: string, s: SiteRow): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO user_sites (account_id, cloud_id, name, site_url) VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id, cloud_id) DO UPDATE SET
+           name = excluded.name, site_url = excluded.site_url`,
+      )
+      .bind(accountId, s.cloudId, s.name, s.siteUrl)
+      .run();
+  }
+
+  async listSites(accountId: string): Promise<SiteRow[]> {
+    const { results } = await this.db
+      .prepare(`SELECT cloud_id, name, site_url FROM user_sites WHERE account_id = ? ORDER BY name`)
+      .bind(accountId)
+      .all<{ cloud_id: string; name: string; site_url: string }>();
+    return results.map((r) => ({ cloudId: r.cloud_id, name: r.name, siteUrl: r.site_url }));
+  }
+
+  /** Whether `cloudId` is one of the account's reachable sites — the auth guard
+   *  for switching sites: a user can only select a cloud their token can reach. */
+  async accountHasSite(accountId: string, cloudId: string): Promise<boolean> {
+    const r = await this.db
+      .prepare(`SELECT 1 AS x FROM user_sites WHERE account_id = ? AND cloud_id = ?`)
+      .bind(accountId, cloudId)
+      .first();
+    return !!r;
+  }
+
+  // --- Users -----------------------------------------------------------------
+
+  async upsertUser(accountId: string, displayName: string, cloudId: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO users (account_id, display_name, cloud_id, last_seen_at, needs_reauth)
+         VALUES (?, ?, ?, ?, 0)
+         ON CONFLICT(account_id) DO UPDATE SET
+           display_name = excluded.display_name,
+           cloud_id     = excluded.cloud_id,
+           last_seen_at = excluded.last_seen_at,
+           needs_reauth = 0`,
+      )
+      .bind(accountId, displayName, cloudId, now())
+      .run();
+  }
+
+  async setNeedsReauth(accountId: string, needs: boolean): Promise<void> {
+    await this.db
+      .prepare(`UPDATE users SET needs_reauth = ? WHERE account_id = ?`)
+      .bind(needs ? 1 : 0, accountId)
+      .run();
+  }
+
+  async getDisplayName(accountId: string): Promise<string> {
+    const r = await this.db
+      .prepare(`SELECT display_name FROM users WHERE account_id = ?`)
+      .bind(accountId)
+      .first<{ display_name: string }>();
+    return r?.display_name ?? accountId;
+  }
+
+  async listMemberships(
+    teamId: string,
+  ): Promise<Array<{ accountId: string; effectiveFrom: string; effectiveTo: string | null }>> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT account_id, effective_from, effective_to FROM team_memberships
+         WHERE team_id = ? ORDER BY effective_from DESC`,
+      )
+      .bind(teamId)
+      .all<{ account_id: string; effective_from: string; effective_to: string | null }>();
+    return results.map((r) => ({
+      accountId: r.account_id,
+      effectiveFrom: r.effective_from,
+      effectiveTo: r.effective_to,
+    }));
+  }
+
+  async getUserNeedsReauth(accountId: string): Promise<boolean> {
+    const r = await this.db
+      .prepare(`SELECT needs_reauth FROM users WHERE account_id = ?`)
+      .bind(accountId)
+      .first<{ needs_reauth: number }>();
+    return !!r && r.needs_reauth === 1;
+  }
+
+  // --- Admins ----------------------------------------------------------------
+
+  async isAdmin(accountId: string): Promise<boolean> {
+    const r = await this.db
+      .prepare(`SELECT 1 AS x FROM admins WHERE account_id = ?`)
+      .bind(accountId)
+      .first();
+    return !!r;
+  }
+
+  async countAdmins(): Promise<number> {
+    const r = await this.db
+      .prepare(`SELECT COUNT(*) AS c FROM admins`)
+      .first<{ c: number }>();
+    return r?.c ?? 0;
+  }
+
+  async appointAdmin(accountId: string, appointedBy: string | null): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO admins (account_id, appointed_by, appointed_at) VALUES (?, ?, ?)
+         ON CONFLICT(account_id) DO NOTHING`,
+      )
+      .bind(accountId, appointedBy, now())
+      .run();
+  }
+
+  async revokeAdmin(accountId: string): Promise<void> {
+    await this.db.prepare(`DELETE FROM admins WHERE account_id = ?`).bind(accountId).run();
+  }
+
+  async roleFor(accountId: string, bootstrapAdminId: string): Promise<Role> {
+    if (bootstrapAdminId && accountId === bootstrapAdminId) return 'admin';
+    return (await this.isAdmin(accountId)) ? 'admin' : 'user';
+  }
+
+  // --- Teams & effective-dated memberships -----------------------------------
+
+  async createTeam(cloudId: string, name: string): Promise<string> {
+    const teamId = uuid();
+    await this.db
+      .prepare(`INSERT INTO teams (team_id, cloud_id, name) VALUES (?, ?, ?)`)
+      .bind(teamId, cloudId, name)
+      .run();
+    return teamId;
+  }
+
+  async listTeams(cloudId: string): Promise<Array<{ teamId: string; cloudId: string; name: string }>> {
+    const { results } = await this.db
+      .prepare(`SELECT team_id, cloud_id, name FROM teams WHERE cloud_id = ? ORDER BY name`)
+      .bind(cloudId)
+      .all<{ team_id: string; cloud_id: string; name: string }>();
+    return results.map((r) => ({ teamId: r.team_id, cloudId: r.cloud_id, name: r.name }));
+  }
+
+  /** Move an account to a team: close the open membership, open a new one. */
+  async assignMembership(accountId: string, teamId: string, effectiveFrom?: string): Promise<void> {
+    const at = effectiveFrom ?? now();
+    await this.db
+      .prepare(
+        `UPDATE team_memberships SET effective_to = ?
+         WHERE account_id = ? AND effective_to IS NULL`,
+      )
+      .bind(at, accountId)
+      .run();
+    await this.db
+      .prepare(
+        `INSERT INTO team_memberships (id, account_id, team_id, effective_from, effective_to)
+         VALUES (?, ?, ?, ?, NULL)`,
+      )
+      .bind(uuid(), accountId, teamId, at)
+      .run();
+  }
+
+  /** Team the account belonged to at instant `at` (defaults now). null if none. */
+  async teamAt(accountId: string, at?: string): Promise<string | null> {
+    const t = at ?? now();
+    const r = await this.db
+      .prepare(
+        `SELECT team_id FROM team_memberships
+         WHERE account_id = ? AND effective_from <= ?
+           AND (effective_to IS NULL OR effective_to > ?)
+         ORDER BY effective_from DESC LIMIT 1`,
+      )
+      .bind(accountId, t, t)
+      .first<{ team_id: string }>();
+    return r?.team_id ?? null;
+  }
+
+  // --- Issue state (idempotency cursor) --------------------------------------
+
+  async getLastSeenChangelogId(cloudId: string, issueKey: string): Promise<string | null> {
+    const r = await this.db
+      .prepare(`SELECT last_seen_changelog_id FROM issue_state WHERE cloud_id = ? AND issue_key = ?`)
+      .bind(cloudId, issueKey)
+      .first<{ last_seen_changelog_id: string | null }>();
+    return r?.last_seen_changelog_id ?? null;
+  }
+
+  async setLastSeenChangelogId(cloudId: string, issueKey: string, id: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO issue_state (cloud_id, issue_key, last_seen_changelog_id) VALUES (?, ?, ?)
+         ON CONFLICT(cloud_id, issue_key) DO UPDATE SET last_seen_changelog_id = excluded.last_seen_changelog_id`,
+      )
+      .bind(cloudId, issueKey, id)
+      .run();
+  }
+
+  // --- Pending ratings -------------------------------------------------------
+
+  async insertPending(p: PendingRow): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO pending_ratings
+           (pending_id, cloud_id, account_id, issue_key, title, url, story_points, to_status, changelog_id, transitioned_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(pending_id) DO NOTHING`,
+      )
+      .bind(
+        p.pendingId, p.cloudId, p.accountId, p.issueKey, p.title, p.url,
+        p.storyPoints, p.toStatus, p.changelogId, p.transitionedAt, now(),
+      )
+      .run();
+  }
+
+  /** Pending prompts for ONE account. Scoped by accountId (the owner). */
+  async getPendingForOwner(accountId: string): Promise<PendingRow[]> {
+    const { results } = await this.db
+      .prepare(`SELECT * FROM pending_ratings WHERE account_id = ? ORDER BY transitioned_at DESC`)
+      .bind(accountId)
+      .all();
+    return results.map(mapPending);
+  }
+
+  async getPending(pendingId: string): Promise<PendingRow | null> {
+    const r = await this.db
+      .prepare(`SELECT * FROM pending_ratings WHERE pending_id = ?`)
+      .bind(pendingId)
+      .first();
+    return r ? mapPending(r) : null;
+  }
+
+  async deletePending(pendingId: string): Promise<void> {
+    await this.db.prepare(`DELETE FROM pending_ratings WHERE pending_id = ?`).bind(pendingId).run();
+  }
+
+  // --- Ratings ---------------------------------------------------------------
+
+  async insertRating(input: {
+    cloudId: string;
+    issueKey: string;
+    raterAccountId: string;
+    ratingFraction: number;
+    storyPointsAtRating: number | null;
+    teamIdAtRating: string | null;
+    sprintId: number | null;
+  }): Promise<string> {
+    const id = uuid();
+    await this.db
+      .prepare(
+        `INSERT INTO ratings
+           (id, cloud_id, issue_key, rater_account_id, rating_fraction, story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id, input.cloudId, input.issueKey, input.raterAccountId, input.ratingFraction,
+        input.storyPointsAtRating, input.teamIdAtRating, input.sprintId, now(),
+      )
+      .run();
+    return id;
+  }
+
+  /**
+   * PERSONAL ENDPOINT. Returns individual rating rows for ONE owner only.
+   * `ownerAccountId` is the authenticated caller; the WHERE clause makes it
+   * impossible to read another account's rows. This is the single sanctioned
+   * place that returns per-account data.
+   */
+  async getRatingsForOwner(ownerAccountId: string): Promise<
+    Array<{
+      id: string;
+      issueKey: string;
+      ratingFraction: number;
+      storyPointsAtRating: number | null;
+      sprintId: number | null;
+      ratedAt: string;
+    }>
+  > {
+    const { results } = await this.db
+      .prepare(
+        `SELECT id, issue_key, rating_fraction, story_points_at_rating, sprint_id, rated_at
+         FROM ratings WHERE rater_account_id = ? ORDER BY rated_at DESC`,
+      )
+      .bind(ownerAccountId)
+      .all<{
+        id: string;
+        issue_key: string;
+        rating_fraction: number;
+        story_points_at_rating: number | null;
+        sprint_id: number | null;
+        rated_at: string;
+      }>();
+    return results.map((r) => ({
+      id: r.id,
+      issueKey: r.issue_key,
+      ratingFraction: r.rating_fraction,
+      storyPointsAtRating: r.story_points_at_rating,
+      sprintId: r.sprint_id,
+      ratedAt: r.rated_at,
+    }));
+  }
+
+  // --- Done events -----------------------------------------------------------
+
+  async insertDoneEvent(d: DoneEventInput): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO done_events
+           (id, cloud_id, issue_key, story_points, sprint_id, transitioned_to_done_at, changelog_id, account_id, team_id_at_done)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(cloud_id, changelog_id) DO NOTHING`,
+      )
+      .bind(
+        uuid(), d.cloudId, d.issueKey, d.storyPoints, d.sprintId,
+        d.transitionedToDoneAt, d.changelogId, d.accountId, d.teamIdAtDone,
+      )
+      .run();
+  }
+
+  // --- Sprints ---------------------------------------------------------------
+
+  async upsertSprint(s: {
+    cloudId: string;
+    sprintId: number;
+    boardId: number;
+    name: string;
+    startAt: string | null;
+    endAt: string | null;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO sprints (cloud_id, sprint_id, board_id, name, start_at, end_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(cloud_id, sprint_id) DO UPDATE SET
+           board_id = excluded.board_id, name = excluded.name,
+           start_at = excluded.start_at, end_at = excluded.end_at`,
+      )
+      .bind(s.cloudId, s.sprintId, s.boardId, s.name, s.startAt, s.endAt)
+      .run();
+  }
+
+  async sprintWindows(cloudId: string): Promise<SprintWindow[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT sprint_id, start_at, end_at FROM sprints
+         WHERE cloud_id = ? AND start_at IS NOT NULL AND end_at IS NOT NULL`,
+      )
+      .bind(cloudId)
+      .all<{ sprint_id: number; start_at: string; end_at: string }>();
+    return results.map((r) => ({ sprintId: r.sprint_id, startAt: r.start_at, endAt: r.end_at }));
+  }
+
+  // --- Config ----------------------------------------------------------------
+
+  async getConfig(cloudId: string): Promise<{
+    cloudId: string;
+    storyPointsFieldId: string | null;
+    sprintFieldId: string | null;
+    doneStatusNames: string[];
+    siteUrl: string | null;
+  }> {
+    const r = await this.db
+      .prepare(`SELECT * FROM config WHERE cloud_id = ?`)
+      .bind(cloudId)
+      .first<{
+        cloud_id: string;
+        story_points_field_id: string | null;
+        sprint_field_id: string | null;
+        done_status_names: string;
+        site_url: string | null;
+      }>();
+    if (!r) {
+      return {
+        cloudId,
+        storyPointsFieldId: null,
+        sprintFieldId: null,
+        doneStatusNames: [],
+        siteUrl: null,
+      };
+    }
+    return {
+      cloudId: r.cloud_id,
+      storyPointsFieldId: r.story_points_field_id,
+      sprintFieldId: r.sprint_field_id,
+      doneStatusNames: safeJsonArray(r.done_status_names),
+      siteUrl: r.site_url,
+    };
+  }
+
+  async setSiteUrl(cloudId: string, siteUrl: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO config (cloud_id, site_url) VALUES (?, ?)
+         ON CONFLICT(cloud_id) DO UPDATE SET site_url = excluded.site_url`,
+      )
+      .bind(cloudId, siteUrl)
+      .run();
+  }
+
+  async setFieldIds(cloudId: string, storyPointsFieldId: string, sprintFieldId: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO config (cloud_id, story_points_field_id, sprint_field_id, done_status_names)
+         VALUES (?, ?, ?, '[]')
+         ON CONFLICT(cloud_id) DO UPDATE SET
+           story_points_field_id = excluded.story_points_field_id,
+           sprint_field_id = excluded.sprint_field_id`,
+      )
+      .bind(cloudId, storyPointsFieldId, sprintFieldId)
+      .run();
+  }
+
+  async setDoneStatusNames(cloudId: string, names: string[]): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO config (cloud_id, done_status_names) VALUES (?, ?)
+         ON CONFLICT(cloud_id) DO UPDATE SET done_status_names = excluded.done_status_names`,
+      )
+      .bind(cloudId, JSON.stringify(names))
+      .run();
+  }
+
+  // --- Push subscriptions ----------------------------------------------------
+
+  async saveSubscription(accountId: string, endpoint: string, p256dh: string, auth: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO push_subscriptions (account_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id, endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth`,
+      )
+      .bind(accountId, endpoint, p256dh, auth)
+      .run();
+  }
+
+  async subscriptionsFor(accountId: string): Promise<Array<{ endpoint: string; p256dh: string; auth: string }>> {
+    const { results } = await this.db
+      .prepare(`SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE account_id = ?`)
+      .bind(accountId)
+      .all<{ endpoint: string; p256dh: string; auth: string }>();
+    return results;
+  }
+
+  async deleteSubscription(accountId: string, endpoint: string): Promise<void> {
+    await this.db
+      .prepare(`DELETE FROM push_subscriptions WHERE account_id = ? AND endpoint = ?`)
+      .bind(accountId, endpoint)
+      .run();
+  }
+
+  // --- Sessions --------------------------------------------------------------
+
+  async createSession(accountId: string, cloudId: string, ttlSeconds: number): Promise<string> {
+    const sid = uuid();
+    const expires = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    await this.db
+      .prepare(`INSERT INTO sessions (session_id, account_id, cloud_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
+      .bind(sid, accountId, cloudId, now(), expires)
+      .run();
+    return sid;
+  }
+
+  async getSession(sid: string): Promise<{ accountId: string; cloudId: string } | null> {
+    const r = await this.db
+      .prepare(`SELECT account_id, cloud_id, expires_at FROM sessions WHERE session_id = ?`)
+      .bind(sid)
+      .first<{ account_id: string; cloud_id: string; expires_at: string }>();
+    if (!r) return null;
+    if (Date.parse(r.expires_at) < Date.now()) {
+      await this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).bind(sid).run();
+      return null;
+    }
+    return { accountId: r.account_id, cloudId: r.cloud_id };
+  }
+
+  async deleteSession(sid: string): Promise<void> {
+    await this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).bind(sid).run();
+  }
+
+  /** Switch the currently-selected site for a session (validated by caller). */
+  async updateSessionCloud(sid: string, cloudId: string): Promise<void> {
+    await this.db
+      .prepare(`UPDATE sessions SET cloud_id = ? WHERE session_id = ?`)
+      .bind(cloudId, sid)
+      .run();
+  }
+
+  // --- AGGREGATES (team-grouped, sums only; never per-account) ---------------
+
+  /**
+   * Claimed-vs-done series for ONE team. Groups by sprint, sums only.
+   * Deliberately takes no rater filter — there is no way to ask for one rater.
+   */
+  async teamSeries(cloudId: string, teamId: string): Promise<ClaimedVsDone[]> {
+    const sprintRows = await this.db
+      .prepare(`SELECT sprint_id, name FROM sprints WHERE cloud_id = ? ORDER BY start_at`)
+      .bind(cloudId)
+      .all<{ sprint_id: number; name: string }>();
+
+    // claimed: uncapped sum(fraction * pts), grouped by sprint, for this team snapshot.
+    const claimedRows = await this.db
+      .prepare(
+        `SELECT sprint_id AS sid,
+                COALESCE(SUM(rating_fraction * COALESCE(story_points_at_rating, 0)), 0) AS claimed,
+                COUNT(DISTINCT rater_account_id) AS raters
+         FROM ratings
+         WHERE cloud_id = ? AND team_id_at_rating = ?
+         GROUP BY sprint_id`,
+      )
+      .bind(cloudId, teamId)
+      .all<{ sid: number | null; claimed: number; raters: number }>();
+
+    // rating coverage: distinct done issue_keys that got >=1 rating, per sprint.
+    const ratedKeyRows = await this.db
+      .prepare(
+        `SELECT sprint_id AS sid, COUNT(DISTINCT issue_key) AS rated
+         FROM ratings WHERE cloud_id = ? AND team_id_at_rating = ?
+         GROUP BY sprint_id`,
+      )
+      .bind(cloudId, teamId)
+      .all<{ sid: number | null; rated: number }>();
+
+    // done: real Jira sum + distinct done tickets, grouped by sprint, this team.
+    const doneRows = await this.db
+      .prepare(
+        `SELECT sprint_id AS sid,
+                COALESCE(SUM(story_points), 0) AS done,
+                COUNT(DISTINCT issue_key) AS tickets
+         FROM done_events
+         WHERE cloud_id = ? AND team_id_at_done = ?
+         GROUP BY sprint_id`,
+      )
+      .bind(cloudId, teamId)
+      .all<{ sid: number | null; done: number; tickets: number }>();
+
+    const claimedBy = indexBy(claimedRows.results, (r) => r.sid);
+    const ratedBy = indexBy(ratedKeyRows.results, (r) => r.sid);
+    const doneBy = indexBy(doneRows.results, (r) => r.sid);
+
+    return sprintRows.results.map((s) => {
+      const claimed = claimedBy.get(s.sprint_id)?.claimed ?? 0;
+      const raters = claimedBy.get(s.sprint_id)?.raters ?? 0;
+      const done = doneBy.get(s.sprint_id)?.done ?? 0;
+      const totalDoneTickets = doneBy.get(s.sprint_id)?.tickets ?? 0;
+      const ratedDoneTickets = Math.min(ratedBy.get(s.sprint_id)?.rated ?? 0, totalDoneTickets);
+      return {
+        sprintId: s.sprint_id,
+        sprintName: s.name,
+        claimedPoints: claimed,
+        donePoints: done,
+        ratio: computeRatio(claimed, done),
+        ratingCoverage: { ratedDoneTickets, totalDoneTickets },
+        claimedPerActiveRater: raters === 0 ? null : claimed / raters,
+      } satisfies ClaimedVsDone;
+    });
+  }
+}
+
+// --- helpers -----------------------------------------------------------------
+
+function mapToken(r: Record<string, unknown>): OAuthTokenRow {
+  return {
+    accountId: r['account_id'] as string,
+    refreshToken: r['refresh_token'] as string,
+    accessToken: (r['access_token'] as string | null) ?? null,
+    expiresAt: (r['expires_at'] as string | null) ?? null,
+  };
+}
+
+function mapPending(r: Record<string, unknown>): PendingRow {
+  return {
+    pendingId: r['pending_id'] as string,
+    cloudId: r['cloud_id'] as string,
+    accountId: r['account_id'] as string,
+    issueKey: r['issue_key'] as string,
+    title: r['title'] as string,
+    url: r['url'] as string,
+    storyPoints: (r['story_points'] as number | null) ?? null,
+    toStatus: r['to_status'] as string,
+    changelogId: r['changelog_id'] as string,
+    transitionedAt: r['transitioned_at'] as string,
+  };
+}
+
+function safeJsonArray(s: string): string[] {
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function indexBy<T, K>(rows: T[], key: (r: T) => K): Map<K, T> {
+  const m = new Map<K, T>();
+  for (const r of rows) m.set(key(r), r);
+  return m;
+}
