@@ -98,9 +98,8 @@ export async function accessibleResources(accessToken: string): Promise<Accessib
 }
 
 export interface JiraMe {
-  account_id: string;
-  display_name?: string;
-  name?: string;
+  accountId: string;
+  displayName?: string;
 }
 
 export async function fetchMyself(accessToken: string, cloudId: string): Promise<JiraMe> {

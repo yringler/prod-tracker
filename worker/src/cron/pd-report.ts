@@ -119,7 +119,7 @@ async function refreshOne(env: Env, dao: Dao, accountId: string): Promise<void> 
       try {
         const client = new JiraClient(env, dao, token, cloudId);
         const me = await fetchMyself(await client.bearer(), cloudId);
-        await dao.refreshDisplayName(accountId, me.display_name ?? me.name ?? accountId, at);
+        await dao.refreshDisplayName(accountId, me.displayName ?? accountId, at);
         return;
       } catch (e) {
         console.warn(`pd-report: refresh failed for ${accountId}:`, e);

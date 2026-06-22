@@ -53,8 +53,9 @@ export async function authCallback(req: Request, env: Env, dao: Dao): Promise<Re
   // identity. Use the first to fetch it; the default selected site is also the first.
   const defaultSite = resources[0]!;
   const me = await fetchMyself(tokens.accessToken, defaultSite.id);
-  const accountId = me.account_id;
-  const displayName = me.display_name ?? me.name ?? accountId;
+  const accountId = me.accountId;
+  if (!accountId) return error(502, 'Jira /myself returned no accountId');
+  const displayName = me.displayName ?? accountId;
 
   // One grant per account (the rotating refresh token is shared across sites).
   await dao.upsertToken({
