@@ -22,7 +22,7 @@ not_found_handling = "single-page-application"
 crons = ["*/3 * * * *"]
 
 [observability]
-enabled = false
+enabled = true
 head_sampling_rate = 1
 
 [observability.logs]
