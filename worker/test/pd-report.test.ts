@@ -255,7 +255,7 @@ describe('reportPersonalData', () => {
       'fetch',
       vi.fn(async (url: string) => {
         if (url.includes('/rest/api/3/myself')) {
-          return resp({ status: 200, body: { account_id: ALICE, display_name: 'Fresh Name' } });
+          return resp({ status: 200, body: { accountId: ALICE, displayName: 'Fresh Name' } });
         }
         return resp({ status: 200, body: { accounts: [{ accountId: ALICE, status: 'updated' }] } });
       }),
