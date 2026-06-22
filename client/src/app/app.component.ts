@@ -1,13 +1,20 @@
-import { Component, OnInit, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { Component, OnInit, inject, signal } from '@angular/core';
+import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { filter } from 'rxjs';
 import { AuthService } from './auth.service';
+
+// Routes that render without authentication (e.g. the privacy policy must be
+// publicly reachable for Atlassian's OAuth review).
+const PUBLIC_ROUTES = ['/privacy'];
 
 @Component({
   selector: 'sp-root',
   standalone: true,
   imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
-    @if (auth.loaded()) {
+    @if (isPublicRoute()) {
+      <main><router-outlet /></main>
+    } @else if (auth.loaded()) {
       @if (auth.me(); as me) {
         <nav>
           <strong>SP&nbsp;Tracker</strong>
@@ -51,8 +58,19 @@ import { AuthService } from './auth.service';
 })
 export class AppComponent implements OnInit {
   auth = inject(AuthService);
+  private router = inject(Router);
+  isPublicRoute = signal(this.checkPublic(this.router.url));
+
   ngOnInit(): void {
+    this.router.events
+      .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
+      .subscribe((e) => this.isPublicRoute.set(this.checkPublic(e.urlAfterRedirects)));
     this.auth.load();
+  }
+
+  private checkPublic(url: string): boolean {
+    const path = url.split(/[?#]/)[0] ?? url;
+    return PUBLIC_ROUTES.includes(path);
   }
   onSwitchSite(e: Event): void {
     this.auth.switchSite((e.target as HTMLSelectElement).value);
