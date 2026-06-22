@@ -46,6 +46,9 @@ export class ApiService {
   pending(): Observable<PendingRatingsResponse> {
     return this.http.get<PendingRatingsResponse>('/api/pending');
   }
+  clearPending(): Observable<unknown> {
+    return this.http.delete('/api/pending');
+  }
   submitRating(body: SubmitRatingRequest): Observable<SubmitRatingResponse> {
     return this.http.post<SubmitRatingResponse>('/api/ratings', body);
   }

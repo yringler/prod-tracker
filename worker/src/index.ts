@@ -26,7 +26,7 @@ import {
   setFields,
 } from './routes/admin';
 import { allAggregates, teamAggregate } from './routes/aggregates';
-import { getPending, myRatings, submitRating } from './routes/ratings';
+import { clearPending, getPending, myRatings, submitRating } from './routes/ratings';
 import { subscribe, vapidPublicKey } from './routes/push';
 
 export default {
@@ -87,6 +87,7 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
 
   // Personal (hard-scoped to ctx.accountId)
   if (p === '/api/pending' && m === 'GET') return getPending(ctx);
+  if (p === '/api/pending' && m === 'DELETE') return clearPending(ctx);
   if (p === '/api/ratings' && m === 'POST') return submitRating(req, ctx);
   if (p === '/api/me/ratings' && m === 'GET') return myRatings(ctx);
   if (p === '/api/push/subscribe' && m === 'POST') return subscribe(req, ctx);

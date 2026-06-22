@@ -63,6 +63,32 @@ describe('done_event idempotency', () => {
   });
 });
 
+describe('deletePendingForOwner', () => {
+  const pending = (pendingId: string, accountId: string) => ({
+    pendingId,
+    cloudId: CLOUD,
+    accountId,
+    issueKey: 'X-1',
+    title: 'X-1',
+    url: 'https://example.atlassian.net/browse/X-1',
+    storyPoints: 3,
+    toStatus: 'Done',
+    changelogId: pendingId,
+    transitionedAt: '2026-06-22T00:00:00.000Z',
+  });
+
+  it('clears all of one owner without touching another owner', async () => {
+    await dao.insertPending(pending('p1', 'u1'));
+    await dao.insertPending(pending('p2', 'u1'));
+    await dao.insertPending(pending('p3', 'u2'));
+
+    await dao.deletePendingForOwner('u1');
+
+    expect(await dao.getPendingForOwner('u1')).toHaveLength(0);
+    expect(await dao.getPendingForOwner('u2')).toHaveLength(1);
+  });
+});
+
 describe('issue_state cursor', () => {
   it('persists and advances the last-seen changelog id', async () => {
     expect(await dao.getLastSeenChangelogId(CLOUD, 'X-1')).toBeNull();

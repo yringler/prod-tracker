@@ -2,7 +2,7 @@
 // issues, diff transitions by changelog id (exactly-once), emit pending ratings
 // + push, and record done-status transitions into the done series.
 
-import { isDoneTransition, sprintForTimestamp } from '@shared/domain';
+import { isDoneTransition, isStaleTransition, sprintForTimestamp } from '@shared/domain';
 import type { Dao, OAuthTokenRow } from '../db/dao';
 import type { Env } from '../env';
 import { extractStatusTransitions, diffNewTransitions } from '../jira/changelog';
@@ -112,31 +112,43 @@ async function pollOneSite(
     const url = `${base}/browse/${issue.key}`;
 
     for (const t of toEmit) {
-      // Prompt on EVERY transition (the human decides if it was worth points).
-      const pendingId = `${cloudId}:${issue.key}:${t.changelogId}`;
-      await dao.insertPending({
-        pendingId,
-        cloudId,
-        accountId: token.accountId,
-        issueKey: issue.key,
-        title,
-        url,
-        storyPoints,
-        toStatus: t.toStatus,
-        changelogId: t.changelogId,
-        transitionedAt: t.at,
-      });
-      log.info('poll: pending inserted', {
-        issueKey: issue.key,
-        changelogId: t.changelogId,
-        toStatus: t.toStatus,
-      });
-      await pushPending(env, dao, token.accountId, {
-        pendingId,
-        issueKey: issue.key,
-        title,
-        toStatus: t.toStatus,
-      }, log);
+      // Prompt on EVERY transition (the human decides if it was worth points) —
+      // but only while it's fresh. Skipping the pending+push for day-old
+      // transitions (e.g. first poll of a long history, or after downtime) means
+      // we never surface stale prompts; the cursor still advances below, so they
+      // are ignored for good. Done events below are recorded regardless.
+      if (!isStaleTransition(t.at)) {
+        const pendingId = `${cloudId}:${issue.key}:${t.changelogId}`;
+        await dao.insertPending({
+          pendingId,
+          cloudId,
+          accountId: token.accountId,
+          issueKey: issue.key,
+          title,
+          url,
+          storyPoints,
+          toStatus: t.toStatus,
+          changelogId: t.changelogId,
+          transitionedAt: t.at,
+        });
+        log.info('poll: pending inserted', {
+          issueKey: issue.key,
+          changelogId: t.changelogId,
+          toStatus: t.toStatus,
+        });
+        await pushPending(env, dao, token.accountId, {
+          pendingId,
+          issueKey: issue.key,
+          title,
+          toStatus: t.toStatus,
+        }, log);
+      } else {
+        log.info('poll: pending skipped (stale)', {
+          issueKey: issue.key,
+          changelogId: t.changelogId,
+          transitionedAt: t.at,
+        });
+      }
 
       // Separately, record done-status transitions into the done series,
       // bucketed by the CHANGELOG timestamp's sprint window (not current sprint).

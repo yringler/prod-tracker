@@ -44,6 +44,25 @@ export function isDoneTransition(
   return toStatusCategory === 'done';
 }
 
+/**
+ * Pending prompts age out: we only surface (and only create) prompts for
+ * transitions within the last day. Defined once so the poller (skip insert) and
+ * the /api/pending route (skip display) agree on what "a day old" means.
+ */
+export const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True when a transition is older than PENDING_MAX_AGE_MS. Parses with `Date`
+ * (not string compare) because `transitionedAt` carries Jira's numeric tz
+ * offset. An unparseable timestamp is treated as NOT stale (fail open — better
+ * to show a prompt than silently drop it).
+ */
+export function isStaleTransition(transitionedAt: string, now: number = Date.now()): boolean {
+  const t = new Date(transitionedAt).getTime();
+  if (Number.isNaN(t)) return false;
+  return now - t > PENDING_MAX_AGE_MS;
+}
+
 /** Compare two numeric-string changelog ids. Jira ids are monotonic per issue. */
 export function changelogIdGreater(a: string, b: string | null): boolean {
   if (b === null) return true;

@@ -8,13 +8,17 @@ import type {
   SubmitRatingRequest,
   SubmitRatingResponse,
 } from '@shared/contracts';
-import { isRatingFraction, sprintForTimestamp } from '@shared/domain';
+import { isRatingFraction, isStaleTransition, sprintForTimestamp } from '@shared/domain';
 import { type AuthedCtx, error, json, readJson } from '../http';
 
 export async function getPending(ctx: AuthedCtx): Promise<Response> {
   const rows = await ctx.dao.getPendingForOwner(ctx.accountId);
+  // Hide prompts whose transition is more than a day old. New ones are no longer
+  // inserted by the poller, but rows predating that change (or that aged out
+  // while sitting unrated) still need filtering here.
+  const fresh = rows.filter((p) => !isStaleTransition(p.transitionedAt));
   const body: PendingRatingsResponse = {
-    items: rows.map((p) => ({
+    items: fresh.map((p) => ({
       pendingId: p.pendingId,
       issueKey: p.issueKey,
       title: p.title,
@@ -25,6 +29,12 @@ export async function getPending(ctx: AuthedCtx): Promise<Response> {
     })),
   };
   return json(body);
+}
+
+/** Dismiss ALL of the caller's pending prompts at once (no ratings recorded). */
+export async function clearPending(ctx: AuthedCtx): Promise<Response> {
+  await ctx.dao.deletePendingForOwner(ctx.accountId);
+  return json({ ok: true });
 }
 
 export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Response> {

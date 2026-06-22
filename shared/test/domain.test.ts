@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PENDING_MAX_AGE_MS,
   changelogIdGreater,
   computeRatio,
   isDoneTransition,
   isRatingFraction,
+  isStaleTransition,
   sprintForTimestamp,
 } from '@shared/domain';
 
@@ -45,6 +47,23 @@ describe('sprintForTimestamp', () => {
     expect(sprintForTimestamp('2026-05-10T00:00:00Z', sprints)).toBe(1);
     expect(sprintForTimestamp('2026-05-20T00:00:00Z', sprints)).toBe(2);
     expect(sprintForTimestamp('2026-06-01T00:00:00Z', sprints)).toBeNull();
+  });
+});
+
+describe('isStaleTransition', () => {
+  const now = Date.parse('2026-06-22T12:00:00.000Z');
+  it('is false just under the max age, true just over', () => {
+    const justUnder = new Date(now - PENDING_MAX_AGE_MS + 60_000).toISOString();
+    const justOver = new Date(now - PENDING_MAX_AGE_MS - 60_000).toISOString();
+    expect(isStaleTransition(justUnder, now)).toBe(false);
+    expect(isStaleTransition(justOver, now)).toBe(true);
+  });
+  it('parses Jira-style numeric tz offsets', () => {
+    expect(isStaleTransition('2026-06-22T11:00:00.000+0000', now)).toBe(false);
+    expect(isStaleTransition('2026-06-20T11:00:00.000+0000', now)).toBe(true);
+  });
+  it('fails open on an unparseable timestamp', () => {
+    expect(isStaleTransition('not-a-date', now)).toBe(false);
   });
 });
 

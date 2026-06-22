@@ -14,7 +14,12 @@ import { PushService } from '../push.service';
   template: `
     <div class="row" style="justify-content:space-between">
       <h2>Rate your effort</h2>
-      <button (click)="enablePush()">{{ pushMsg() || 'Enable notifications' }}</button>
+      <div class="row" style="gap:8px">
+        @if (pending().length > 0) {
+          <button [disabled]="clearing()" (click)="clearAll()">Clear all</button>
+        }
+        <button (click)="enablePush()">{{ pushMsg() || 'Enable notifications' }}</button>
+      </div>
     </div>
 
     @if (loading()) {
@@ -51,6 +56,7 @@ export class TrackerComponent implements OnInit {
   pending = signal<PendingRating[]>([]);
   loading = signal(true);
   busy = signal<string | null>(null);
+  clearing = signal(false);
   pushMsg = signal<string>('');
 
   ngOnInit(): void {
@@ -75,6 +81,18 @@ export class TrackerComponent implements OnInit {
         this.busy.set(null);
       },
       error: () => this.busy.set(null),
+    });
+  }
+
+  clearAll(): void {
+    if (!confirm('Clear all pending events? This cannot be undone.')) return;
+    this.clearing.set(true);
+    this.api.clearPending().subscribe({
+      next: () => {
+        this.pending.set([]);
+        this.clearing.set(false);
+      },
+      error: () => this.clearing.set(false),
     });
   }
 

@@ -344,6 +344,11 @@ export class Dao {
     await this.db.prepare(`DELETE FROM pending_ratings WHERE pending_id = ?`).bind(pendingId).run();
   }
 
+  /** Clear ALL pending prompts for ONE account. Scoped by accountId (the owner). */
+  async deletePendingForOwner(accountId: string): Promise<void> {
+    await this.db.prepare(`DELETE FROM pending_ratings WHERE account_id = ?`).bind(accountId).run();
+  }
+
   // --- Ratings ---------------------------------------------------------------
 
   async insertRating(input: {
