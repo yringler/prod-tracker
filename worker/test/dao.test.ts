@@ -98,3 +98,77 @@ describe('issue_state cursor', () => {
     expect(await dao.getLastSeenChangelogId(CLOUD, 'X-1')).toBe('205');
   });
 });
+
+describe('claimed trends (date-bucketed)', () => {
+  const ALICE = 'acct-alice';
+  const BOB = 'acct-bob';
+  let db: SqliteD1;
+  let team: string;
+
+  // Insert a rating at an explicit rated_at (dao.insertRating stamps now()).
+  async function rate(opts: {
+    rater: string;
+    team: string | null;
+    frac: number;
+    pts: number;
+    at: string;
+  }): Promise<void> {
+    await db
+      .prepare(
+        `INSERT INTO ratings
+           (id, cloud_id, issue_key, rater_account_id, rating_fraction,
+            story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(), CLOUD, 'X-1', opts.rater, opts.frac,
+        opts.pts, opts.team, null, opts.at,
+      )
+      .run();
+  }
+
+  beforeEach(async () => {
+    db = new SqliteD1();
+    dao = new Dao(db);
+    team = await dao.createTeam(CLOUD, 'Alpha');
+    await dao.assignMembership(ALICE, team, '2026-05-01T00:00:00.000Z');
+    await dao.assignMembership(BOB, team, '2026-05-01T00:00:00.000Z');
+
+    // Two same-day Alice ratings (5 + 0.5*4 = 7), one later day (3); one Bob (0.5*8 = 4).
+    await rate({ rater: ALICE, team, frac: 1, pts: 5, at: '2026-06-01T10:00:00.000Z' });
+    await rate({ rater: ALICE, team, frac: 0.5, pts: 4, at: '2026-06-01T12:00:00.000Z' });
+    await rate({ rater: ALICE, team, frac: 1, pts: 3, at: '2026-06-09T09:00:00.000Z' });
+    await rate({ rater: BOB, team, frac: 0.5, pts: 8, at: '2026-06-01T08:00:00.000Z' });
+    // Outside the query window — must be excluded by the date filter.
+    await rate({ rater: ALICE, team, frac: 1, pts: 99, at: '2026-04-01T00:00:00.000Z' });
+  });
+
+  it('personalClaimedByDay returns only the owner, summed per UTC day', async () => {
+    const rows = await dao.personalClaimedByDay(
+      ALICE, CLOUD, '2026-05-15T00:00:00.000Z', '2026-07-01T00:00:00.000Z',
+    );
+    expect(rows).toEqual([
+      { day: '2026-06-01', claimed: 7 }, // not 11 — Bob excluded
+      { day: '2026-06-09', claimed: 3 },
+    ]);
+  });
+
+  it('teamClaimedByDay sums every rater on the team, no account column', async () => {
+    const rows = await dao.teamClaimedByDay(
+      CLOUD, team, '2026-05-15T00:00:00.000Z', '2026-07-01T00:00:00.000Z',
+    );
+    expect(rows).toEqual([
+      { day: '2026-06-01', claimed: 11 }, // 7 (Alice) + 4 (Bob)
+      { day: '2026-06-09', claimed: 3 },
+    ]);
+    const blob = JSON.stringify(rows);
+    expect(blob).not.toContain(ALICE);
+    expect(blob).not.toContain(BOB);
+  });
+
+  it('teamSize counts open memberships', async () => {
+    expect(await dao.teamSize(team)).toBe(2);
+    await dao.assignMembership(BOB, await dao.createTeam(CLOUD, 'Beta')); // Bob leaves Alpha
+    expect(await dao.teamSize(team)).toBe(1);
+  });
+});

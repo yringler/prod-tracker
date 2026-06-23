@@ -6,6 +6,7 @@ import type {
   AppointAdminRequest,
   AssignMembershipRequest,
   AuthStartResponse,
+  ClaimedTrendsResponse,
   ConfigResponse,
   CreateTeamRequest,
   DoneStatusConfigRequest,
@@ -54,6 +55,9 @@ export class ApiService {
   }
   myRatings(): Observable<MyRatingsResponse> {
     return this.http.get<MyRatingsResponse>('/api/me/ratings');
+  }
+  claimedTrends(): Observable<ClaimedTrendsResponse> {
+    return this.http.get<ClaimedTrendsResponse>('/api/me/claimed-trends');
   }
 
   aggregates(): Observable<AllTeamsAggregateResponse> {

@@ -103,3 +103,25 @@ describe('aggregate endpoint — team-grouped, sums only', () => {
     expect(dao.teamSeries.length).toBe(2);
   });
 });
+
+describe('claimed-trends — same personal/team split', () => {
+  const ANY = '2000-01-01T00:00:00.000Z';
+  const FUTURE = '2999-01-01T00:00:00.000Z';
+
+  it('personalClaimedByDay is self-scoped; teamClaimedByDay leaks no account', async () => {
+    // Personal: Alice sees only her own claim (5), never Bob's.
+    const alice = await dao.personalClaimedByDay(ALICE, CLOUD, ANY, FUTURE);
+    const aliceTotal = alice.reduce((n, r) => n + r.claimed, 0);
+    expect(aliceTotal).toBe(5); // 1 * 5, not 5 + 0.5*8
+
+    const teams = await dao.listTeams(CLOUD);
+    const team = await dao.teamClaimedByDay(CLOUD, teams[0]!.teamId, ANY, FUTURE);
+    const teamTotal = team.reduce((n, r) => n + r.claimed, 0);
+    expect(teamTotal).toBe(9); // 5 + 0.5*8, summed across raters
+
+    const blob = JSON.stringify(team);
+    expect(blob).not.toContain('account');
+    expect(blob).not.toContain(ALICE);
+    expect(blob).not.toContain(BOB);
+  });
+});

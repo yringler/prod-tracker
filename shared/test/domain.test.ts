@@ -7,7 +7,27 @@ import {
   isRatingFraction,
   isStaleTransition,
   sprintForTimestamp,
+  weekStartOf,
 } from '@shared/domain';
+
+describe('weekStartOf', () => {
+  it('anchors every day of a week to that week’s Monday (UTC)', () => {
+    // 2026-06-01 is a Monday; the whole week maps to it.
+    expect(weekStartOf('2026-06-01T10:00:00.000Z')).toBe('2026-06-01'); // Mon
+    expect(weekStartOf('2026-06-03T23:59:59.000Z')).toBe('2026-06-01'); // Wed
+    expect(weekStartOf('2026-06-07T12:00:00.000Z')).toBe('2026-06-01'); // Sun
+    expect(weekStartOf('2026-06-08T00:00:00.000Z')).toBe('2026-06-08'); // next Mon
+  });
+
+  it('accepts a bare YYYY-MM-DD day key', () => {
+    expect(weekStartOf('2026-06-04')).toBe('2026-06-01');
+  });
+
+  it('crosses the year boundary correctly', () => {
+    // 2027-01-01 is a Friday → its week’s Monday is 2026-12-28.
+    expect(weekStartOf('2027-01-01T00:00:00.000Z')).toBe('2026-12-28');
+  });
+});
 
 describe('isRatingFraction', () => {
   it('accepts only 0, .25, .5, 1', () => {

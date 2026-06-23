@@ -3,12 +3,19 @@
 // account's data — that scoping is the personal half of the privacy invariant.
 
 import type {
+  ClaimedTrendsResponse,
   MyRatingsResponse,
   PendingRatingsResponse,
   SubmitRatingRequest,
   SubmitRatingResponse,
+  TrendPoint,
 } from '@shared/contracts';
-import { isRatingFraction, isStaleTransition, sprintForTimestamp } from '@shared/domain';
+import {
+  isRatingFraction,
+  isStaleTransition,
+  sprintForTimestamp,
+  weekStartOf,
+} from '@shared/domain';
 import { type AuthedCtx, error, json, readJson } from '../http';
 
 export async function getPending(ctx: AuthedCtx): Promise<Response> {
@@ -71,6 +78,73 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
     teamIdAtRating,
   };
   return json(res);
+}
+
+/**
+ * Personal-vs-team claimed-points trends. The personal lines are self-scoped
+ * (dao.personalClaimedByDay filters on rater_account_id); the team lines are a
+ * team-grouped sum ÷ team size, exposed only weekly. "team" is the caller's
+ * current team — empty lines when they're on none.
+ */
+export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
+  const DAY = 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const from30 = new Date(nowMs - 30 * DAY).toISOString();
+  const from6mo = new Date(nowMs - 183 * DAY).toISOString();
+
+  const teamId = await ctx.dao.teamAt(ctx.accountId);
+  const teamName = teamId
+    ? ((await ctx.dao.listTeams(ctx.cloudId)).find((t) => t.teamId === teamId)?.name ?? null)
+    : null;
+  const size = teamId ? await ctx.dao.teamSize(teamId) : 0;
+  const haveTeam = teamId !== null && size > 0;
+
+  // 30 days: personal daily (that day's sum), team weekly (week's sum ÷ size).
+  const personalDaily: TrendPoint[] = (
+    await ctx.dao.personalClaimedByDay(ctx.accountId, ctx.cloudId, from30, nowIso)
+  ).map((r) => ({ date: r.day, value: r.claimed }));
+
+  const teamWeekly30: TrendPoint[] = haveTeam
+    ? foldWeeks(await ctx.dao.teamClaimedByDay(ctx.cloudId, teamId, from30, nowIso)).map((w) => ({
+        date: w.weekStart,
+        value: w.claimed / size,
+      }))
+    : [];
+
+  // 6 months: both lines are per-day averages within the week (÷ 7; team also ÷ size).
+  const personalWeekly: TrendPoint[] = foldWeeks(
+    await ctx.dao.personalClaimedByDay(ctx.accountId, ctx.cloudId, from6mo, nowIso),
+  ).map((w) => ({ date: w.weekStart, value: w.claimed / 7 }));
+
+  const teamWeekly6: TrendPoint[] = haveTeam
+    ? foldWeeks(await ctx.dao.teamClaimedByDay(ctx.cloudId, teamId, from6mo, nowIso)).map((w) => ({
+        date: w.weekStart,
+        value: w.claimed / size / 7,
+      }))
+    : [];
+
+  const body: ClaimedTrendsResponse = {
+    teamId,
+    teamName,
+    last30Days: { personalDaily, teamWeekly: teamWeekly30 },
+    last6Months: { personalWeekly, teamWeekly: teamWeekly6 },
+  };
+  return json(body);
+}
+
+/** Fold day-bucketed claimed sums into Monday-anchored weeks (sorted ascending). */
+function foldWeeks(
+  rows: Array<{ day: string; claimed: number }>,
+): Array<{ weekStart: string; claimed: number }> {
+  const byWeek = new Map<string, number>();
+  for (const r of rows) {
+    const wk = weekStartOf(r.day);
+    byWeek.set(wk, (byWeek.get(wk) ?? 0) + r.claimed);
+  }
+  return [...byWeek.entries()]
+    .map(([weekStart, claimed]) => ({ weekStart, claimed }))
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
 }
 
 export async function myRatings(ctx: AuthedCtx): Promise<Response> {

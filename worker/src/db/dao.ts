@@ -787,6 +787,65 @@ export class Dao {
       } satisfies ClaimedVsDone;
     });
   }
+
+  // --- CLAIMED TRENDS (date-bucketed) ----------------------------------------
+  // Personal queries are self-scoped (WHERE rater_account_id = ?), the team query
+  // is a team-grouped sum with no rater column — the same privacy split as the
+  // personal endpoints vs teamSeries(). Days come back as `YYYY-MM-DD` (UTC, since
+  // rated_at is stored via toISOString); callers fold days into weeks with
+  // weekStartOf() so week numbering lives in one tested place.
+
+  /** This account's daily claimed sum over [fromIso, toIso). Self-scoped. */
+  async personalClaimedByDay(
+    accountId: string,
+    cloudId: string,
+    fromIso: string,
+    toIso: string,
+  ): Promise<Array<{ day: string; claimed: number }>> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT substr(rated_at, 1, 10) AS day,
+                COALESCE(SUM(rating_fraction * COALESCE(story_points_at_rating, 0)), 0) AS claimed
+         FROM ratings
+         WHERE rater_account_id = ? AND cloud_id = ? AND rated_at >= ? AND rated_at < ?
+         GROUP BY day ORDER BY day`,
+      )
+      .bind(accountId, cloudId, fromIso, toIso)
+      .all<{ day: string; claimed: number }>();
+    return results;
+  }
+
+  /** A team's daily claimed sum over [fromIso, toIso). Sums only, no rater column. */
+  async teamClaimedByDay(
+    cloudId: string,
+    teamId: string,
+    fromIso: string,
+    toIso: string,
+  ): Promise<Array<{ day: string; claimed: number }>> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT substr(rated_at, 1, 10) AS day,
+                COALESCE(SUM(rating_fraction * COALESCE(story_points_at_rating, 0)), 0) AS claimed
+         FROM ratings
+         WHERE team_id_at_rating = ? AND cloud_id = ? AND rated_at >= ? AND rated_at < ?
+         GROUP BY day ORDER BY day`,
+      )
+      .bind(teamId, cloudId, fromIso, toIso)
+      .all<{ day: string; claimed: number }>();
+    return results;
+  }
+
+  /** Current headcount of a team (open memberships). Divisor for the team average. */
+  async teamSize(teamId: string): Promise<number> {
+    const r = await this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT account_id) AS n FROM team_memberships
+         WHERE team_id = ? AND effective_to IS NULL`,
+      )
+      .bind(teamId)
+      .first<{ n: number }>();
+    return r?.n ?? 0;
+  }
 }
 
 // --- helpers -----------------------------------------------------------------

@@ -90,6 +90,27 @@ export interface AllTeamsAggregateResponse {
   teams: TeamAggregateResponse[];
 }
 
+/** One point on a claimed-trend line. `date` is a `YYYY-MM-DD` day or week-start (Monday). */
+export interface TrendPoint {
+  date: string;
+  value: number;
+}
+
+/**
+ * Personal-vs-team claimed-points trends for the signed-in user. Personal lines
+ * are hard-scoped to the caller; team lines are a team-grouped sum ÷ team size
+ * (no per-account breakdown), exposed only weekly. Team lines are empty when the
+ * caller is on no team.
+ */
+export interface ClaimedTrendsResponse {
+  teamId: string | null;
+  teamName: string | null;
+  /** Personal = that day's claimed sum; team = that week's claimed sum ÷ team size. */
+  last30Days: { personalDaily: TrendPoint[]; teamWeekly: TrendPoint[] };
+  /** Both lines are per-day averages within the week (week's sum ÷ 7, team also ÷ size). */
+  last6Months: { personalWeekly: TrendPoint[]; teamWeekly: TrendPoint[] };
+}
+
 // --- Web Push ----------------------------------------------------------------
 
 export interface PushSubscriptionRequest {

@@ -26,7 +26,7 @@ import {
   setFields,
 } from './routes/admin';
 import { allAggregates, teamAggregate } from './routes/aggregates';
-import { clearPending, getPending, myRatings, submitRating } from './routes/ratings';
+import { claimedTrends, clearPending, getPending, myRatings, submitRating } from './routes/ratings';
 import { subscribe, vapidPublicKey } from './routes/push';
 
 export default {
@@ -90,6 +90,7 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/pending' && m === 'DELETE') return clearPending(ctx);
   if (p === '/api/ratings' && m === 'POST') return submitRating(req, ctx);
   if (p === '/api/me/ratings' && m === 'GET') return myRatings(ctx);
+  if (p === '/api/me/claimed-trends' && m === 'GET') return claimedTrends(ctx);
   if (p === '/api/push/subscribe' && m === 'POST') return subscribe(req, ctx);
 
   // Aggregates (team-grouped, sums only)

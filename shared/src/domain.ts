@@ -1,4 +1,7 @@
-// Domain primitives shared by client + worker. Depends on nothing.
+// Domain primitives shared by client + worker. The only dependency is date-fns
+// (with @date-fns/utc) for date math — see CLAUDE.md.
+import { UTCDate } from '@date-fns/utc';
+import { format, startOfISOWeek } from 'date-fns';
 
 /** The four self-rating buttons. Stored as a fraction, multiplied by story points. */
 export const RATING_FRACTIONS = [0, 0.25, 0.5, 1] as const;
@@ -115,4 +118,16 @@ export interface ClaimedVsDone {
 
 export function computeRatio(claimed: number, done: number): number | null {
   return done === 0 ? null : claimed / done;
+}
+
+/**
+ * Monday (UTC) of the ISO week containing `iso`, as a `YYYY-MM-DD` string. Used
+ * to fold day-bucketed claimed sums into weeks in one tested place (rather than
+ * leaning on SQLite's `strftime('%W')`, whose week numbering is fiddly). Inputs
+ * are `rated_at` values, which are stored as UTC `toISOString()`.
+ */
+export function weekStartOf(iso: string): string {
+  // UTCDate keeps startOfISOWeek/format in UTC regardless of the runtime's local
+  // timezone; startOfISOWeek anchors to Monday.
+  return format(startOfISOWeek(new UTCDate(iso)), 'yyyy-MM-dd');
 }

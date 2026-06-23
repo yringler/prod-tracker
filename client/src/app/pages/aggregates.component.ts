@@ -1,16 +1,23 @@
 import { DecimalPipe } from '@angular/common';
 import { Component, OnInit, inject, signal } from '@angular/core';
-import type { TeamAggregateResponse } from '@shared/contracts';
+import type { ClaimedTrendsResponse, TeamAggregateResponse } from '@shared/contracts';
 import { ApiService } from '../api.service';
+import { ClaimedTrendsComponent } from '../ui/claimed-trends.component';
 import { LineChartComponent } from '../ui/line-chart.component';
 
-// Team aggregates: two raw lines + ratio toggle, plus coverage and
-// claimed-per-active-rater so a dip reads as "real" vs "people didn't rate".
+// Stats page. Top: personal-vs-team claimed trends over calendar time. Below:
+// per-team claimed-vs-done by sprint (raw lines + ratio toggle, plus coverage and
+// claimed-per-active-rater so a dip reads as "real" vs "people didn't rate").
 @Component({
   selector: 'sp-aggregates',
   standalone: true,
-  imports: [DecimalPipe, LineChartComponent],
+  imports: [DecimalPipe, ClaimedTrendsComponent, LineChartComponent],
   template: `
+    @if (trends(); as t) {
+      <h2>My trends</h2>
+      <sp-claimed-trends [data]="t" />
+    }
+
     <h2>Team aggregates</h2>
     <p class="muted">Effort-claimed (uncapped sum of self-ratings × points) vs real Jira done points, per sprint.</p>
 
@@ -46,8 +53,10 @@ import { LineChartComponent } from '../ui/line-chart.component';
 export class AggregatesComponent implements OnInit {
   private api = inject(ApiService);
   teams = signal<TeamAggregateResponse[]>([]);
+  trends = signal<ClaimedTrendsResponse | null>(null);
 
   ngOnInit(): void {
     this.api.aggregates().subscribe((r) => this.teams.set(r.teams));
+    this.api.claimedTrends().subscribe((r) => this.trends.set(r));
   }
 }
