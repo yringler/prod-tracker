@@ -65,6 +65,8 @@ export function readStoryPoints(issue: JiraIssue, fieldId: string | null): numbe
 interface AgileBoard {
   id: number;
   name: string;
+  /** 'scrum' | 'kanban' | 'simple' — only Scrum boards support the sprint endpoint. */
+  type?: string;
 }
 interface AgileSprint {
   id: number;

@@ -182,27 +182,43 @@ async function refreshSprints(
   cloudId: string,
   log: Logger,
 ): Promise<void> {
-  try {
-    const boards = await listBoards(client);
-    let n = 0;
-    for (const board of boards) {
-      const sprints = await listSprints(client, board.id);
-      for (const s of sprints) {
-        await dao.upsertSprint({
-          cloudId,
-          sprintId: s.id,
-          boardId: board.id,
-          name: s.name,
-          startAt: s.startDate ?? null,
-          endAt: s.endDate ?? null,
-        });
-        n++;
-      }
-    }
-    log.info('poll: sprints refreshed', { boards: boards.length, sprints: n });
-  } catch (e) {
+  const boards = await listBoards(client).catch((e) => {
     log.warn('poll: sprint refresh failed', errFields(e));
+    return null;
+  });
+  if (!boards) return;
+
+  let n = 0;
+  let skipped = 0;
+  for (const board of boards) {
+    // Only Scrum boards have sprints; the sprint endpoint 400s for Kanban (and
+    // other non-Scrum) boards. Skip per-board so one unsupported board doesn't
+    // abort the refresh for the rest.
+    if (board.type === 'kanban') {
+      skipped++;
+      continue;
+    }
+    const sprints = await listSprints(client, board.id).catch((e) => {
+      log.debug('poll: board sprints skipped', { boardId: board.id, ...errFields(e) });
+      return null;
+    });
+    if (!sprints) {
+      skipped++;
+      continue;
+    }
+    for (const s of sprints) {
+      await dao.upsertSprint({
+        cloudId,
+        sprintId: s.id,
+        boardId: board.id,
+        name: s.name,
+        startAt: s.startDate ?? null,
+        endAt: s.endDate ?? null,
+      });
+      n++;
+    }
   }
+  log.info('poll: sprints refreshed', { boards: boards.length, sprints: n, skipped });
 }
 
 async function pushPending(
