@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angular/core';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 import { AuthService } from './auth.service';
@@ -11,6 +11,7 @@ const PUBLIC_ROUTES = ['/privacy'];
   selector: 'sp-root',
   standalone: true,
   imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     @if (isPublicRoute()) {
       <main><router-outlet /></main>
@@ -25,22 +26,26 @@ const PUBLIC_ROUTES = ['/privacy'];
           }
           <span class="spacer"></span>
           @if (me.sites.length > 1) {
-            <select [value]="me.cloudId" (change)="onSwitchSite($event)" title="Jira site">
+            <wa-select size="small" [value]="me.cloudId" (change)="onSwitchSite($event)" title="Jira site">
               @for (s of me.sites; track s.cloudId) {
-                <option [value]="s.cloudId">{{ s.name }}</option>
+                <wa-option [value]="s.cloudId">{{ s.name }}</wa-option>
               }
-            </select>
+            </wa-select>
           } @else if (me.sites.length === 1) {
-            <span class="tag">{{ me.sites[0].name }}</span>
+            <wa-tag size="small" appearance="outlined">{{ me.sites[0].name }}</wa-tag>
           }
           <span class="muted">{{ me.displayName }}</span>
-          <button (click)="auth.logout()">Sign out</button>
+          <wa-button size="small" appearance="plain" (click)="auth.logout()">
+            <wa-icon slot="start" name="arrow-right-from-bracket"></wa-icon>
+            Sign out
+          </wa-button>
         </nav>
         @if (me.needsReauth) {
           <main>
-            <div class="panel banner">
+            <wa-callout variant="warning">
+              <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
               Your Jira consent expired. <a href="#" (click)="auth.login(); $event.preventDefault()">Re-connect Jira</a>.
-            </div>
+            </wa-callout>
           </main>
         }
         <main><router-outlet /></main>
@@ -49,7 +54,7 @@ const PUBLIC_ROUTES = ['/privacy'];
           <div class="panel" style="margin-top:64px; text-align:center">
             <h1>Story-point effort tracker</h1>
             <p class="muted">Rate the effort you personally put into each ticket. Your ratings stay private; only team aggregates are shared.</p>
-            <button class="primary" (click)="auth.login()">Connect Jira</button>
+            <wa-button variant="brand" (click)="auth.login()">Connect Jira</wa-button>
           </div>
         </main>
       }

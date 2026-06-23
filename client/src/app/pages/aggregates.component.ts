@@ -1,5 +1,5 @@
 import { DecimalPipe } from '@angular/common';
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angular/core';
 import type { ClaimedTrendsResponse, TeamAggregateResponse } from '@shared/contracts';
 import { ApiService } from '../api.service';
 import { ClaimedTrendsComponent } from '../ui/claimed-trends.component';
@@ -12,6 +12,7 @@ import { LineChartComponent } from '../ui/line-chart.component';
   selector: 'sp-aggregates',
   standalone: true,
   imports: [DecimalPipe, ClaimedTrendsComponent, LineChartComponent],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     @if (trends(); as t) {
       <h2>My trends</h2>
@@ -21,7 +22,9 @@ import { LineChartComponent } from '../ui/line-chart.component';
     <h2>Team aggregates</h2>
     <p class="muted">Effort-claimed (uncapped sum of self-ratings × points) vs real Jira done points, per sprint.</p>
 
-    @if (teams().length === 0) {
+    @if (loading()) {
+      <div class="row" style="gap:8px"><wa-spinner></wa-spinner> <span class="muted">Loading…</span></div>
+    } @else if (teams().length === 0) {
       <div class="panel muted">No teams yet. An admin can create teams and assign members.</div>
     }
 
@@ -54,9 +57,16 @@ export class AggregatesComponent implements OnInit {
   private api = inject(ApiService);
   teams = signal<TeamAggregateResponse[]>([]);
   trends = signal<ClaimedTrendsResponse | null>(null);
+  loading = signal(true);
 
   ngOnInit(): void {
-    this.api.aggregates().subscribe((r) => this.teams.set(r.teams));
+    this.api.aggregates().subscribe({
+      next: (r) => {
+        this.teams.set(r.teams);
+        this.loading.set(false);
+      },
+      error: () => this.loading.set(false),
+    });
     this.api.claimedTrends().subscribe((r) => this.trends.set(r));
   }
 }

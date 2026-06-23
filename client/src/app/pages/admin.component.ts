@@ -6,13 +6,10 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { FormField, form, required } from '@angular/forms/signals';
+import { form, required } from '@angular/forms/signals';
 import type { ConfigResponse, FieldOption, OrgMember, Team, TeamMembership } from '@shared/contracts';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
-// Register the webawesome custom elements used in this template.
-import '@awesome.me/webawesome/dist/components/select/select.js';
-import '@awesome.me/webawesome/dist/components/option/option.js';
 
 // Admin screens: teams, effective-dated memberships, admin appointment (with the
 // last-admin guard surfaced from the API), and the done-status set. Built with
@@ -22,7 +19,6 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
 @Component({
   selector: 'sp-admin',
   standalone: true,
-  imports: [FormField],
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -31,17 +27,21 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
     <div class="panel">
       <h3>Teams</h3>
       <div class="row">
-        <input [formField]="adminForm.newTeamName" placeholder="New team name" />
-        <button class="primary" [disabled]="adminForm.newTeamName().invalid()" (click)="createTeam()">
+        <wa-input
+          placeholder="New team name"
+          [value]="adminModel().newTeamName"
+          (input)="setField('newTeamName', $event)"
+        ></wa-input>
+        <wa-button variant="brand" [disabled]="adminForm.newTeamName().invalid()" (click)="createTeam()">
           Create team
-        </button>
+        </wa-button>
       </div>
       <table style="margin-top:10px">
         <tbody>
           @for (t of teams(); track t.teamId) {
             <tr>
               <td><strong>{{ t.name }}</strong> <span class="muted">({{ t.teamId.slice(0, 8) }})</span></td>
-              <td><button (click)="loadMembers(t)">Members</button></td>
+              <td><wa-button size="small" appearance="outlined" (click)="loadMembers(t)">Members</wa-button></td>
             </tr>
             @if (openTeam() === t.teamId) {
               <tr><td colspan="2">
@@ -77,13 +77,13 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
             <wa-option [value]="t.teamId">{{ t.name }}</wa-option>
           }
         </wa-select>
-        <button
-          class="primary"
+        <wa-button
+          variant="brand"
           [disabled]="adminForm.assignAccountId().invalid() || adminForm.assignTeamId().invalid()"
           (click)="assign()"
         >
           Assign
-        </button>
+        </wa-button>
       </div>
       <p class="muted" style="font-size:12px">Writes an effective-dated membership; the prior open membership is closed at "now".</p>
     </div>
@@ -101,9 +101,9 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
             <wa-option [value]="mem.accountId">{{ mem.displayName }}</wa-option>
           }
         </wa-select>
-        <button class="primary" [disabled]="adminForm.appointAccountId().invalid()" (click)="appoint()">
+        <wa-button variant="brand" [disabled]="adminForm.appointAccountId().invalid()" (click)="appoint()">
           Appoint admin
-        </button>
+        </wa-button>
       </div>
       <div class="row" style="margin-top:8px">
         <wa-select
@@ -116,17 +116,22 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
             <wa-option [value]="mem.accountId">{{ mem.displayName }}</wa-option>
           }
         </wa-select>
-        <button [disabled]="adminForm.revokeAccountId().invalid()" (click)="revoke()">Revoke admin</button>
+        <wa-button appearance="outlined" variant="danger" [disabled]="adminForm.revokeAccountId().invalid()" (click)="revoke()">Revoke admin</wa-button>
       </div>
-      @if (adminMsg()) { <p class="muted">{{ adminMsg() }}</p> }
+      @if (adminMsg()) { <wa-callout variant="neutral" style="margin-top:8px">{{ adminMsg() }}</wa-callout> }
     </div>
 
     <div class="panel">
       <h3>Done statuses</h3>
       <p class="muted" style="font-size:12px">Comma-separated status names counted as "done". Empty = use Jira's Done category.</p>
       <div class="row">
-        <input [formField]="adminForm.doneNames" placeholder="Done, Shipped, Released" style="flex:1" />
-        <button class="primary" (click)="saveDone()">Save</button>
+        <wa-input
+          placeholder="Done, Shipped, Released"
+          style="flex:1"
+          [value]="adminModel().doneNames"
+          (input)="setField('doneNames', $event)"
+        ></wa-input>
+        <wa-button variant="brand" (click)="saveDone()">Save</wa-button>
       </div>
     </div>
 
@@ -160,15 +165,15 @@ import '@awesome.me/webawesome/dist/components/option/option.js';
             <wa-option [value]="f.id">{{ f.name }} ({{ f.id }})</wa-option>
           }
         </wa-select>
-        <button
-          class="primary"
+        <wa-button
+          variant="brand"
           [disabled]="!adminModel().spFieldId || !adminModel().sprintFieldId"
           (click)="saveFields()"
         >
           Save
-        </button>
+        </wa-button>
       </div>
-      @if (fieldsMsg()) { <p class="muted">{{ fieldsMsg() }}</p> }
+      @if (fieldsMsg()) { <wa-callout variant="neutral" style="margin-top:8px">{{ fieldsMsg() }}</wa-callout> }
     </div>
   `,
 })
@@ -234,19 +239,12 @@ export class AdminComponent implements OnInit {
     this.api.teams().subscribe((r) => this.teams.set(r.teams));
   }
 
-  /** Bridge a webawesome <wa-select> change into the Signal Forms model. The
-   *  `required` validators derive from the model, so button-gating still works. */
-  setField(
-    key:
-      | 'assignAccountId'
-      | 'assignTeamId'
-      | 'appointAccountId'
-      | 'revokeAccountId'
-      | 'spFieldId'
-      | 'sprintFieldId',
-    ev: Event,
-  ): void {
-    const value = (ev.target as HTMLSelectElement).value;
+  /** Bridge a webawesome <wa-input>/<wa-select> value into the Signal Forms model.
+   *  The directive-based `[formField]` doesn't bind to custom elements, so we sync
+   *  the model by hand; the `required` validators derive from the model, so
+   *  button-gating still works. */
+  setField(key: keyof ReturnType<typeof this.adminModel>, ev: Event): void {
+    const value = (ev.target as HTMLInputElement).value;
     this.adminModel.update((m) => ({ ...m, [key]: value }));
   }
 

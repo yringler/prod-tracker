@@ -1,4 +1,4 @@
-import { Component } from "@angular/core";
+import { CUSTOM_ELEMENTS_SCHEMA, Component } from "@angular/core";
 import { RouterLink } from "@angular/router";
 
 // Public privacy policy. Reachable without auth so Atlassian's OAuth review
@@ -8,8 +8,9 @@ import { RouterLink } from "@angular/router";
     selector: "sp-privacy",
     standalone: true,
     imports: [RouterLink],
+    schemas: [CUSTOM_ELEMENTS_SCHEMA],
     template: `
-        <div class="panel" style="margin-top:24px">
+        <div class="panel wa-prose" style="margin-top:24px">
             <h1>Privacy Policy</h1>
             <p class="muted">Last updated: 22 June 2026</p>
 
@@ -107,7 +108,7 @@ import { RouterLink } from "@angular/router";
             </p>
 
             <p style="margin-top:24px">
-                <a routerLink="/">&larr; Back to the app</a>
+                <a routerLink="/"><wa-icon name="arrow-left"></wa-icon> Back to the app</a>
             </p>
         </div>
     `,

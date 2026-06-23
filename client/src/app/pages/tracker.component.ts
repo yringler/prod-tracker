@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angular/core';
 import type { PendingRating } from '@shared/contracts';
 import { RATING_FRACTIONS, type RatingFraction } from '@shared/domain';
 import { ApiService } from '../api.service';
@@ -11,23 +11,30 @@ import { PushService } from '../push.service';
   selector: 'sp-tracker',
   standalone: true,
   imports: [DatePipe],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     <div class="row" style="justify-content:space-between">
       <h2>Rate your effort</h2>
       <div class="row" style="gap:8px">
         @if (pending().length > 0) {
-          <button [disabled]="clearing()" (click)="clearAll()">Clear all</button>
+          <wa-button size="small" appearance="outlined" [loading]="clearing()" (click)="clearAll()">
+            <wa-icon slot="start" name="trash"></wa-icon>
+            Clear all
+          </wa-button>
         }
         @if (pushOn()) {
-          <span class="tag">{{ pushMsg() || 'Notifications on' }}</span>
+          <wa-tag size="small" variant="success" appearance="outlined">
+            <wa-icon slot="start" name="bell"></wa-icon>
+            {{ pushMsg() || 'Notifications on' }}
+          </wa-tag>
         } @else {
-          <button (click)="enablePush()">{{ pushMsg() || 'Enable notifications' }}</button>
+          <wa-button size="small" (click)="enablePush()">{{ pushMsg() || 'Enable notifications' }}</wa-button>
         }
       </div>
     </div>
 
     @if (loading()) {
-      <p class="muted">Loading…</p>
+      <div class="row" style="gap:8px"><wa-spinner></wa-spinner> <span class="muted">Loading…</span></div>
     } @else if (pending().length === 0) {
       <div class="panel muted">Nothing to rate right now. You'll be prompted as your tickets change status.</div>
     } @else {
@@ -35,25 +42,36 @@ import { PushService } from '../push.service';
         <div class="panel">
           <div class="row" style="justify-content:space-between">
             <div>
-              <a [href]="p.url" target="_blank" rel="noopener"><strong>{{ p.issueKey }}</strong></a>
+              <a [href]="p.url" target="_blank" rel="noopener">
+                <strong>{{ p.issueKey }}</strong>
+                <wa-icon name="arrow-up-right-from-square"></wa-icon>
+              </a>
               — {{ p.title }}
             </div>
-            <span class="tag">{{ p.storyPoints ?? '—' }} pts · → {{ p.toStatus }}</span>
+            <wa-tag size="small" appearance="outlined">{{ p.storyPoints ?? '—' }} pts · → {{ p.toStatus }}</wa-tag>
           </div>
           <div class="muted" style="font-size:12px">moved {{ p.transitionedAt | date: 'short' }}</div>
           <div class="row" style="margin-top:10px; gap:8px">
-            @for (f of fractions; track f) {
-              <button [class.primary]="busy() === p.pendingId" [disabled]="busy() === p.pendingId"
-                      (click)="rate(p, f)">{{ f * 100 }}%</button>
-            }
-            <input #custom type="number" min="0" max="200" step="1" placeholder="%"
-                   style="width:64px" [disabled]="busy() === p.pendingId" />
-            <button [disabled]="busy() === p.pendingId || !custom.value"
-                    (click)="rateCustom(p, custom.value)">Rate %</button>
+            <wa-button-group label="Effort">
+              @for (f of fractions; track f) {
+                <wa-button appearance="outlined" [loading]="busy() === p.pendingId"
+                           [disabled]="busy() === p.pendingId" (click)="rate(p, f)">{{ f * 100 }}%</wa-button>
+              }
+            </wa-button-group>
+            <wa-input #custom type="number" min="0" max="200" step="1" placeholder="%"
+                      style="width:80px" [disabled]="busy() === p.pendingId"></wa-input>
+            <wa-button appearance="outlined" [disabled]="busy() === p.pendingId || !custom.value"
+                       (click)="rateCustom(p, custom.value)">Rate %</wa-button>
           </div>
         </div>
       }
     }
+
+    <wa-dialog label="Clear all pending?" [open]="confirmOpen()" (wa-after-hide)="confirmOpen.set(false)">
+      Clear all pending events? This cannot be undone.
+      <wa-button slot="footer" appearance="outlined" (click)="confirmOpen.set(false)">Cancel</wa-button>
+      <wa-button slot="footer" variant="danger" [loading]="clearing()" (click)="doClearAll()">Clear all</wa-button>
+    </wa-dialog>
   `,
 })
 export class TrackerComponent implements OnInit {
@@ -67,6 +85,7 @@ export class TrackerComponent implements OnInit {
   clearing = signal(false);
   pushMsg = signal<string>('');
   pushOn = signal(false);
+  confirmOpen = signal(false);
 
   ngOnInit(): void {
     this.refresh();
@@ -102,12 +121,16 @@ export class TrackerComponent implements OnInit {
   }
 
   clearAll(): void {
-    if (!confirm('Clear all pending events? This cannot be undone.')) return;
+    this.confirmOpen.set(true);
+  }
+
+  doClearAll(): void {
     this.clearing.set(true);
     this.api.clearPending().subscribe({
       next: () => {
         this.pending.set([]);
         this.clearing.set(false);
+        this.confirmOpen.set(false);
       },
       error: () => this.clearing.set(false),
     });

@@ -1,4 +1,4 @@
-import { Component, Input, computed, signal } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, Component, Input, computed, signal } from '@angular/core';
 import type { ChartConfiguration } from 'chart.js';
 import type { ClaimedVsDone } from '@shared/domain';
 import { ChartComponent } from './chart.component';
@@ -10,11 +10,12 @@ import { categoryOptions, themeColors } from './chart-theme';
   selector: 'sp-line-chart',
   standalone: true,
   imports: [ChartComponent],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     <div class="row" style="justify-content:flex-end">
-      <button (click)="ratioMode.set(!ratioMode())">
+      <wa-button size="small" appearance="outlined" (click)="ratioMode.set(!ratioMode())">
         {{ ratioMode() ? 'Show raw lines' : 'Show ratio' }}
-      </button>
+      </wa-button>
     </div>
 
     @if (seriesSig().length === 0) {
