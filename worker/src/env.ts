@@ -18,14 +18,23 @@ export interface Env {
   VAPID_PRIVATE_KEY: string;
 }
 
-// Requested at consent (the /authorize URL). Kept minimal — see README
-// "Atlassian app setup" for the per-endpoint rationale. `offline_access` is a
-// standard OAuth scope (not a Jira console permission) and yields the refresh
-// token. `read:board-scope:jira-software` is documented to cover reading sprints
-// too; add `read:sprint:jira-software` only if sprint reads 401.
+// Requested at consent (the /authorize URL). See README "Atlassian app setup"
+// for the per-endpoint rationale. `offline_access` is a standard OAuth scope
+// (not a Jira console permission) and yields the refresh token.
+//
+// The Agile API (`/rest/agile/...`) does NOT honor the classic `read:jira-work`
+// scope — it requires GRANULAR scopes, and `GET /rest/agile/1.0/board` needs
+// BOTH `read:board-scope:jira-software` AND the granular Jira *platform* scope
+// `read:project:jira`. Requesting only the `-software` granular scope (as we did
+// originally) leaves the token without `read:project:jira`, so board/sprint
+// reads 401 even though the classic platform scopes work. `read:sprint:jira-software`
+// covers sprint reads. All of these must also be ticked in the console; scopes
+// are frozen at consent, so changing this requires a re-authorize.
 export const OAUTH_SCOPES = [
   'read:jira-user',
   'read:jira-work',
+  'read:project:jira',
   'read:board-scope:jira-software',
+  'read:sprint:jira-software',
   'offline_access',
 ].join(' ');
