@@ -5,7 +5,7 @@
 import { isDoneTransition, isStaleTransition, sprintForTimestamp } from '@shared/domain';
 import type { Dao, OAuthTokenRow } from '../db/dao';
 import type { Env } from '../env';
-import { extractStatusTransitions, diffNewTransitions } from '../jira/changelog';
+import { extractStatusTransitions, diffNewTransitions, transitionOwnership } from '../jira/changelog';
 import { JiraClient, ReauthRequiredError } from '../jira/client';
 import { discoverFields } from '../jira/fields';
 import {
@@ -111,7 +111,14 @@ async function pollOneSite(
     const base = config.siteUrl ?? 'https://your-site.atlassian.net';
     const url = `${base}/browse/${issue.key}`;
 
+    // The broadened JQL (assignee WAS currentUser) can surface transitions a
+    // reviewer performed after a hand-off. Only act on transitions that are
+    // actually the user's — assignee was them just before or just after. This
+    // gates both the pending/push and the done-series attribution below.
+    const owned = transitionOwnership(issue, token.accountId);
+
     for (const t of toEmit) {
+      if (owned.get(t.changelogId) === false) continue;
       // Prompt on EVERY transition (the human decides if it was worth points) —
       // but only while it's fresh. Skipping the pending+push for day-old
       // transitions (e.g. first poll of a long history, or after downtime) means
