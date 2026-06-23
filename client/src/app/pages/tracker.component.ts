@@ -46,6 +46,10 @@ import { PushService } from '../push.service';
               <button [class.primary]="busy() === p.pendingId" [disabled]="busy() === p.pendingId"
                       (click)="rate(p, f)">{{ f * 100 }}%</button>
             }
+            <input #custom type="number" min="0" max="200" step="1" placeholder="%"
+                   style="width:64px" [disabled]="busy() === p.pendingId" />
+            <button [disabled]="busy() === p.pendingId || !custom.value"
+                    (click)="rateCustom(p, custom.value)">Rate %</button>
           </div>
         </div>
       }
@@ -88,6 +92,13 @@ export class TrackerComponent implements OnInit {
       },
       error: () => this.busy.set(null),
     });
+  }
+
+  // Custom effort: a typed percentage (0–200%) submitted as a fraction.
+  rateCustom(p: PendingRating, raw: string): void {
+    const pct = Math.round(Number(raw));
+    if (!Number.isFinite(pct) || pct < 0) return; // ignore blank/garbage
+    this.rate(p, Math.min(pct, 200) / 100); // 200% -> fraction 2.0
   }
 
   clearAll(): void {
