@@ -1,6 +1,7 @@
-import { CUSTOM_ELEMENTS_SCHEMA, Component, Input, computed, signal } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, Component, Input, computed, inject, signal } from '@angular/core';
 import type { ChartConfiguration } from 'chart.js';
 import type { ClaimedVsDone } from '@shared/domain';
+import { ThemeService } from '../theme.service';
 import { ChartComponent } from './chart.component';
 import { categoryOptions, themeColors } from './chart-theme';
 
@@ -32,8 +33,10 @@ export class LineChartComponent {
   }
 
   ratioMode = signal(false);
+  private theme = inject(ThemeService);
 
   config = computed<ChartConfiguration>(() => {
+    this.theme.theme(); // re-read CSS-var colors when the theme switches
     const s = this.seriesSig();
     const c = themeColors();
     const labels = s.map((x) => x.sprintName.replace(/^Sprint\s*/i, 'S'));

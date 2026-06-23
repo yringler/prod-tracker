@@ -1,6 +1,7 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, inject, input } from '@angular/core';
 import type { ChartConfiguration } from 'chart.js';
 import type { ClaimedTrendsResponse, TrendPoint } from '@shared/contracts';
+import { ThemeService } from '../theme.service';
 import { ChartComponent } from './chart.component';
 import { dateLineOptions, themeColors } from './chart-theme';
 
@@ -27,6 +28,7 @@ import { dateLineOptions, themeColors } from './chart-theme';
 })
 export class ClaimedTrendsComponent {
   data = input.required<ClaimedTrendsResponse>();
+  private theme = inject(ThemeService);
 
   chart30 = computed(() => {
     const d = this.data();
@@ -43,6 +45,7 @@ export class ClaimedTrendsComponent {
     team: TrendPoint[],
     teamName: string | null,
   ): ChartConfiguration {
+    this.theme.theme(); // re-read CSS-var colors when the theme switches
     const c = themeColors();
     // x as epoch ms (the time scale's native numeric form) keeps Chart.js's
     // line-dataset point typing happy without a cast.

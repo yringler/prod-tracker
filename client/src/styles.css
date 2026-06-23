@@ -1,4 +1,8 @@
-:root {
+/* Brand palette, per theme. The class on <html> (wa-dark / wa-light, set by the
+   inline boot script in index.html and kept in sync by ThemeService) picks one.
+   The chart code reads --accent/--claimed/--done/--muted/--line at runtime, so
+   charts follow whichever set is active. */
+.wa-dark {
   --bg: #0b1020;
   --panel: #151b30;
   --ink: #e7ecff;
@@ -7,18 +11,38 @@
   --claimed: #5b8cff;
   --done: #46d39a;
   --line: #25304f;
+
+  /* Theme-specific surfaces and on-colors consumed by the WA bridge below. */
+  --surface-raised: #1b2238;
+  --surface-lowered: #0e1428;
+  --on-brand-loud: #06122e;
+  --on-success-loud: #06231a;
+}
+.wa-light {
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --ink: #1a2238;
+  --muted: #5a6485;
+  --accent: #3b6fe0;
+  --claimed: #3b6fe0;
+  --done: #1faa78;
+  --line: #d7deeb;
+
+  --surface-raised: #ffffff;
+  --surface-lowered: #eef1f8;
+  --on-brand-loud: #ffffff;
+  --on-success-loud: #ffffff;
 }
 
-/* Web Awesome theme bridge. We keep the wa-dark base (set on <html>) and map
-   Web Awesome's role tokens onto our existing brand palette so <wa-*> components
-   match the app instead of the stock theme. The chart code still reads the
-   --accent/--claimed/--done/--muted/--line vars above, so those stay untouched. */
-:root,
-.wa-dark {
+/* Web Awesome theme bridge. Maps Web Awesome's role tokens onto our brand palette
+   so <wa-*> components match the app instead of the stock theme. Shared by both
+   themes — it only references the per-theme vars defined above. */
+.wa-dark,
+.wa-light {
   /* Surfaces */
   --wa-color-surface-default: var(--panel);
-  --wa-color-surface-raised: #1b2238;
-  --wa-color-surface-lowered: #0e1428;
+  --wa-color-surface-raised: var(--surface-raised);
+  --wa-color-surface-lowered: var(--surface-lowered);
   --wa-color-surface-border: var(--line);
 
   /* Text */
@@ -26,7 +50,7 @@
   --wa-color-text-quiet: var(--muted);
   --wa-color-text-link: var(--accent);
 
-  /* Brand variant → accent blue, with the dark on-color today's primary button uses */
+  /* Brand variant → accent blue, with the on-color the primary button uses */
   --wa-color-brand-fill-quiet: color-mix(in oklab, var(--accent) 18%, transparent);
   --wa-color-brand-fill-normal: color-mix(in oklab, var(--accent) 40%, transparent);
   --wa-color-brand-fill-loud: var(--accent);
@@ -35,13 +59,13 @@
   --wa-color-brand-border-loud: var(--accent);
   --wa-color-brand-on-quiet: var(--accent);
   --wa-color-brand-on-normal: var(--ink);
-  --wa-color-brand-on-loud: #06122e;
+  --wa-color-brand-on-loud: var(--on-brand-loud);
 
   /* Success variant → the green used for "done" */
   --wa-color-success-fill-loud: var(--done);
   --wa-color-success-border-normal: var(--done);
   --wa-color-success-border-loud: var(--done);
-  --wa-color-success-on-loud: #06231a;
+  --wa-color-success-on-loud: var(--on-success-loud);
 }
 * { box-sizing: border-box; }
 body {

@@ -2,6 +2,7 @@ import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angu
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 import { AuthService } from './auth.service';
+import { ThemeService } from './theme.service';
 
 // Routes that render without authentication (e.g. the privacy policy must be
 // publicly reachable for Atlassian's OAuth review).
@@ -25,6 +26,14 @@ const PUBLIC_ROUTES = ['/privacy'];
             <a routerLink="/admin" routerLinkActive="active">Admin</a>
           }
           <span class="spacer"></span>
+          <wa-switch
+            size="small"
+            title="Toggle dark mode"
+            [checked]="theme.theme() === 'dark'"
+            (change)="theme.toggle()"
+          >
+            <wa-icon name="moon"></wa-icon>
+          </wa-switch>
           @if (me.sites.length > 1) {
             <wa-select size="small" [value]="me.cloudId" (change)="onSwitchSite($event)" title="Jira site">
               @for (s of me.sites; track s.cloudId) {
@@ -63,6 +72,7 @@ const PUBLIC_ROUTES = ['/privacy'];
 })
 export class AppComponent implements OnInit {
   auth = inject(AuthService);
+  theme = inject(ThemeService);
   private router = inject(Router);
   isPublicRoute = signal(this.checkPublic(this.router.url));
 
