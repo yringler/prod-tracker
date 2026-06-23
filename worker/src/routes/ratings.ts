@@ -100,7 +100,9 @@ export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
   const size = teamId ? await ctx.dao.teamSize(teamId) : 0;
   const haveTeam = teamId !== null && size > 0;
 
-  // 30 days: personal daily (that day's sum), team weekly (week's sum ÷ size).
+  // 30 days: personal daily (that day's sum). Team weekly is the team's average
+  // per person per day (week's sum ÷ size ÷ 7) so it shares the daily personal
+  // line's magnitude on one axis — just at weekly resolution.
   const personalDaily: TrendPoint[] = (
     await ctx.dao.personalClaimedByDay(ctx.accountId, ctx.cloudId, from30, nowIso)
   ).map((r) => ({ date: r.day, value: r.claimed }));
@@ -108,7 +110,7 @@ export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
   const teamWeekly30: TrendPoint[] = haveTeam
     ? foldWeeks(await ctx.dao.teamClaimedByDay(ctx.cloudId, teamId, from30, nowIso)).map((w) => ({
         date: w.weekStart,
-        value: w.claimed / size,
+        value: w.claimed / size / 7,
       }))
     : [];
 

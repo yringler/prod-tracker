@@ -69,7 +69,7 @@ export function categoryOptions(): ChartOptions<'line'> {
  * chart) with ticks/tooltips formatted by date-fns. UTCDate keeps formatting in
  * UTC, matching how the timestamps are stored.
  */
-export function dateLineOptions(): ChartOptions<'line'> {
+export function dateLineOptions(suggestedMax?: number): ChartOptions<'line'> {
   const base = baseOptions();
   const c = themeColors();
   return {
@@ -85,6 +85,9 @@ export function dateLineOptions(): ChartOptions<'line'> {
     },
     scales: {
       ...base.scales,
+      // suggestedMax sets a sensible axis height (Fibonacci story points: 8 ≈
+      // a good day) without clipping — the axis still grows past it for outliers.
+      y: { ...base.scales?.y, suggestedMax },
       x: {
         type: 'linear',
         grid: { color: c.line },

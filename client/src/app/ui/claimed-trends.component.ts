@@ -15,7 +15,7 @@ import { dateLineOptions, themeColors } from './chart-theme';
   template: `
     <div class="panel">
       <h3>Claimed points — last 30 days</h3>
-      <p class="muted">Your daily claimed points vs your team's weekly average per person.</p>
+      <p class="muted">Your daily claimed points vs your team's average per person per day (weekly).</p>
       <sp-chart [config]="chart30()" />
     </div>
     <div class="panel">
@@ -67,6 +67,6 @@ export class ClaimedTrendsComponent {
         pointRadius: 2,
       });
     }
-    return { type: 'line', data: { datasets }, options: dateLineOptions() };
+    return { type: 'line', data: { datasets }, options: dateLineOptions(21) };
   }
 }

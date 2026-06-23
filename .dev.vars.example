@@ -5,3 +5,4 @@ JIRA_CLIENT_SECRET=
 # Generate with: npx web-push generate-vapid-keys  (then base64url, no padding)
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
+APP_ORIGIN = "http://localhost:8787"

@@ -105,7 +105,7 @@ export interface TrendPoint {
 export interface ClaimedTrendsResponse {
   teamId: string | null;
   teamName: string | null;
-  /** Personal = that day's claimed sum; team = that week's claimed sum ÷ team size. */
+  /** Personal = that day's claimed sum; team = avg per person per day, weekly (week's sum ÷ size ÷ 7). */
   last30Days: { personalDaily: TrendPoint[]; teamWeekly: TrendPoint[] };
   /** Both lines are per-day averages within the week (week's sum ÷ 7, team also ÷ size). */
   last6Months: { personalWeekly: TrendPoint[]; teamWeekly: TrendPoint[] };
