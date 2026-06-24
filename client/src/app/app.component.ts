@@ -104,6 +104,17 @@ const PUBLIC_ROUTES = ["/privacy"];
                 }
                 <main><router-outlet /></main>
             } @else {
+                <nav>
+                    <span class="spacer"></span>
+                    <wa-switch
+                        size="small"
+                        title="Toggle dark mode"
+                        [checked]="theme.theme() === 'dark'"
+                        (change)="theme.toggle()"
+                    >
+                        <wa-icon name="moon"></wa-icon>
+                    </wa-switch>
+                </nav>
                 <main>
                     <div style="margin-top:64px; text-align:center">
                         <h1 style="font-size:32px; margin-bottom:8px">
