@@ -28,6 +28,7 @@ import {
 import { allAggregates, teamAggregate } from './routes/aggregates';
 import { claimedTrends, clearPending, getPending, myRatings, submitRating } from './routes/ratings';
 import { subscribe, vapidPublicKey } from './routes/push';
+import { isDevEnv, seedPending } from './routes/dev';
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -88,6 +89,12 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   // Personal (hard-scoped to ctx.accountId)
   if (p === '/api/pending' && m === 'GET') return getPending(ctx);
   if (p === '/api/pending' && m === 'DELETE') return clearPending(ctx);
+  // Dev-only: inject a made-up pending prompt (the cron poller doesn't run
+  // locally). 404s in production via the isDevEnv guard.
+  if (p === '/api/__dev/pending' && m === 'POST') {
+    if (!isDevEnv(env)) return error(404, 'not found');
+    return seedPending(ctx);
+  }
   if (p === '/api/ratings' && m === 'POST') return submitRating(req, ctx);
   if (p === '/api/me/ratings' && m === 'GET') return myRatings(ctx);
   if (p === '/api/me/claimed-trends' && m === 'GET') return claimedTrends(ctx);

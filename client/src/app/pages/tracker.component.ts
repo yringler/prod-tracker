@@ -20,6 +20,12 @@ type MyRating = MyRatingsResponse['ratings'][number];
     <div class="row" style="justify-content:space-between">
       <h2>Rate your effort</h2>
       <div class="row" style="gap:8px">
+        @if (isDev) {
+          <wa-button size="small" appearance="outlined" [loading]="seeding()" (click)="seedDev()">
+            <wa-icon slot="start" name="flask"></wa-icon>
+            Add fake item
+          </wa-button>
+        }
         @if (pending().length > 0) {
           <wa-button size="small" appearance="outlined" [loading]="clearing()" (click)="clearAll()">
             <wa-icon slot="start" name="trash"></wa-icon>
@@ -119,11 +125,15 @@ export class TrackerComponent implements OnInit {
   private push = inject(PushService);
 
   readonly presetPoints = [0, 1, 3, 5, 8] as const;
+  // Local dev only: the cron poller that creates pending prompts never runs in
+  // `wrangler dev`, so this button injects a made-up one to exercise the flow.
+  readonly isDev = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   pending = signal<PendingRating[]>([]);
   today = signal<MyRating[]>([]);
   loading = signal(true);
   busy = signal<string | null>(null);
   clearing = signal(false);
+  seeding = signal(false);
   pushMsg = signal<string>('');
   pushOn = signal(false);
   confirmOpen = signal(false);
@@ -188,6 +198,18 @@ export class TrackerComponent implements OnInit {
     const points = Number(raw);
     if (!Number.isFinite(points) || points < 0) return; // ignore blank/garbage
     this.rate(p, points, notes);
+  }
+
+  // Dev only: inject a fake pending prompt, then re-fetch so it shows up.
+  seedDev(): void {
+    this.seeding.set(true);
+    this.api.seedDevPending().subscribe({
+      next: () => {
+        this.refresh();
+        this.seeding.set(false);
+      },
+      error: () => this.seeding.set(false),
+    });
   }
 
   clearAll(): void {

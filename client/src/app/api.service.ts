@@ -50,6 +50,10 @@ export class ApiService {
   clearPending(): Observable<unknown> {
     return this.http.delete('/api/pending');
   }
+  // Dev-only: ask the worker to inject a made-up pending prompt (route 404s in prod).
+  seedDevPending(): Observable<unknown> {
+    return this.http.post('/api/__dev/pending', {});
+  }
   submitRating(body: SubmitRatingRequest): Observable<SubmitRatingResponse> {
     return this.http.post<SubmitRatingResponse>('/api/ratings', body);
   }
