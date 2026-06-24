@@ -244,13 +244,16 @@ export class TrackerComponent implements OnInit {
         });
     }
 
-    // Reflection strip: today's claims, newest first. "Today" is the user's local
-    // day (isToday) — a reflective grouping, unlike the UTC trend buckets.
+    // Reflection strip: work that transitioned today, newest first. "Today" is the
+    // user's local day (isToday) — a reflective grouping, unlike the UTC trend
+    // buckets. Grouped by transition time, not when the points were claimed, so a
+    // ticket finished today still shows here even if claimed tomorrow (older rows
+    // without a stored transition fall back to ratedAt).
     loadToday(): void {
         this.api.myRatings().subscribe({
             next: (r) =>
                 this.today.set(
-                    r.ratings.filter((x) => isToday(parseISO(x.ratedAt))),
+                    r.ratings.filter((x) => isToday(parseISO(x.transitionedAt ?? x.ratedAt))),
                 ),
         });
     }
@@ -284,6 +287,7 @@ export class TrackerComponent implements OnInit {
                             storyPointsAtRating: res.storyPointsAtRating,
                             sprintId: res.sprintId,
                             ratedAt: new Date().toISOString(),
+                            transitionedAt: p.transitionedAt,
                             title: p.title,
                             url: p.url,
                             notes: trimmed.length > 0 ? trimmed : null,

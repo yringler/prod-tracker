@@ -71,7 +71,13 @@ CREATE TABLE IF NOT EXISTS ratings (
   story_points_at_rating REAL,                 -- nullable: ticket had no points
   team_id_at_rating      TEXT,                 -- nullable: rater on no team then
   sprint_id              INTEGER,              -- nullable: outside any sprint window
-  rated_at               TEXT NOT NULL,
+  rated_at               TEXT NOT NULL,        -- when the claim was submitted (now())
+  -- The Jira transition timestamp this claim is about, snapshotted from the pending
+  -- prompt. Day/week views bucket on THIS, not rated_at, so work done yesterday but
+  -- claimed today lands on the transition day. Added 0003; null for legacy rows,
+  -- which fall back to rated_at via COALESCE. Keep in sync with
+  -- migrations/0003_rating_transitioned_at.sql.
+  transitioned_at        TEXT,                 -- nullable: Jira transition time
   -- Reflection fields (added 0002). title/url snapshot the issue so the personal
   -- history view can render it without a live Jira lookup; notes is an optional
   -- free-text diary the rater writes when claiming. NOTE: these columns also live

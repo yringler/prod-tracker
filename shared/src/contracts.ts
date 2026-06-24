@@ -76,7 +76,13 @@ export interface MyRatingsResponse {
     claimedPoints: number;
     storyPointsAtRating: number | null;
     sprintId: number | null;
+    /** When the claim was submitted. */
     ratedAt: string;
+    /**
+     * The Jira transition time the work was done — what day/week groupings bucket
+     * on. Null for rows predating this field; fall back to ratedAt for grouping.
+     */
+    transitionedAt: string | null;
     /** Snapshot of the issue title at rating time. Null for rows predating this field. */
     title: string | null;
     /** Snapshot of the Jira deep-link at rating time. Null for rows predating this field. */

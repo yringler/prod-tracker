@@ -68,13 +68,14 @@ export class HistoryComponent implements OnInit {
 
   totalPoints = computed(() => this.weekRatings().reduce((sum, r) => sum + r.claimedPoints, 0));
 
-  // Group this week's ratings by local calendar day, newest day first. myRatings
-  // already returns rows ordered rated_at DESC, so day order and within-day order
-  // both fall out of insertion order.
+  // Group this week's ratings by the local calendar day the work transitioned
+  // (falling back to ratedAt for rows without a stored transition), newest day
+  // first. myRatings returns rows ordered rated_at DESC, which for typical
+  // same-day claims also lands the transition days newest-first.
   groups = computed<DayGroup[]>(() => {
     const byDay = new Map<string, DayGroup>();
     for (const r of this.weekRatings()) {
-      const d = parseISO(r.ratedAt);
+      const d = parseISO(r.transitionedAt ?? r.ratedAt);
       const key = format(d, 'yyyy-MM-dd');
       let g = byDay.get(key);
       if (!g) {
@@ -90,8 +91,12 @@ export class HistoryComponent implements OnInit {
     this.api.myRatings().subscribe({
       next: (r) => {
         // "This week" is the user's local week (Monday start) — a reflective
-        // grouping, intentionally local rather than the UTC trend buckets.
-        this.weekRatings.set(r.ratings.filter((x) => isThisWeek(parseISO(x.ratedAt), { weekStartsOn: 1 })));
+        // grouping, intentionally local rather than the UTC trend buckets. Bucketed
+        // by when the work transitioned, not when it was claimed (older rows without
+        // a stored transition fall back to ratedAt).
+        this.weekRatings.set(
+          r.ratings.filter((x) => isThisWeek(parseISO(x.transitionedAt ?? x.ratedAt), { weekStartsOn: 1 })),
+        );
         this.loading.set(false);
       },
       error: () => this.loading.set(false),
