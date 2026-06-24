@@ -355,7 +355,7 @@ export class Dao {
     cloudId: string;
     issueKey: string;
     raterAccountId: string;
-    ratingFraction: number;
+    claimedPoints: number;
     storyPointsAtRating: number | null;
     teamIdAtRating: string | null;
     sprintId: number | null;
@@ -364,11 +364,11 @@ export class Dao {
     await this.db
       .prepare(
         `INSERT INTO ratings
-           (id, cloud_id, issue_key, rater_account_id, rating_fraction, story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
+           (id, cloud_id, issue_key, rater_account_id, claimed_points, story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        id, input.cloudId, input.issueKey, input.raterAccountId, input.ratingFraction,
+        id, input.cloudId, input.issueKey, input.raterAccountId, input.claimedPoints,
         input.storyPointsAtRating, input.teamIdAtRating, input.sprintId, now(),
       )
       .run();
@@ -385,7 +385,7 @@ export class Dao {
     Array<{
       id: string;
       issueKey: string;
-      ratingFraction: number;
+      claimedPoints: number;
       storyPointsAtRating: number | null;
       sprintId: number | null;
       ratedAt: string;
@@ -393,14 +393,14 @@ export class Dao {
   > {
     const { results } = await this.db
       .prepare(
-        `SELECT id, issue_key, rating_fraction, story_points_at_rating, sprint_id, rated_at
+        `SELECT id, issue_key, claimed_points, story_points_at_rating, sprint_id, rated_at
          FROM ratings WHERE rater_account_id = ? ORDER BY rated_at DESC`,
       )
       .bind(ownerAccountId)
       .all<{
         id: string;
         issue_key: string;
-        rating_fraction: number;
+        claimed_points: number;
         story_points_at_rating: number | null;
         sprint_id: number | null;
         rated_at: string;
@@ -408,7 +408,7 @@ export class Dao {
     return results.map((r) => ({
       id: r.id,
       issueKey: r.issue_key,
-      ratingFraction: r.rating_fraction,
+      claimedPoints: r.claimed_points,
       storyPointsAtRating: r.story_points_at_rating,
       sprintId: r.sprint_id,
       ratedAt: r.rated_at,
@@ -730,11 +730,11 @@ export class Dao {
       .bind(cloudId)
       .all<{ sprint_id: number; name: string }>();
 
-    // claimed: uncapped sum(fraction * pts), grouped by sprint, for this team snapshot.
+    // claimed: uncapped sum of self-claimed points, grouped by sprint, for this team snapshot.
     const claimedRows = await this.db
       .prepare(
         `SELECT sprint_id AS sid,
-                COALESCE(SUM(rating_fraction * COALESCE(story_points_at_rating, 0)), 0) AS claimed,
+                COALESCE(SUM(claimed_points), 0) AS claimed,
                 COUNT(DISTINCT rater_account_id) AS raters
          FROM ratings
          WHERE cloud_id = ? AND team_id_at_rating = ?
@@ -805,7 +805,7 @@ export class Dao {
     const { results } = await this.db
       .prepare(
         `SELECT substr(rated_at, 1, 10) AS day,
-                COALESCE(SUM(rating_fraction * COALESCE(story_points_at_rating, 0)), 0) AS claimed
+                COALESCE(SUM(claimed_points), 0) AS claimed
          FROM ratings
          WHERE rater_account_id = ? AND cloud_id = ? AND rated_at >= ? AND rated_at < ?
          GROUP BY day ORDER BY day`,
@@ -825,7 +825,7 @@ export class Dao {
     const { results } = await this.db
       .prepare(
         `SELECT substr(rated_at, 1, 10) AS day,
-                COALESCE(SUM(rating_fraction * COALESCE(story_points_at_rating, 0)), 0) AS claimed
+                COALESCE(SUM(claimed_points), 0) AS claimed
          FROM ratings
          WHERE team_id_at_rating = ? AND cloud_id = ? AND rated_at >= ? AND rated_at < ?
          GROUP BY day ORDER BY day`,

@@ -11,7 +11,6 @@ import type {
   TrendPoint,
 } from '@shared/contracts';
 import {
-  isRatingFraction,
   isStaleTransition,
   sprintForTimestamp,
   weekStartOf,
@@ -46,13 +45,23 @@ export async function clearPending(ctx: AuthedCtx): Promise<Response> {
 
 export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Response> {
   const body = await readJson<SubmitRatingRequest>(req);
-  if (!body || !isRatingFraction(body.ratingFraction)) {
+  if (
+    !body ||
+    typeof body.claimedPoints !== 'number' ||
+    !Number.isFinite(body.claimedPoints) ||
+    body.claimedPoints < 0
+  ) {
     return error(400, 'invalid rating');
   }
   const pending = await ctx.dao.getPending(body.pendingId);
   if (!pending) return error(404, 'pending not found');
   // A user can only rate THEIR OWN pending prompt.
   if (pending.accountId !== ctx.accountId) return error(403, 'not your pending');
+  // A claim can't exceed 2× the ticket's points — the old 200% ceiling, in
+  // absolute terms now that the percentage lives only in the UI.
+  if (body.claimedPoints > 2 * (pending.storyPoints ?? 0)) {
+    return error(400, 'claim exceeds ticket points');
+  }
 
   // Bucket the rating into the sprint that contained the transition, and snapshot
   // story points + team id at rating time (historical re-aggregation stays honest).
@@ -64,7 +73,7 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
     cloudId: ctx.cloudId,
     issueKey: pending.issueKey,
     raterAccountId: ctx.accountId,
-    ratingFraction: body.ratingFraction,
+    claimedPoints: body.claimedPoints,
     storyPointsAtRating: pending.storyPoints,
     teamIdAtRating,
     sprintId,
@@ -156,7 +165,7 @@ export async function myRatings(ctx: AuthedCtx): Promise<Response> {
     ratings: rows.map((r) => ({
       id: r.id,
       issueKey: r.issueKey,
-      ratingFraction: r.ratingFraction as MyRatingsResponse['ratings'][number]['ratingFraction'],
+      claimedPoints: r.claimedPoints,
       storyPointsAtRating: r.storyPointsAtRating,
       sprintId: r.sprintId,
       ratedAt: r.ratedAt,

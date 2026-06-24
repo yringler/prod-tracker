@@ -1,5 +1,5 @@
 // API request/response shapes for /api/*. Imported by both client and worker.
-import type { ClaimedVsDone, RatingFraction, Role } from './domain';
+import type { ClaimedVsDone, Role } from './domain';
 
 // --- Auth / identity ---------------------------------------------------------
 
@@ -55,7 +55,8 @@ export interface PendingRatingsResponse {
 export interface SubmitRatingRequest {
   pendingId: string;
   issueKey: string;
-  ratingFraction: RatingFraction;
+  /** Absolute points the rater claims = UI's chosen % × story points (computed client-side). */
+  claimedPoints: number;
 }
 
 export interface SubmitRatingResponse {
@@ -70,7 +71,7 @@ export interface MyRatingsResponse {
   ratings: Array<{
     id: string;
     issueKey: string;
-    ratingFraction: RatingFraction;
+    claimedPoints: number;
     storyPointsAtRating: number | null;
     sprintId: number | null;
     ratedAt: string;

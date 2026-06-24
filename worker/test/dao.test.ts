@@ -116,12 +116,12 @@ describe('claimed trends (date-bucketed)', () => {
     await db
       .prepare(
         `INSERT INTO ratings
-           (id, cloud_id, issue_key, rater_account_id, rating_fraction,
+           (id, cloud_id, issue_key, rater_account_id, claimed_points,
             story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        crypto.randomUUID(), CLOUD, 'X-1', opts.rater, opts.frac,
+        crypto.randomUUID(), CLOUD, 'X-1', opts.rater, opts.frac * opts.pts,
         opts.pts, opts.team, null, opts.at,
       )
       .run();

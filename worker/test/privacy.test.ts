@@ -32,12 +32,12 @@ beforeEach(async () => {
     endAt: '2026-05-15T00:00:00.000Z',
   });
 
-  // Alice rates ABC-1 at 100%, Bob rates ABC-1 at 50% (effort multiplier > 100%).
+  // Alice claims 5 pts on ABC-1 (100% of 5); Bob claims 4 pts on ABC-2 (50% of 8).
   await dao.insertRating({
     cloudId: CLOUD,
     issueKey: 'ABC-1',
     raterAccountId: ALICE,
-    ratingFraction: 1,
+    claimedPoints: 5,
     storyPointsAtRating: 5,
     teamIdAtRating: teamId,
     sprintId: 10,
@@ -46,7 +46,7 @@ beforeEach(async () => {
     cloudId: CLOUD,
     issueKey: 'ABC-2',
     raterAccountId: BOB,
-    ratingFraction: 0.5,
+    claimedPoints: 4,
     storyPointsAtRating: 8,
     teamIdAtRating: teamId,
     sprintId: 10,

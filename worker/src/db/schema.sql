@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS ratings (
   cloud_id               TEXT NOT NULL,
   issue_key              TEXT NOT NULL,
   rater_account_id       TEXT NOT NULL,
-  rating_fraction        REAL NOT NULL,        -- 0 | 0.25 | 0.5 | 1
+  claimed_points         REAL NOT NULL,        -- absolute self-claimed pts (UI %× story points at rating)
   story_points_at_rating REAL,                 -- nullable: ticket had no points
   team_id_at_rating      TEXT,                 -- nullable: rater on no team then
   sprint_id              INTEGER,              -- nullable: outside any sprint window
@@ -77,7 +77,7 @@ CREATE INDEX IF NOT EXISTS idx_ratings_rater ON ratings(rater_account_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_agg ON ratings(cloud_id, team_id_at_rating, sprint_id);
 -- One rating per (rater, issue, transition). pending_id carries the changelog id.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ratings_pending
-  ON ratings(rater_account_id, issue_key, sprint_id, rating_fraction);
+  ON ratings(rater_account_id, issue_key, sprint_id, claimed_points);
 
 -- The "real Jira" done series. Bucketed by the changelog timestamp's sprint window.
 CREATE TABLE IF NOT EXISTS done_events (

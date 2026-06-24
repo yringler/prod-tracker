@@ -3,17 +3,6 @@
 import { UTCDate } from '@date-fns/utc';
 import { format, startOfISOWeek } from 'date-fns';
 
-/** The quick self-rating buttons. Stored as a fraction, multiplied by story points. */
-export const RATING_FRACTIONS = [0, 0.25, 0.5, 1] as const;
-/** Upper bound for a custom rating fraction (200% — "double the estimated effort"). */
-export const MAX_RATING_FRACTION = 2;
-/** A rating fraction: any finite number in [0, MAX_RATING_FRACTION]. */
-export type RatingFraction = number;
-
-export function isRatingFraction(v: unknown): v is RatingFraction {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_RATING_FRACTION;
-}
-
 export type Role = 'user' | 'admin';
 
 /**
@@ -107,7 +96,7 @@ export function sprintForTimestamp(
 export interface ClaimedVsDone {
   sprintId: number;
   sprintName: string;
-  /** Uncapped sum of ratingFraction * storyPointsAtRating across all raters. */
+  /** Uncapped sum of each rater's self-claimed points. */
   claimedPoints: number;
   /** Real Jira done sum from done_events. */
   donePoints: number;

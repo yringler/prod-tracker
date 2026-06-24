@@ -4,7 +4,6 @@ import {
   changelogIdGreater,
   computeRatio,
   isDoneTransition,
-  isRatingFraction,
   isStaleTransition,
   sprintForTimestamp,
   weekStartOf,
@@ -26,18 +25,6 @@ describe('weekStartOf', () => {
   it('crosses the year boundary correctly', () => {
     // 2027-01-01 is a Friday → its week’s Monday is 2026-12-28.
     expect(weekStartOf('2027-01-01T00:00:00.000Z')).toBe('2026-12-28');
-  });
-});
-
-describe('isRatingFraction', () => {
-  it('accepts any finite number in [0, 2]', () => {
-    expect([0, 0.25, 0.5, 0.75, 1, 1.5, 2].every(isRatingFraction)).toBe(true);
-  });
-  it('rejects out-of-range, non-finite, and non-number values', () => {
-    expect(isRatingFraction(2.01)).toBe(false);
-    expect(isRatingFraction(-0.1)).toBe(false);
-    expect(isRatingFraction(Number.NaN)).toBe(false);
-    expect(isRatingFraction('1')).toBe(false);
   });
 });
 

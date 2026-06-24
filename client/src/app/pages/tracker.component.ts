@@ -1,7 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angular/core';
 import type { PendingRating } from '@shared/contracts';
-import { RATING_FRACTIONS, type RatingFraction } from '@shared/domain';
 import { ApiService } from '../api.service';
 import { PushService } from '../push.service';
 
@@ -53,9 +52,9 @@ import { PushService } from '../push.service';
           <div class="muted" style="font-size:12px">moved {{ p.transitionedAt | date: 'short' }}</div>
           <div class="row" style="margin-top:10px; gap:8px">
             <wa-button-group label="Effort">
-              @for (f of fractions; track f) {
+              @for (pct of presetPercents; track pct) {
                 <wa-button appearance="outlined" [loading]="busy() === p.pendingId"
-                           [disabled]="busy() === p.pendingId" (click)="rate(p, f)">{{ f * 100 }}%</wa-button>
+                           [disabled]="busy() === p.pendingId" (click)="rate(p, pct)">{{ pct }}%</wa-button>
               }
             </wa-button-group>
             <wa-input #custom type="number" min="0" max="200" step="1" placeholder="%"
@@ -78,7 +77,7 @@ export class TrackerComponent implements OnInit {
   private api = inject(ApiService);
   private push = inject(PushService);
 
-  readonly fractions = RATING_FRACTIONS;
+  readonly presetPercents = [0, 25, 50, 100] as const;
   pending = signal<PendingRating[]>([]);
   loading = signal(true);
   busy = signal<string | null>(null);
@@ -102,9 +101,12 @@ export class TrackerComponent implements OnInit {
     });
   }
 
-  rate(p: PendingRating, f: RatingFraction): void {
+  // Convert the chosen percentage to absolute claimed points here — the backend
+  // only ever sees points, never a percentage.
+  rate(p: PendingRating, pct: number): void {
     this.busy.set(p.pendingId);
-    this.api.submitRating({ pendingId: p.pendingId, issueKey: p.issueKey, ratingFraction: f }).subscribe({
+    const claimedPoints = ((p.storyPoints ?? 0) * pct) / 100;
+    this.api.submitRating({ pendingId: p.pendingId, issueKey: p.issueKey, claimedPoints }).subscribe({
       next: () => {
         this.pending.update((list) => list.filter((x) => x.pendingId !== p.pendingId));
         this.busy.set(null);
@@ -113,11 +115,11 @@ export class TrackerComponent implements OnInit {
     });
   }
 
-  // Custom effort: a typed percentage (0–200%) submitted as a fraction.
+  // Custom effort: a typed percentage (0–200%). rate() turns it into points.
   rateCustom(p: PendingRating, raw: string): void {
     const pct = Math.round(Number(raw));
     if (!Number.isFinite(pct) || pct < 0) return; // ignore blank/garbage
-    this.rate(p, Math.min(pct, 200) / 100); // 200% -> fraction 2.0
+    this.rate(p, Math.min(pct, 200)); // cap at 200%
   }
 
   clearAll(): void {
