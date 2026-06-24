@@ -175,7 +175,7 @@ describe('eraseAccount', () => {
     const sid = await dao.createSession(ALICE, CLOUD, 3600);
     await dao.markReported([ALICE], new Date().toISOString());
 
-    const before = await dao.teamSeries(CLOUD, teamId);
+    const before = await dao.teamSeries(CLOUD, teamId, '1970-01-01T00:00:00.000Z');
     const s10Before = before.find((s) => s.sprintId === 10)!;
 
     await dao.eraseAccount(ALICE);
@@ -202,7 +202,7 @@ describe('eraseAccount', () => {
 
     // Aggregates are unchanged: ratings/done rows survived (pseudonymized), so sums
     // and the distinct-rater count are identical.
-    const after = await dao.teamSeries(CLOUD, teamId);
+    const after = await dao.teamSeries(CLOUD, teamId, '1970-01-01T00:00:00.000Z');
     const s10After = after.find((s) => s.sprintId === 10)!;
     expect(s10After.claimedPoints).toBe(s10Before.claimedPoints);
     expect(s10After.donePoints).toBe(s10Before.donePoints);

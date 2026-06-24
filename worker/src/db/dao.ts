@@ -720,14 +720,28 @@ export class Dao {
 
   // --- AGGREGATES (team-grouped, sums only; never per-account) ---------------
 
+  /** Earliest rated_at across the whole cloud, or null if there are no ratings. */
+  async earliestClaimAt(cloudId: string): Promise<string | null> {
+    const row = await this.db
+      .prepare(`SELECT MIN(rated_at) AS m FROM ratings WHERE cloud_id = ?`)
+      .bind(cloudId)
+      .first<{ m: string | null }>();
+    return row?.m ?? null;
+  }
+
   /**
    * Claimed-vs-done series for ONE team. Groups by sprint, sums only.
    * Deliberately takes no rater filter — there is no way to ask for one rater.
+   * `sinceIso` lower-bounds sprints by start_at so the series stays within a
+   * recent window (see aggregateSince in routes/aggregates.ts).
    */
-  async teamSeries(cloudId: string, teamId: string): Promise<ClaimedVsDone[]> {
+  async teamSeries(cloudId: string, teamId: string, sinceIso: string): Promise<ClaimedVsDone[]> {
     const sprintRows = await this.db
-      .prepare(`SELECT sprint_id, name FROM sprints WHERE cloud_id = ? ORDER BY start_at`)
-      .bind(cloudId)
+      .prepare(
+        `SELECT sprint_id, name FROM sprints
+         WHERE cloud_id = ? AND start_at >= ? ORDER BY start_at`,
+      )
+      .bind(cloudId, sinceIso)
       .all<{ sprint_id: number; name: string }>();
 
     // claimed: uncapped sum of self-claimed points, grouped by sprint, for this team snapshot.

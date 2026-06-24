@@ -20,7 +20,7 @@ import { LineChartComponent } from '../ui/line-chart.component';
     }
 
     <h2>Team aggregates</h2>
-    <p class="muted">Effort-claimed (uncapped sum of self-ratings × points) vs real Jira done points, per sprint.</p>
+    <p class="muted">Effort-claimed (uncapped sum of self-ratings × points) vs real Jira done points, per sprint. Last 12 months.</p>
 
     @if (loading()) {
       <div class="row" style="gap:8px"><wa-spinner></wa-spinner> <span class="muted">Loading…</span></div>

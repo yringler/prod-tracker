@@ -56,7 +56,7 @@ describe('done_event idempotency', () => {
     const team = await dao.createTeam(CLOUD, 'T');
     // Re-attribute to a team for the series check.
     await dao.insertDoneEvent({ ...input, changelogId: '7777', teamIdAtDone: team }); // still dupe
-    const series = await dao.teamSeries(CLOUD, team);
+    const series = await dao.teamSeries(CLOUD, team, '1970-01-01T00:00:00.000Z');
     // The original event had teamIdAtDone null, so this team's done is 0 — but
     // the key point: only ONE row exists for changelog 7777 (no double count).
     expect(series.reduce((n, s) => n + s.donePoints, 0)).toBe(0);

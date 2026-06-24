@@ -82,7 +82,7 @@ describe('personal endpoint scoping', () => {
 describe('aggregate endpoint — team-grouped, sums only', () => {
   it('emits team sums with no per-account fields', async () => {
     const teams = await dao.listTeams(CLOUD);
-    const series = await dao.teamSeries(CLOUD, teams[0]!.teamId);
+    const series = await dao.teamSeries(CLOUD, teams[0]!.teamId, '1970-01-01T00:00:00.000Z');
     const s10 = series.find((s) => s.sprintId === 10)!;
 
     // claimed = 1*5 + 0.5*8 = 9 (uncapped across raters); done = 5; ratio = 1.8.
@@ -99,8 +99,9 @@ describe('aggregate endpoint — team-grouped, sums only', () => {
   });
 
   it('teamSeries signature takes no rater filter (compile-time invariant)', () => {
-    // Documented as a runtime check too: only cloudId + teamId are accepted.
-    expect(dao.teamSeries.length).toBe(2);
+    // Documented as a runtime check too: only cloudId + teamId + sinceIso are
+    // accepted — a date window, never a rater.
+    expect(dao.teamSeries.length).toBe(3);
   });
 });
 

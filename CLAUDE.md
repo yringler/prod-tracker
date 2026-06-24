@@ -13,3 +13,7 @@ Guidance for working in this repo.
   always must), wrap the input in `UTCDate` from **`@date-fns/utc`** so date-fns
   operates in UTC regardless of the runtime's local zone — e.g. `weekStartOf()`
   in `shared/src/domain.ts`.
+
+## Deferred work
+
+- See `DEFERRED.md` for intentionally postponed features.
