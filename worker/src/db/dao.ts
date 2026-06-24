@@ -359,6 +359,10 @@ export class Dao {
     storyPointsAtRating: number | null;
     teamIdAtRating: string | null;
     sprintId: number | null;
+    // The Jira transition time this claim is about — what day/week views bucket on.
+    // Stamped from the pending prompt; null only for the rare claim with no known
+    // transition, which then falls back to rated_at in the bucketing queries.
+    transitionedAt?: string | null;
     notes?: string | null;
     title?: string | null;
     url?: string | null;
@@ -367,13 +371,13 @@ export class Dao {
     await this.db
       .prepare(
         `INSERT INTO ratings
-           (id, cloud_id, issue_key, rater_account_id, claimed_points, story_points_at_rating, team_id_at_rating, sprint_id, rated_at, notes, title, url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, cloud_id, issue_key, rater_account_id, claimed_points, story_points_at_rating, team_id_at_rating, sprint_id, rated_at, transitioned_at, notes, title, url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id, input.cloudId, input.issueKey, input.raterAccountId, input.claimedPoints,
         input.storyPointsAtRating, input.teamIdAtRating, input.sprintId, now(),
-        input.notes ?? null, input.title ?? null, input.url ?? null,
+        input.transitionedAt ?? null, input.notes ?? null, input.title ?? null, input.url ?? null,
       )
       .run();
     return id;
@@ -393,6 +397,7 @@ export class Dao {
       storyPointsAtRating: number | null;
       sprintId: number | null;
       ratedAt: string;
+      transitionedAt: string | null;
       title: string | null;
       url: string | null;
       notes: string | null;
@@ -400,7 +405,7 @@ export class Dao {
   > {
     const { results } = await this.db
       .prepare(
-        `SELECT id, issue_key, claimed_points, story_points_at_rating, sprint_id, rated_at, title, url, notes
+        `SELECT id, issue_key, claimed_points, story_points_at_rating, sprint_id, rated_at, transitioned_at, title, url, notes
          FROM ratings WHERE rater_account_id = ? ORDER BY rated_at DESC`,
       )
       .bind(ownerAccountId)
@@ -411,6 +416,7 @@ export class Dao {
         story_points_at_rating: number | null;
         sprint_id: number | null;
         rated_at: string;
+        transitioned_at: string | null;
         title: string | null;
         url: string | null;
         notes: string | null;
@@ -422,6 +428,7 @@ export class Dao {
       storyPointsAtRating: r.story_points_at_rating,
       sprintId: r.sprint_id,
       ratedAt: r.rated_at,
+      transitionedAt: r.transitioned_at,
       title: r.title,
       url: r.url,
       notes: r.notes,
@@ -818,9 +825,12 @@ export class Dao {
   // --- CLAIMED TRENDS (date-bucketed) ----------------------------------------
   // Personal queries are self-scoped (WHERE rater_account_id = ?), the team query
   // is a team-grouped sum with no rater column — the same privacy split as the
-  // personal endpoints vs teamSeries(). Days come back as `YYYY-MM-DD` (UTC, since
-  // rated_at is stored via toISOString); callers fold days into weeks with
-  // weekStartOf() so week numbering lives in one tested place.
+  // personal endpoints vs teamSeries(). Bucketed by transitioned_at (when the work
+  // was actually done), falling back to rated_at for legacy rows that predate that
+  // column; the window filter uses the same COALESCE so a row's inclusion and its
+  // bucket agree. Days come back as `YYYY-MM-DD` (UTC, since both timestamps are
+  // stored via toISOString); callers fold days into weeks with weekStartOf() so week
+  // numbering lives in one tested place.
 
   /** This account's daily claimed sum over [fromIso, toIso). Self-scoped. */
   async personalClaimedByDay(
@@ -831,10 +841,11 @@ export class Dao {
   ): Promise<Array<{ day: string; claimed: number }>> {
     const { results } = await this.db
       .prepare(
-        `SELECT substr(rated_at, 1, 10) AS day,
+        `SELECT substr(COALESCE(transitioned_at, rated_at), 1, 10) AS day,
                 COALESCE(SUM(claimed_points), 0) AS claimed
          FROM ratings
-         WHERE rater_account_id = ? AND cloud_id = ? AND rated_at >= ? AND rated_at < ?
+         WHERE rater_account_id = ? AND cloud_id = ?
+           AND COALESCE(transitioned_at, rated_at) >= ? AND COALESCE(transitioned_at, rated_at) < ?
          GROUP BY day ORDER BY day`,
       )
       .bind(accountId, cloudId, fromIso, toIso)
@@ -851,10 +862,11 @@ export class Dao {
   ): Promise<Array<{ day: string; claimed: number }>> {
     const { results } = await this.db
       .prepare(
-        `SELECT substr(rated_at, 1, 10) AS day,
+        `SELECT substr(COALESCE(transitioned_at, rated_at), 1, 10) AS day,
                 COALESCE(SUM(claimed_points), 0) AS claimed
          FROM ratings
-         WHERE team_id_at_rating = ? AND cloud_id = ? AND rated_at >= ? AND rated_at < ?
+         WHERE team_id_at_rating = ? AND cloud_id = ?
+           AND COALESCE(transitioned_at, rated_at) >= ? AND COALESCE(transitioned_at, rated_at) < ?
          GROUP BY day ORDER BY day`,
       )
       .bind(teamId, cloudId, fromIso, toIso)

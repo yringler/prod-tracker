@@ -41,6 +41,7 @@ describe('rating reflection fields (notes/title/url)', () => {
       storyPointsAtRating: 5,
       teamIdAtRating: null,
       sprintId: null,
+      transitionedAt: '2026-06-22T09:00:00.000Z',
       notes: 'Wrapped up the tricky migration — proud of this one.',
       title: 'Migrate the thing',
       url: 'https://acme.atlassian.net/browse/X-1',
@@ -48,6 +49,7 @@ describe('rating reflection fields (notes/title/url)', () => {
 
     const rows = await dao.getRatingsForOwner('u1');
     expect(rows).toHaveLength(1);
+    expect(rows[0]!.transitionedAt).toBe('2026-06-22T09:00:00.000Z');
     expect(rows[0]!.notes).toBe('Wrapped up the tricky migration — proud of this one.');
     expect(rows[0]!.title).toBe('Migrate the thing');
     expect(rows[0]!.url).toBe('https://acme.atlassian.net/browse/X-1');
@@ -65,6 +67,7 @@ describe('rating reflection fields (notes/title/url)', () => {
     });
 
     const rows = await dao.getRatingsForOwner('u1');
+    expect(rows[0]!.transitionedAt).toBeNull();
     expect(rows[0]!.notes).toBeNull();
     expect(rows[0]!.title).toBeNull();
     expect(rows[0]!.url).toBeNull();
@@ -145,24 +148,27 @@ describe('claimed trends (date-bucketed)', () => {
   let db: SqliteD1;
   let team: string;
 
-  // Insert a rating at an explicit rated_at (dao.insertRating stamps now()).
+  // Insert a rating at an explicit rated_at (dao.insertRating stamps now()), and an
+  // optional transitioned_at — the day views bucket on COALESCE(transitioned_at,
+  // rated_at), so leaving it off exercises the legacy fallback to rated_at.
   async function rate(opts: {
     rater: string;
     team: string | null;
     frac: number;
     pts: number;
     at: string;
+    transitionedAt?: string;
   }): Promise<void> {
     await db
       .prepare(
         `INSERT INTO ratings
            (id, cloud_id, issue_key, rater_account_id, claimed_points,
-            story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            story_points_at_rating, team_id_at_rating, sprint_id, rated_at, transitioned_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         crypto.randomUUID(), CLOUD, 'X-1', opts.rater, opts.frac * opts.pts,
-        opts.pts, opts.team, null, opts.at,
+        opts.pts, opts.team, null, opts.at, opts.transitionedAt ?? null,
       )
       .run();
   }
@@ -204,6 +210,32 @@ describe('claimed trends (date-bucketed)', () => {
     const blob = JSON.stringify(rows);
     expect(blob).not.toContain(ALICE);
     expect(blob).not.toContain(BOB);
+  });
+
+  it('buckets on transitioned_at, not rated_at, when present', async () => {
+    // Claimed 2026-06-15 for work that transitioned 2026-06-09. It must land on the
+    // transition day, AND the window filter must judge inclusion on that same day.
+    await rate({
+      rater: ALICE, team, frac: 1, pts: 2,
+      at: '2026-06-15T10:00:00.000Z',
+      transitionedAt: '2026-06-09T23:00:00.000Z',
+    });
+
+    const personal = await dao.personalClaimedByDay(
+      ALICE, CLOUD, '2026-05-15T00:00:00.000Z', '2026-07-01T00:00:00.000Z',
+    );
+    expect(personal).toEqual([
+      { day: '2026-06-01', claimed: 7 }, // legacy rows (no transition) fall back to rated_at
+      { day: '2026-06-09', claimed: 5 }, // 3 (legacy) + 2 (bucketed by its transition, not 06-15)
+    ]);
+
+    const teamRows = await dao.teamClaimedByDay(
+      CLOUD, team, '2026-05-15T00:00:00.000Z', '2026-07-01T00:00:00.000Z',
+    );
+    expect(teamRows).toEqual([
+      { day: '2026-06-01', claimed: 11 },
+      { day: '2026-06-09', claimed: 5 },
+    ]);
   });
 
   it('teamSize counts open memberships', async () => {

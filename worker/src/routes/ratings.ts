@@ -89,6 +89,8 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
     storyPointsAtRating: pending.storyPoints,
     teamIdAtRating,
     sprintId,
+    // Bucket day/week views on when the work transitioned, not when it was claimed.
+    transitionedAt: pending.transitionedAt,
     notes,
     // Snapshot title/url from the pending prompt, which is about to be deleted —
     // the personal history views render these without a live Jira lookup.
@@ -186,6 +188,7 @@ export async function myRatings(ctx: AuthedCtx): Promise<Response> {
       storyPointsAtRating: r.storyPointsAtRating,
       sprintId: r.sprintId,
       ratedAt: r.ratedAt,
+      transitionedAt: r.transitionedAt,
       title: r.title,
       url: r.url,
       notes: r.notes,

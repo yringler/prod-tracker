@@ -129,7 +129,8 @@ export function claimCeiling(storyPoints: number | null): number {
  * Monday (UTC) of the ISO week containing `iso`, as a `YYYY-MM-DD` string. Used
  * to fold day-bucketed claimed sums into weeks in one tested place (rather than
  * leaning on SQLite's `strftime('%W')`, whose week numbering is fiddly). Inputs
- * are `rated_at` values, which are stored as UTC `toISOString()`.
+ * are the day-bucketed `COALESCE(transitioned_at, rated_at)` values, stored as UTC
+ * `toISOString()`.
  */
 export function weekStartOf(iso: string): string {
   // UTCDate keeps startOfISOWeek/format in UTC regardless of the runtime's local
