@@ -40,6 +40,10 @@ head_sampling_rate = 1
 binding = "DB"
 database_name = "storypoint-tracker"
 database_id = "80bb229d-7a2c-4ca2-bedb-65bef36c410a"
+# Schema changes are versioned, idempotent files in migrations/ applied with
+# `wrangler d1 migrations apply` (see the db:migrate* npm scripts). Wrangler
+# tracks which files have run in a d1_migrations table.
+migrations_dir = "migrations"
 
 # Secrets (set via `wrangler secret put`), NOT vars:
 #   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY

@@ -7,6 +7,10 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/tracker.component').then((m) => m.TrackerComponent),
   },
   {
+    path: 'history',
+    loadComponent: () => import('./pages/history.component').then((m) => m.HistoryComponent),
+  },
+  {
     path: 'aggregates',
     loadComponent: () => import('./pages/aggregates.component').then((m) => m.AggregatesComponent),
   },

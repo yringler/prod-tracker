@@ -21,6 +21,7 @@ const PUBLIC_ROUTES = ['/privacy'];
         <nav>
           <strong>SP&nbsp;Tracker</strong>
           <a routerLink="/tracker" routerLinkActive="active">Tracker</a>
+          <a routerLink="/history" routerLinkActive="active">History</a>
           <a routerLink="/aggregates" routerLinkActive="active">Aggregates</a>
           @if (auth.isAdmin()) {
             <a routerLink="/admin" routerLinkActive="active">Admin</a>

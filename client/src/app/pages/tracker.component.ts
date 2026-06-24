@@ -1,11 +1,16 @@
 import { DatePipe } from '@angular/common';
 import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angular/core';
-import type { PendingRating } from '@shared/contracts';
+import type { MyRatingsResponse, PendingRating } from '@shared/contracts';
+import { isToday, parseISO } from 'date-fns';
 import { ApiService } from '../api.service';
 import { PushService } from '../push.service';
 
+type MyRating = MyRatingsResponse['ratings'][number];
+
 // Notification → rating UI. Each pending shows key, title, link, story points and
-// the four effort buttons. Submitting writes to OUR db only — never back to Jira.
+// the four effort buttons, plus an optional diary note. Submitting writes to OUR
+// db only — never back to Jira. Below the prompts, a "Done today" strip reflects
+// what you already claimed today so the page rewards progress, not just demands it.
 @Component({
   selector: 'sp-tracker',
   standalone: true,
@@ -50,18 +55,54 @@ import { PushService } from '../push.service';
             <wa-tag size="small" appearance="outlined">{{ p.storyPoints ?? '—' }} pts · → {{ p.toStatus }}</wa-tag>
           </div>
           <div class="muted" style="font-size:12px">moved {{ p.transitionedAt | date: 'short' }}</div>
+          <wa-textarea
+            #notes
+            label="Notes"
+            placeholder="What did you do? Anything you're proud of? ✨"
+            hint="Optional — a quick line for future-you to look back on."
+            rows="2"
+            resize="vertical"
+            style="margin-top:10px"
+            [disabled]="busy() === p.pendingId"
+          ></wa-textarea>
           <div class="row" style="margin-top:10px; gap:8px">
             <wa-button-group label="Effort">
               @for (pt of presetPoints; track pt) {
                 <wa-button appearance="outlined" [loading]="busy() === p.pendingId"
-                           [disabled]="busy() === p.pendingId" (click)="rate(p, pt)">{{ pt }}</wa-button>
+                           [disabled]="busy() === p.pendingId" (click)="rate(p, pt, notes.value)">{{ pt }}</wa-button>
               }
             </wa-button-group>
             <wa-input #custom type="number" min="0" step="1" placeholder="pts"
                       style="width:80px" [disabled]="busy() === p.pendingId"></wa-input>
             <wa-button appearance="outlined" [disabled]="busy() === p.pendingId || !custom.value"
-                       (click)="rateCustom(p, custom.value)">Rate</wa-button>
+                       (click)="rateCustom(p, custom.value, notes.value)">Rate</wa-button>
           </div>
+        </div>
+      }
+    }
+
+    @if (today().length > 0) {
+      <h3 style="margin-top:32px">Done today</h3>
+      <p class="muted" style="margin-top:-8px">Nice work — here's what you claimed points on today.</p>
+      @for (r of today(); track r.id) {
+        <div class="panel">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              @if (r.url) {
+                <a [href]="r.url" target="_blank" rel="noopener">
+                  <strong>{{ r.issueKey }}</strong>
+                  <wa-icon name="arrow-up-right-from-square"></wa-icon>
+                </a>
+              } @else {
+                <strong>{{ r.issueKey }}</strong>
+              }
+              @if (r.title) { — {{ r.title }} }
+            </div>
+            <wa-tag size="small" variant="success" appearance="outlined">{{ r.claimedPoints }} pts claimed</wa-tag>
+          </div>
+          @if (r.notes) {
+            <div class="muted" style="margin-top:6px; white-space:pre-wrap">{{ r.notes }}</div>
+          }
         </div>
       }
     }
@@ -79,6 +120,7 @@ export class TrackerComponent implements OnInit {
 
   readonly presetPoints = [0, 1, 3, 5, 8] as const;
   pending = signal<PendingRating[]>([]);
+  today = signal<MyRating[]>([]);
   loading = signal(true);
   busy = signal<string | null>(null);
   clearing = signal(false);
@@ -88,6 +130,7 @@ export class TrackerComponent implements OnInit {
 
   ngOnInit(): void {
     this.refresh();
+    this.loadToday();
     this.push.status().then((s) => this.pushOn.set(s === 'granted'));
   }
 
@@ -101,24 +144,50 @@ export class TrackerComponent implements OnInit {
     });
   }
 
-  // The chosen Fibonacci/custom value IS the claimed points — submit it directly.
-  // The backend only ever sees points.
-  rate(p: PendingRating, claimedPoints: number): void {
-    this.busy.set(p.pendingId);
-    this.api.submitRating({ pendingId: p.pendingId, issueKey: p.issueKey, claimedPoints }).subscribe({
-      next: () => {
-        this.pending.update((list) => list.filter((x) => x.pendingId !== p.pendingId));
-        this.busy.set(null);
-      },
-      error: () => this.busy.set(null),
+  // Reflection strip: today's claims, newest first. "Today" is the user's local
+  // day (isToday) — a reflective grouping, unlike the UTC trend buckets.
+  loadToday(): void {
+    this.api.myRatings().subscribe({
+      next: (r) => this.today.set(r.ratings.filter((x) => isToday(parseISO(x.ratedAt)))),
     });
   }
 
+  // The chosen Fibonacci/custom value IS the claimed points — submit it directly.
+  // The backend only ever sees points (plus the optional note).
+  rate(p: PendingRating, claimedPoints: number, notes: string): void {
+    this.busy.set(p.pendingId);
+    const trimmed = notes.trim();
+    this.api
+      .submitRating({ pendingId: p.pendingId, issueKey: p.issueKey, claimedPoints, notes: trimmed })
+      .subscribe({
+        next: (res) => {
+          this.pending.update((list) => list.filter((x) => x.pendingId !== p.pendingId));
+          // Move it straight into "Done today" so the work doesn't just vanish.
+          this.today.update((list) => [
+            {
+              id: res.id,
+              issueKey: p.issueKey,
+              claimedPoints,
+              storyPointsAtRating: res.storyPointsAtRating,
+              sprintId: res.sprintId,
+              ratedAt: new Date().toISOString(),
+              title: p.title,
+              url: p.url,
+              notes: trimmed.length > 0 ? trimmed : null,
+            },
+            ...list,
+          ]);
+          this.busy.set(null);
+        },
+        error: () => this.busy.set(null),
+      });
+  }
+
   // Custom effort: a typed point value. rate() submits it directly.
-  rateCustom(p: PendingRating, raw: string): void {
+  rateCustom(p: PendingRating, raw: string, notes: string): void {
     const points = Number(raw);
     if (!Number.isFinite(points) || points < 0) return; // ignore blank/garbage
-    this.rate(p, points);
+    this.rate(p, points, notes);
   }
 
   clearAll(): void {

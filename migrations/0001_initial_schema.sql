@@ -1,18 +1,16 @@
--- D1 schema. Applied via: wrangler d1 execute storypoint-tracker --file worker/src/db/schema.sql
+-- Baseline schema (migration 0001). Mirrors worker/src/db/schema.sql as it stood
+-- before the reflection/notes feature. Everything is IF NOT EXISTS, so applying
+-- this against the pre-existing production DB is a no-op that simply records the
+-- baseline in the d1_migrations table. Incremental changes go in later migrations.
 -- All timestamps are ISO-8601 TEXT (UTC). Money/points kept as REAL.
 
--- ONE grant per Atlassian account. A single 3LO refresh token works across every
--- accessible site (cloudId), so it is keyed by account_id only — storing it per
--- cloud would duplicate the rotating token and invalidate copies on refresh.
 CREATE TABLE IF NOT EXISTS oauth_tokens (
   account_id     TEXT PRIMARY KEY,
-  refresh_token  TEXT NOT NULL,   -- rotating: replaced on every refresh
+  refresh_token  TEXT NOT NULL,
   access_token   TEXT,
-  expires_at     TEXT             -- ISO; when access_token expires
+  expires_at     TEXT
 );
 
--- The sites (cloudIds) one account's token can reach, from accessible-resources.
--- This is the org/identity boundary: a user sees aggregates only for these clouds.
 CREATE TABLE IF NOT EXISTS user_sites (
   account_id  TEXT NOT NULL,
   cloud_id    TEXT NOT NULL,
@@ -42,17 +40,15 @@ CREATE TABLE IF NOT EXISTS teams (
   name      TEXT NOT NULL
 );
 
--- Effective-dated membership: at most one open row (effective_to IS NULL) per account.
 CREATE TABLE IF NOT EXISTS team_memberships (
   id              TEXT PRIMARY KEY,
   account_id      TEXT NOT NULL,
   team_id         TEXT NOT NULL,
   effective_from  TEXT NOT NULL,
-  effective_to    TEXT             -- nullable = currently effective
+  effective_to    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_memberships_account ON team_memberships(account_id, effective_from);
 
--- Idempotency: highest changelog id we've already processed for an issue.
 CREATE TABLE IF NOT EXISTS issue_state (
   cloud_id               TEXT NOT NULL,
   issue_key              TEXT NOT NULL,
@@ -60,33 +56,22 @@ CREATE TABLE IF NOT EXISTS issue_state (
   PRIMARY KEY (cloud_id, issue_key)
 );
 
--- A self-rating. Snapshots story points AND team id at rating time so historical
--- re-aggregation stays honest when points or team membership later change.
 CREATE TABLE IF NOT EXISTS ratings (
   id                     TEXT PRIMARY KEY,
   cloud_id               TEXT NOT NULL,
   issue_key              TEXT NOT NULL,
   rater_account_id       TEXT NOT NULL,
-  claimed_points         REAL NOT NULL,        -- absolute self-claimed pts (UI %× story points at rating)
-  story_points_at_rating REAL,                 -- nullable: ticket had no points
-  team_id_at_rating      TEXT,                 -- nullable: rater on no team then
-  sprint_id              INTEGER,              -- nullable: outside any sprint window
-  rated_at               TEXT NOT NULL,
-  -- Reflection fields (added 0002). title/url snapshot the issue so the personal
-  -- history view can render it without a live Jira lookup; notes is an optional
-  -- free-text diary the rater writes when claiming. NOTE: these columns also live
-  -- in migrations/0002_rating_notes.sql — keep both in sync.
-  notes                  TEXT,                 -- nullable: optional diary note
-  title                  TEXT,                 -- nullable: issue title at rating time
-  url                    TEXT                  -- nullable: Jira deep-link at rating time
+  claimed_points         REAL NOT NULL,
+  story_points_at_rating REAL,
+  team_id_at_rating      TEXT,
+  sprint_id              INTEGER,
+  rated_at               TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ratings_rater ON ratings(rater_account_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_agg ON ratings(cloud_id, team_id_at_rating, sprint_id);
--- One rating per (rater, issue, transition). pending_id carries the changelog id.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ratings_pending
   ON ratings(rater_account_id, issue_key, sprint_id, claimed_points);
 
--- The "real Jira" done series. Bucketed by the changelog timestamp's sprint window.
 CREATE TABLE IF NOT EXISTS done_events (
   id                     TEXT PRIMARY KEY,
   cloud_id               TEXT NOT NULL,
@@ -95,13 +80,9 @@ CREATE TABLE IF NOT EXISTS done_events (
   sprint_id              INTEGER,
   transitioned_to_done_at TEXT NOT NULL,
   changelog_id           TEXT NOT NULL,
-  -- Snapshot, like ratings: the polling assignee's account + team at done-time.
-  -- Needed to draw a per-team done line (the raw model has no team on done) and
-  -- to keep historical attribution stable when the assignee changes teams later.
   account_id             TEXT,
   team_id_at_done        TEXT
 );
--- One done_event per changelog transition (exactly-once across overlapping windows).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_done_changelog ON done_events(cloud_id, changelog_id);
 CREATE INDEX IF NOT EXISTS idx_done_agg ON done_events(cloud_id, sprint_id);
 
@@ -115,9 +96,8 @@ CREATE TABLE IF NOT EXISTS sprints (
   PRIMARY KEY (cloud_id, sprint_id)
 );
 
--- Per-tracked pending rating prompt (one per unseen transition, until rated).
 CREATE TABLE IF NOT EXISTS pending_ratings (
-  pending_id      TEXT PRIMARY KEY,  -- `${cloudId}:${issueKey}:${changelogId}`
+  pending_id      TEXT PRIMARY KEY,
   cloud_id        TEXT NOT NULL,
   account_id      TEXT NOT NULL,
   issue_key       TEXT NOT NULL,
@@ -143,8 +123,8 @@ CREATE TABLE IF NOT EXISTS config (
   cloud_id              TEXT PRIMARY KEY,
   story_points_field_id TEXT,
   sprint_field_id       TEXT,
-  done_status_names     TEXT NOT NULL DEFAULT '[]', -- JSON array
-  site_url              TEXT                        -- e.g. https://acme.atlassian.net
+  done_status_names     TEXT NOT NULL DEFAULT '[]',
+  site_url              TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -155,9 +135,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at  TEXT NOT NULL
 );
 
--- GDPR personal-data reporting cadence. One row per accountId we've reported to
--- Atlassian's report-accounts API; last_reported_at gates the >=7-day cycle
--- period so the 3-minute cron re-reports each account at most that often.
 CREATE TABLE IF NOT EXISTS pd_report_state (
   account_id        TEXT PRIMARY KEY,
   last_reported_at  TEXT NOT NULL

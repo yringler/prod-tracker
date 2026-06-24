@@ -57,6 +57,8 @@ export interface SubmitRatingRequest {
   issueKey: string;
   /** Absolute points the rater claims — the UI's chosen Fibonacci/custom point value. */
   claimedPoints: number;
+  /** Optional free-text diary note about the work. Trimmed; empty is treated as absent. */
+  notes?: string;
 }
 
 export interface SubmitRatingResponse {
@@ -75,6 +77,12 @@ export interface MyRatingsResponse {
     storyPointsAtRating: number | null;
     sprintId: number | null;
     ratedAt: string;
+    /** Snapshot of the issue title at rating time. Null for rows predating this field. */
+    title: string | null;
+    /** Snapshot of the Jira deep-link at rating time. Null for rows predating this field. */
+    url: string | null;
+    /** Optional free-text diary note the rater wrote when claiming. */
+    notes: string | null;
   }>;
 }
 

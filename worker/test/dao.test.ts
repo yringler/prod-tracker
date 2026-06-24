@@ -31,6 +31,46 @@ describe('effective-dated membership', () => {
   });
 });
 
+describe('rating reflection fields (notes/title/url)', () => {
+  it('round-trips notes, title and url through insertRating → getRatingsForOwner', async () => {
+    await dao.insertRating({
+      cloudId: CLOUD,
+      issueKey: 'X-1',
+      raterAccountId: 'u1',
+      claimedPoints: 5,
+      storyPointsAtRating: 5,
+      teamIdAtRating: null,
+      sprintId: null,
+      notes: 'Wrapped up the tricky migration — proud of this one.',
+      title: 'Migrate the thing',
+      url: 'https://acme.atlassian.net/browse/X-1',
+    });
+
+    const rows = await dao.getRatingsForOwner('u1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.notes).toBe('Wrapped up the tricky migration — proud of this one.');
+    expect(rows[0]!.title).toBe('Migrate the thing');
+    expect(rows[0]!.url).toBe('https://acme.atlassian.net/browse/X-1');
+  });
+
+  it('leaves the fields null when omitted', async () => {
+    await dao.insertRating({
+      cloudId: CLOUD,
+      issueKey: 'X-2',
+      raterAccountId: 'u1',
+      claimedPoints: 3,
+      storyPointsAtRating: null,
+      teamIdAtRating: null,
+      sprintId: null,
+    });
+
+    const rows = await dao.getRatingsForOwner('u1');
+    expect(rows[0]!.notes).toBeNull();
+    expect(rows[0]!.title).toBeNull();
+    expect(rows[0]!.url).toBeNull();
+  });
+});
+
 describe('done_event idempotency', () => {
   it('records a done transition exactly once per changelog id', async () => {
     const input = {

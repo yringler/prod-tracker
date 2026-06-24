@@ -74,7 +74,11 @@ cp .dev.vars.example .dev.vars # fill JIRA + VAPID secrets
 
 # D1
 wrangler d1 create storypoint-tracker          # paste id into wrangler.toml
-wrangler d1 execute storypoint-tracker --file worker/src/db/schema.sql
+npm run db:migrate             # apply migrations/ to the local D1
+npm run db:migrate:remote      # ...and to the remote (production) D1
+# Schema changes: add a file with `npm run db:migrate:new <name>`, edit it, then
+# re-run db:migrate. worker/src/db/schema.sql mirrors the full schema (it also
+# backs the tests) — keep it in sync with the migrations.
 
 npm run build:client           # ng build -> client/dist/client/browser
 npm run dev                    # wrangler dev (serves API + SPA)

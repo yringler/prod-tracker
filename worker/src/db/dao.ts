@@ -359,17 +359,21 @@ export class Dao {
     storyPointsAtRating: number | null;
     teamIdAtRating: string | null;
     sprintId: number | null;
+    notes?: string | null;
+    title?: string | null;
+    url?: string | null;
   }): Promise<string> {
     const id = uuid();
     await this.db
       .prepare(
         `INSERT INTO ratings
-           (id, cloud_id, issue_key, rater_account_id, claimed_points, story_points_at_rating, team_id_at_rating, sprint_id, rated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, cloud_id, issue_key, rater_account_id, claimed_points, story_points_at_rating, team_id_at_rating, sprint_id, rated_at, notes, title, url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id, input.cloudId, input.issueKey, input.raterAccountId, input.claimedPoints,
         input.storyPointsAtRating, input.teamIdAtRating, input.sprintId, now(),
+        input.notes ?? null, input.title ?? null, input.url ?? null,
       )
       .run();
     return id;
@@ -389,11 +393,14 @@ export class Dao {
       storyPointsAtRating: number | null;
       sprintId: number | null;
       ratedAt: string;
+      title: string | null;
+      url: string | null;
+      notes: string | null;
     }>
   > {
     const { results } = await this.db
       .prepare(
-        `SELECT id, issue_key, claimed_points, story_points_at_rating, sprint_id, rated_at
+        `SELECT id, issue_key, claimed_points, story_points_at_rating, sprint_id, rated_at, title, url, notes
          FROM ratings WHERE rater_account_id = ? ORDER BY rated_at DESC`,
       )
       .bind(ownerAccountId)
@@ -404,6 +411,9 @@ export class Dao {
         story_points_at_rating: number | null;
         sprint_id: number | null;
         rated_at: string;
+        title: string | null;
+        url: string | null;
+        notes: string | null;
       }>();
     return results.map((r) => ({
       id: r.id,
@@ -412,6 +422,9 @@ export class Dao {
       storyPointsAtRating: r.story_points_at_rating,
       sprintId: r.sprint_id,
       ratedAt: r.rated_at,
+      title: r.title,
+      url: r.url,
+      notes: r.notes,
     }));
   }
 

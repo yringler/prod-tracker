@@ -12,7 +12,7 @@ import { RouterLink } from "@angular/router";
     template: `
         <div class="panel wa-prose" style="margin-top:24px">
             <h1>Privacy Policy</h1>
-            <p class="muted">Last updated: 22 June 2026</p>
+            <p class="muted">Last updated: 23 June 2026</p>
 
             <p>
                 Story-Point Effort Tracker (the &ldquo;Service&rdquo;) helps
@@ -42,6 +42,14 @@ import { RouterLink } from "@angular/router";
                 <li>
                     <strong>Your effort ratings.</strong> The effort percentages
                     you submit for each ticket are stored against your account.
+                    With each rating we also store a snapshot of the issue's key
+                    and title so we can show you your own history.
+                </li>
+                <li>
+                    <strong>Your notes.</strong> When you rate a ticket you may
+                    optionally add a free-text note (a short diary of what you
+                    did). Notes are stored against your account and are shown only
+                    to you, never to other users or admins.
                 </li>
                 <li>
                     <strong>Push notification subscriptions.</strong> If you

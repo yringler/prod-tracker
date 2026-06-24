@@ -53,6 +53,16 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
   ) {
     return error(400, 'invalid rating');
   }
+  // Optional diary note: must be a string if present; trim and cap at 2000 chars,
+  // and treat empty as absent so blank textareas don't store "".
+  if (body.notes !== undefined && typeof body.notes !== 'string') {
+    return error(400, 'invalid notes');
+  }
+  const trimmedNotes = body.notes?.trim() ?? '';
+  if (trimmedNotes.length > 2000) {
+    return error(400, 'notes too long');
+  }
+  const notes = trimmedNotes.length > 0 ? trimmedNotes : null;
   const pending = await ctx.dao.getPending(body.pendingId);
   if (!pending) return error(404, 'pending not found');
   // A user can only rate THEIR OWN pending prompt.
@@ -77,6 +87,11 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
     storyPointsAtRating: pending.storyPoints,
     teamIdAtRating,
     sprintId,
+    notes,
+    // Snapshot title/url from the pending prompt, which is about to be deleted —
+    // the personal history views render these without a live Jira lookup.
+    title: pending.title,
+    url: pending.url,
   });
   await ctx.dao.deletePending(body.pendingId);
 
@@ -169,6 +184,9 @@ export async function myRatings(ctx: AuthedCtx): Promise<Response> {
       storyPointsAtRating: r.storyPointsAtRating,
       sprintId: r.sprintId,
       ratedAt: r.ratedAt,
+      title: r.title,
+      url: r.url,
+      notes: r.notes,
     })),
   };
   return json(body);
