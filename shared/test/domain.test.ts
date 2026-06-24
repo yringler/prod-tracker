@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FALLBACK_CLAIM_CEILING,
   PENDING_MAX_AGE_MS,
   changelogIdGreater,
+  claimCeiling,
   computeRatio,
   isDoneTransition,
   isStaleTransition,
@@ -82,5 +84,17 @@ describe('computeRatio', () => {
   it('is null when done is 0 (avoid divide-by-zero)', () => {
     expect(computeRatio(5, 0)).toBeNull();
     expect(computeRatio(9, 5)).toBeCloseTo(1.8);
+  });
+});
+
+describe('claimCeiling', () => {
+  it('is twice the story points for a normal estimate', () => {
+    expect(claimCeiling(5)).toBe(10);
+    expect(claimCeiling(1)).toBe(2);
+  });
+  it('falls back to a flat ceiling for missing or sub-1 estimates', () => {
+    expect(claimCeiling(null)).toBe(FALLBACK_CLAIM_CEILING);
+    expect(claimCeiling(0)).toBe(FALLBACK_CLAIM_CEILING);
+    expect(claimCeiling(0.5)).toBe(FALLBACK_CLAIM_CEILING);
   });
 });

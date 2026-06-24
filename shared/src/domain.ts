@@ -113,6 +113,19 @@ export function computeRatio(claimed: number, done: number): number | null {
 }
 
 /**
+ * Upper bound on a self-claim for a ticket: twice its story points (you can
+ * claim at most 200% of the recorded estimate). Tickets with no estimate — or
+ * an implausibly tiny one (< 1) — would otherwise cap at ~0 and be unclaimable,
+ * so they fall back to a flat ceiling. Enforced server-side in submitRating and
+ * mirrored in the tracker UI (preset disabling + the custom input's max).
+ */
+export const FALLBACK_CLAIM_CEILING = 13;
+export function claimCeiling(storyPoints: number | null): number {
+  if (storyPoints == null || storyPoints < 1) return FALLBACK_CLAIM_CEILING;
+  return 2 * storyPoints;
+}
+
+/**
  * Monday (UTC) of the ISO week containing `iso`, as a `YYYY-MM-DD` string. Used
  * to fold day-bucketed claimed sums into weeks in one tested place (rather than
  * leaning on SQLite's `strftime('%W')`, whose week numbering is fiddly). Inputs

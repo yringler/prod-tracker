@@ -11,6 +11,7 @@ import type {
   TrendPoint,
 } from '@shared/contracts';
 import {
+  claimCeiling,
   isStaleTransition,
   sprintForTimestamp,
   weekStartOf,
@@ -67,9 +68,10 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
   if (!pending) return error(404, 'pending not found');
   // A user can only rate THEIR OWN pending prompt.
   if (pending.accountId !== ctx.accountId) return error(403, 'not your pending');
-  // A claim can't exceed 2× the ticket's points — the old 200% ceiling, in
-  // absolute terms now that the percentage lives only in the UI.
-  if (body.claimedPoints > 2 * (pending.storyPoints ?? 0)) {
+  // A claim can't exceed the ceiling (2× the ticket's points, or a flat fallback
+  // for point-less/tiny tickets) — the old 200% ceiling in absolute terms now
+  // that the percentage lives only in the UI.
+  if (body.claimedPoints > claimCeiling(pending.storyPoints)) {
     return error(400, 'claim exceeds ticket points');
   }
 

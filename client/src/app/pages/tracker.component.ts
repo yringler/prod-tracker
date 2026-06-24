@@ -7,6 +7,7 @@ import {
     signal,
 } from "@angular/core";
 import type { MyRatingsResponse, PendingRating } from "@shared/contracts";
+import { claimCeiling } from "@shared/domain";
 import { isToday, parseISO } from "date-fns";
 import { ApiService } from "../api.service";
 import { PushService } from "../push.service";
@@ -295,11 +296,10 @@ export class TrackerComponent implements OnInit {
             });
     }
 
-    // The server caps a claim at 2× the ticket's story points (a points-less ticket
-    // → 0). Mirror that ceiling here so the UI never offers a value the server would
-    // reject: presets above it are disabled and the custom input gets a `max`.
+    // Mirror the server's claim ceiling so the UI never offers a value the server
+    // would reject: presets above it are disabled and the custom input gets a `max`.
     maxClaim(p: PendingRating): number {
-        return 2 * (p.storyPoints ?? 0);
+        return claimCeiling(p.storyPoints);
     }
 
     // Custom effort: a typed point value. Let the input enforce its own `max` and
