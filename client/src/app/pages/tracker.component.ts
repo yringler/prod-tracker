@@ -75,13 +75,13 @@ type MyRating = MyRatingsResponse['ratings'][number];
             <wa-button-group label="Effort">
               @for (pt of presetPoints; track pt) {
                 <wa-button appearance="outlined" [loading]="busy() === p.pendingId"
-                           [disabled]="busy() === p.pendingId" (click)="rate(p, pt, notes.value)">{{ pt }}</wa-button>
+                           [disabled]="busy() === p.pendingId || pt > maxClaim(p)" (click)="rate(p, pt, notes.value)">{{ pt }}</wa-button>
               }
             </wa-button-group>
-            <wa-input #custom type="number" min="0" step="1" placeholder="pts"
+            <wa-input #custom type="number" min="0" [attr.max]="maxClaim(p)" step="1" placeholder="pts"
                       style="width:80px" [disabled]="busy() === p.pendingId"></wa-input>
             <wa-button appearance="outlined" [disabled]="busy() === p.pendingId || !custom.value"
-                       (click)="rateCustom(p, custom.value, notes.value)">Rate</wa-button>
+                       (click)="rateCustom(p, custom, notes.value)">Rate</wa-button>
           </div>
         </div>
       }
@@ -165,8 +165,11 @@ export class TrackerComponent implements OnInit {
   // The chosen Fibonacci/custom value IS the claimed points — submit it directly.
   // The backend only ever sees points (plus the optional note).
   rate(p: PendingRating, claimedPoints: number, notes: string): void {
+    // Coerce BEFORE touching busy: if the notes element ever fails to provide a
+    // string, this must not throw after the spinner is already on (which would
+    // strand it forever with no request sent).
+    const trimmed = (notes ?? '').trim();
     this.busy.set(p.pendingId);
-    const trimmed = notes.trim();
     this.api
       .submitRating({ pendingId: p.pendingId, issueKey: p.issueKey, claimedPoints, notes: trimmed })
       .subscribe({
@@ -193,10 +196,20 @@ export class TrackerComponent implements OnInit {
       });
   }
 
-  // Custom effort: a typed point value. rate() submits it directly.
-  rateCustom(p: PendingRating, raw: string, notes: string): void {
-    const points = Number(raw);
+  // The server caps a claim at 2× the ticket's story points (a points-less ticket
+  // → 0). Mirror that ceiling here so the UI never offers a value the server would
+  // reject: presets above it are disabled and the custom input gets a `max`.
+  maxClaim(p: PendingRating): number {
+    return 2 * (p.storyPoints ?? 0);
+  }
+
+  // Custom effort: a typed point value. Let the input enforce its own `max` and
+  // surface WebAwesome's native validation message (instead of a silent server
+  // 400) when the value is too high; otherwise rate() submits it directly.
+  rateCustom(p: PendingRating, input: { value: string; reportValidity(): boolean }, notes: string): void {
+    const points = Number(input.value);
     if (!Number.isFinite(points) || points < 0) return; // ignore blank/garbage
+    if (!input.reportValidity()) return; // shows "Value must be ≤ N" on the input
     this.rate(p, points, notes);
   }
 
