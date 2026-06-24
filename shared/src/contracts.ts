@@ -55,7 +55,7 @@ export interface PendingRatingsResponse {
 export interface SubmitRatingRequest {
   pendingId: string;
   issueKey: string;
-  /** Absolute points the rater claims = UI's chosen % × story points (computed client-side). */
+  /** Absolute points the rater claims — the UI's chosen Fibonacci/custom point value. */
   claimedPoints: number;
 }
 

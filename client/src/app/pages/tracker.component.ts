@@ -52,15 +52,15 @@ import { PushService } from '../push.service';
           <div class="muted" style="font-size:12px">moved {{ p.transitionedAt | date: 'short' }}</div>
           <div class="row" style="margin-top:10px; gap:8px">
             <wa-button-group label="Effort">
-              @for (pct of presetPercents; track pct) {
+              @for (pt of presetPoints; track pt) {
                 <wa-button appearance="outlined" [loading]="busy() === p.pendingId"
-                           [disabled]="busy() === p.pendingId" (click)="rate(p, pct)">{{ pct }}%</wa-button>
+                           [disabled]="busy() === p.pendingId" (click)="rate(p, pt)">{{ pt }}</wa-button>
               }
             </wa-button-group>
-            <wa-input #custom type="number" min="0" max="200" step="1" placeholder="%"
+            <wa-input #custom type="number" min="0" step="1" placeholder="pts"
                       style="width:80px" [disabled]="busy() === p.pendingId"></wa-input>
             <wa-button appearance="outlined" [disabled]="busy() === p.pendingId || !custom.value"
-                       (click)="rateCustom(p, custom.value)">Rate %</wa-button>
+                       (click)="rateCustom(p, custom.value)">Rate</wa-button>
           </div>
         </div>
       }
@@ -77,7 +77,7 @@ export class TrackerComponent implements OnInit {
   private api = inject(ApiService);
   private push = inject(PushService);
 
-  readonly presetPercents = [0, 25, 50, 100] as const;
+  readonly presetPoints = [0, 1, 3, 5, 8] as const;
   pending = signal<PendingRating[]>([]);
   loading = signal(true);
   busy = signal<string | null>(null);
@@ -101,11 +101,10 @@ export class TrackerComponent implements OnInit {
     });
   }
 
-  // Convert the chosen percentage to absolute claimed points here — the backend
-  // only ever sees points, never a percentage.
-  rate(p: PendingRating, pct: number): void {
+  // The chosen Fibonacci/custom value IS the claimed points — submit it directly.
+  // The backend only ever sees points.
+  rate(p: PendingRating, claimedPoints: number): void {
     this.busy.set(p.pendingId);
-    const claimedPoints = ((p.storyPoints ?? 0) * pct) / 100;
     this.api.submitRating({ pendingId: p.pendingId, issueKey: p.issueKey, claimedPoints }).subscribe({
       next: () => {
         this.pending.update((list) => list.filter((x) => x.pendingId !== p.pendingId));
@@ -115,11 +114,11 @@ export class TrackerComponent implements OnInit {
     });
   }
 
-  // Custom effort: a typed percentage (0–200%). rate() turns it into points.
+  // Custom effort: a typed point value. rate() submits it directly.
   rateCustom(p: PendingRating, raw: string): void {
-    const pct = Math.round(Number(raw));
-    if (!Number.isFinite(pct) || pct < 0) return; // ignore blank/garbage
-    this.rate(p, Math.min(pct, 200)); // cap at 200%
+    const points = Number(raw);
+    if (!Number.isFinite(points) || points < 0) return; // ignore blank/garbage
+    this.rate(p, points);
   }
 
   clearAll(): void {
