@@ -14,8 +14,7 @@
         "build:client": "cd client && ng build --configuration production",
         "db:apply": "wrangler d1 execute storypoint-tracker --local --file worker/src/db/schema.sql",
         "db:apply:remote": "wrangler d1 execute storypoint-tracker --remote --file worker/src/db/schema.sql",
-        "db:reset": "wrangler d1 execute storypoint-tracker --local --command \"DROP TABLE IF EXISTS ratings;\" && npm run db:apply",
-        "db:reset:remote": "wrangler d1 execute storypoint-tracker --remote --command \"DROP TABLE IF EXISTS ratings;\" && npm run db:apply:remote"
+        "db:reset:local": "wrangler d1 execute storypoint-tracker --local --command \"DROP TABLE IF EXISTS ratings;\" && npm run db:apply"
     },
     "devDependencies": {
         "@angular-devkit/build-angular": "^21.2.0",
