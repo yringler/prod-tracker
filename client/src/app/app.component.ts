@@ -157,8 +157,8 @@ const PUBLIC_ROUTES = ["/privacy"];
                         How it works
                     </h2>
                     <div
-                        class="grid"
-                        style="grid-template-columns:repeat(3, 1fr); margin-top:16px"
+                        class="grid how-it-works"
+                        style="margin-top:16px"
                     >
                         <div class="panel">
                             <wa-icon
