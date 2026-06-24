@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   diffNewTransitions,
   extractStatusTransitions,
+  transitionOwnership,
   type JiraIssue,
 } from '../src/jira/changelog';
 
@@ -44,6 +45,117 @@ describe('extractStatusTransitions', () => {
 
   it('handles an issue with no changelog', () => {
     expect(extractStatusTransitions({ key: 'X-1', fields: {} })).toEqual([]);
+  });
+});
+
+describe('transitionOwnership — whose transition is it', () => {
+  const ME = 'me-acct';
+  const REVIEWER = 'rev-acct';
+
+  it('owns a hand-off that reassigns the ticket away (the missed case)', () => {
+    // In Progress(me) → Pending Review, same history reassigns me → reviewer;
+    // current assignee is now the reviewer.
+    const issue: JiraIssue = {
+      key: 'ABC-2',
+      fields: { status: { name: 'Pending Review' }, assignee: { accountId: REVIEWER } },
+      changelog: {
+        histories: [
+          {
+            id: '2001',
+            created: '2026-06-01T10:00:00.000Z',
+            items: [
+              { field: 'assignee', from: ME, fromString: 'Me', to: REVIEWER, toString: 'Rev' },
+              { field: 'status', from: '3', fromString: 'In Progress', to: '5', toString: 'Pending Review' },
+            ],
+          },
+        ],
+      },
+    };
+    expect(transitionOwnership(issue, ME).get('2001')).toBe(true);
+  });
+
+  it("does not own a reviewer's later move after the hand-off", () => {
+    // 2001: me → reviewer hand-off (owned). 2002: reviewer moves it further while
+    // it is theirs (not owned). Current assignee = reviewer.
+    const issue: JiraIssue = {
+      key: 'ABC-3',
+      fields: { status: { name: 'In Review' }, assignee: { accountId: REVIEWER } },
+      changelog: {
+        histories: [
+          {
+            id: '2001',
+            created: '2026-06-01T10:00:00.000Z',
+            items: [
+              { field: 'assignee', from: ME, fromString: 'Me', to: REVIEWER, toString: 'Rev' },
+              { field: 'status', from: '3', fromString: 'In Progress', to: '5', toString: 'Pending Review' },
+            ],
+          },
+          {
+            id: '2002',
+            created: '2026-06-01T11:00:00.000Z',
+            items: [{ field: 'status', from: '5', fromString: 'Pending Review', to: '6', toString: 'In Review' }],
+          },
+        ],
+      },
+    };
+    const owned = transitionOwnership(issue, ME);
+    expect(owned.get('2001')).toBe(true);
+    expect(owned.get('2002')).toBe(false);
+  });
+
+  it('owns a transition while the ticket stays mine throughout', () => {
+    const issue: JiraIssue = {
+      key: 'ABC-4',
+      fields: { status: { name: 'In Progress' }, assignee: { accountId: ME } },
+      changelog: {
+        histories: [
+          {
+            id: '3001',
+            created: '2026-06-01T10:00:00.000Z',
+            items: [{ field: 'status', from: '1', fromString: 'To Do', to: '3', toString: 'In Progress' }],
+          },
+        ],
+      },
+    };
+    expect(transitionOwnership(issue, ME).get('3001')).toBe(true);
+  });
+
+  it('owns a transition that reassigns the ticket to me', () => {
+    // X(reviewer) → Y, reassigned reviewer → me; current assignee = me.
+    const issue: JiraIssue = {
+      key: 'ABC-5',
+      fields: { status: { name: 'In Progress' }, assignee: { accountId: ME } },
+      changelog: {
+        histories: [
+          {
+            id: '4001',
+            created: '2026-06-01T10:00:00.000Z',
+            items: [
+              { field: 'assignee', from: REVIEWER, fromString: 'Rev', to: ME, toString: 'Me' },
+              { field: 'status', from: '5', fromString: 'Pending Review', to: '3', toString: 'In Progress' },
+            ],
+          },
+        ],
+      },
+    };
+    expect(transitionOwnership(issue, ME).get('4001')).toBe(true);
+  });
+
+  it('fails open (owned) when the current assignee is unknown', () => {
+    const issue: JiraIssue = {
+      key: 'ABC-6',
+      fields: { status: { name: 'In Progress' } },
+      changelog: {
+        histories: [
+          {
+            id: '5001',
+            created: '2026-06-01T10:00:00.000Z',
+            items: [{ field: 'status', from: '1', fromString: 'To Do', to: '3', toString: 'In Progress' }],
+          },
+        ],
+      },
+    };
+    expect(transitionOwnership(issue, ME).get('5001')).toBe(true);
   });
 });
 

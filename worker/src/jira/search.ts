@@ -1,4 +1,4 @@
-// JQL search (assignee = currentUser, status CHANGED) with changelog expand,
+// JQL search (assignee = or WAS currentUser, status CHANGED) with changelog expand,
 // and Agile-API sprint discovery. The query window is wider than the cron
 // interval so a missed tick doesn't drop transitions — idempotency (by
 // changelog id) makes the overlap safe.
@@ -29,7 +29,15 @@ export async function searchChangedIssues(
   opts: { storyPointsFieldId: string | null; sprintFieldId: string | null; windowMinutes?: number },
 ): Promise<JiraIssue[]> {
   const mins = opts.windowMinutes ?? POLL_WINDOW_MINUTES;
-  const jql = `assignee = currentUser() AND status CHANGED AFTER "-${mins}m"`;
+  // Also include tickets that were *recently* ours (`assignee WAS currentUser`),
+  // not just currently ours: a transition that hands the ticket off (e.g. In
+  // Progress → Pending Review reassigns to a reviewer) would otherwise drop the
+  // issue out of the result set, silently losing the transition. Per-transition
+  // ownership (see transitionOwnership) then filters out the reviewer's own
+  // later moves that this wider net drags in.
+  const jql =
+    `status CHANGED AFTER "-${mins}m" ` +
+    `AND (assignee = currentUser() OR assignee WAS currentUser() AFTER "-${mins}m")`;
   const fields = ['summary', 'status', 'assignee'];
   if (opts.storyPointsFieldId) fields.push(opts.storyPointsFieldId);
   if (opts.sprintFieldId) fields.push(opts.sprintFieldId);
@@ -65,6 +73,8 @@ export function readStoryPoints(issue: JiraIssue, fieldId: string | null): numbe
 interface AgileBoard {
   id: number;
   name: string;
+  /** 'scrum' | 'kanban' | 'simple' — only Scrum boards support the sprint endpoint. */
+  type?: string;
 }
 interface AgileSprint {
   id: number;

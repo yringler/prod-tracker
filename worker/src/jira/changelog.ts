@@ -27,6 +27,8 @@ export interface JiraIssue {
   fields: Record<string, unknown> & {
     summary?: string;
     status?: { name?: string; statusCategory?: { key?: string } };
+    /** Current assignee. `accountId` anchors the assignee reconstruction below. */
+    assignee?: { accountId?: string } | null;
   };
   changelog?: { histories?: JiraChangelogHistory[] };
 }
@@ -51,6 +53,58 @@ export function extractStatusTransitions(issue: JiraIssue): StatusTransition[] {
     });
   }
   return out;
+}
+
+/**
+ * Decide, per status transition, whether it "belongs to" a given user — i.e. the
+ * user was the assignee immediately BEFORE or immediately AFTER the transition.
+ * Returns a map keyed by changelog id; a status-bearing history with `false`
+ * means a transition the user neither performed nor received (e.g. a reviewer
+ * moving the ticket along after it was handed off).
+ *
+ * The poll's JQL is broadened to also surface tickets recently assigned to the
+ * user (`assignee WAS currentUser()`), which can drag in such reviewer-owned
+ * transitions; this gate filters them back out so we only notify on / attribute
+ * transitions that are actually the user's.
+ *
+ * Assignee state is reconstructed by anchoring on the issue's CURRENT assignee
+ * (`fields.assignee.accountId`) and walking the changelog newest→oldest,
+ * reversing each `assignee` item (`item.from` is the prior accountId). Anchoring
+ * on a known-current value keeps this correct even if Jira truncated the
+ * changelog to recent entries.
+ *
+ * Fail open: if the current assignee is unknown, every transition is reported as
+ * owned — better to over-notify than silently drop (mirrors isStaleTransition).
+ */
+export function transitionOwnership(
+  issue: JiraIssue,
+  userAccountId: string,
+): Map<string, boolean> {
+  const owned = new Map<string, boolean>();
+  const histories = [...(issue.changelog?.histories ?? [])].sort((a, b) =>
+    changelogIdGreater(a.id, b.id) ? -1 : 1,
+  );
+
+  const currentAssignee = issue.fields.assignee?.accountId;
+  if (currentAssignee === undefined) {
+    // Indeterminate anchor — fail open: treat all transitions as the user's.
+    for (const h of histories) {
+      if (h.items.some((it) => it.field === 'status')) owned.set(h.id, true);
+    }
+    return owned;
+  }
+
+  // `after` = assignee state immediately after the history currently in hand.
+  let after: string | null = currentAssignee;
+  for (const h of histories) {
+    const assigneeItem = h.items.find((it) => it.field === 'assignee');
+    const before: string | null = assigneeItem ? assigneeItem.from : after;
+    if (h.items.some((it) => it.field === 'status')) {
+      owned.set(h.id, after === userAccountId || before === userAccountId);
+    }
+    after = before; // step further back: this history's "before" is the next one's "after"
+  }
+  return owned;
 }
 
 export interface DiffResult {
