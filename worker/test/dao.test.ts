@@ -26,8 +26,12 @@ describe('effective-dated membership', () => {
     const b = await dao.createTeam(CLOUD, 'Beta');
     await dao.assignMembership('u1', a, '2026-01-01T00:00:00.000Z');
     await dao.assignMembership('u1', b, '2026-03-01T00:00:00.000Z');
-    const rows = await dao.listMemberships(a);
-    expect(rows[0]!.effectiveTo).toBe('2026-03-01T00:00:00.000Z');
+    // The prior membership was closed: Alpha's current roster is empty, and the
+    // only open membership is the new one on Beta.
+    expect(await dao.listMemberships(a)).toEqual([]);
+    expect(await dao.listMemberships(b)).toEqual([
+      { accountId: 'u1', effectiveFrom: '2026-03-01T00:00:00.000Z', effectiveTo: null },
+    ]);
   });
 });
 

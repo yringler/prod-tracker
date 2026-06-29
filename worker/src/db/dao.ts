@@ -172,13 +172,15 @@ export class Dao {
     return results.map((r) => ({ accountId: r.account_id, displayName: r.display_name }));
   }
 
+  /** Current roster of a team: open memberships only, one row per account (an
+   *  account has at most one open membership globally). */
   async listMemberships(
     teamId: string,
   ): Promise<Array<{ accountId: string; effectiveFrom: string; effectiveTo: string | null }>> {
     const { results } = await this.db
       .prepare(
         `SELECT account_id, effective_from, effective_to FROM team_memberships
-         WHERE team_id = ? ORDER BY effective_from DESC`,
+         WHERE team_id = ? AND effective_to IS NULL ORDER BY effective_from DESC`,
       )
       .bind(teamId)
       .all<{ account_id: string; effective_from: string; effective_to: string | null }>();
@@ -252,9 +254,12 @@ export class Dao {
     return results.map((r) => ({ teamId: r.team_id, cloudId: r.cloud_id, name: r.name }));
   }
 
-  /** Move an account to a team: close the open membership, open a new one. */
+  /** Move an account to a team: close the open membership, open a new one.
+   *  No-op if the account is already on `teamId` at `at`, so re-assigning to the
+   *  same team doesn't split one continuous membership into redundant rows. */
   async assignMembership(accountId: string, teamId: string, effectiveFrom?: string): Promise<void> {
     const at = effectiveFrom ?? now();
+    if ((await this.teamAt(accountId, at)) === teamId) return;
     await this.db
       .prepare(
         `UPDATE team_memberships SET effective_to = ?

@@ -16,7 +16,9 @@
         "db:migrate:remote": "wrangler d1 migrations apply storypoint-tracker --remote",
         "db:migrate:new": "wrangler d1 migrations create storypoint-tracker",
         "db:migrate:list": "wrangler d1 migrations list storypoint-tracker --local",
-        "db:reset:local": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate"
+        "db:reset:local": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate",
+        "db:cleanup:memberships": "wrangler d1 execute storypoint-tracker --file scripts/collapse-membership-splits.sql --local",
+        "db:cleanup:memberships:remote": "wrangler d1 execute storypoint-tracker --file scripts/collapse-membership-splits.sql --remote"
     },
     "devDependencies": {
         "@angular-devkit/build-angular": "^21.2.0",

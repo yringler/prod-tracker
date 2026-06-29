@@ -45,8 +45,8 @@ import { AuthService } from '../auth.service';
             </tr>
             @if (openTeam() === t.teamId) {
               <tr><td colspan="2">
-                @for (m of members(); track m.accountId + m.effectiveFrom) {
-                  <div class="muted">{{ m.displayName }} · from {{ m.effectiveFrom }}{{ m.effectiveTo ? ' to ' + m.effectiveTo : ' (current)' }}</div>
+                @for (m of members(); track m.accountId) {
+                  <div class="muted">{{ m.displayName }} · since {{ m.effectiveFrom }}</div>
                 }
               </td></tr>
             }
