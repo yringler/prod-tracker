@@ -1,6 +1,7 @@
 import { Component, computed, inject, input } from '@angular/core';
 import type { ChartConfiguration } from 'chart.js';
 import type { ClaimedTrendsResponse, TrendPoint } from '@shared/contracts';
+import { MIN_TEAM_SIZE } from '@shared/domain';
 import { ThemeService } from '../theme.service';
 import { ChartComponent } from './chart.component';
 import { dateLineOptions, themeColors } from './chart-theme';
@@ -14,6 +15,9 @@ import { dateLineOptions, themeColors } from './chart-theme';
   standalone: true,
   imports: [ChartComponent],
   template: `
+    @if (data().teamBelowMinSize) {
+      <p class="muted">Your team's trend appears once it has at least {{ minTeamSize }} members.</p>
+    }
     <div class="panel">
       <h3>Claimed points — last 30 days</h3>
       <p class="muted">Your daily claimed points vs your team's average per person per day (weekly).</p>
@@ -28,6 +32,7 @@ import { dateLineOptions, themeColors } from './chart-theme';
 })
 export class ClaimedTrendsComponent {
   data = input.required<ClaimedTrendsResponse>();
+  readonly minTeamSize = MIN_TEAM_SIZE;
   private theme = inject(ThemeService);
 
   chart30 = computed(() => {

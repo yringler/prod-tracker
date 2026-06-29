@@ -11,6 +11,7 @@ import type {
   TrendPoint,
 } from '@shared/contracts';
 import {
+  MIN_TEAM_SIZE,
   claimCeiling,
   isStaleTransition,
   sprintForTimestamp,
@@ -126,7 +127,9 @@ export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
     ? ((await ctx.dao.listTeams(ctx.cloudId)).find((t) => t.teamId === teamId)?.name ?? null)
     : null;
   const size = teamId ? await ctx.dao.teamSize(teamId) : 0;
-  const haveTeam = teamId !== null && size > 0;
+  // Team lines need the minimum-size floor: below it, the per-person average is
+  // too close to an individual's number to expose (see MIN_TEAM_SIZE).
+  const showTeam = teamId !== null && size >= MIN_TEAM_SIZE;
 
   // 30 days: personal daily (that day's sum). Team weekly is the team's average
   // per person per day (week's sum ÷ size ÷ 7) so it shares the daily personal
@@ -135,7 +138,7 @@ export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
     await ctx.dao.personalClaimedByDay(ctx.accountId, ctx.cloudId, from30, nowIso)
   ).map((r) => ({ date: r.day, value: r.claimed }));
 
-  const teamWeekly30: TrendPoint[] = haveTeam
+  const teamWeekly30: TrendPoint[] = showTeam
     ? foldWeeks(await ctx.dao.teamClaimedByDay(ctx.cloudId, teamId, from30, nowIso)).map((w) => ({
         date: w.weekStart,
         value: w.claimed / size / 7,
@@ -147,7 +150,7 @@ export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
     await ctx.dao.personalClaimedByDay(ctx.accountId, ctx.cloudId, from6mo, nowIso),
   ).map((w) => ({ date: w.weekStart, value: w.claimed / 7 }));
 
-  const teamWeekly6: TrendPoint[] = haveTeam
+  const teamWeekly6: TrendPoint[] = showTeam
     ? foldWeeks(await ctx.dao.teamClaimedByDay(ctx.cloudId, teamId, from6mo, nowIso)).map((w) => ({
         date: w.weekStart,
         value: w.claimed / size / 7,
@@ -157,6 +160,7 @@ export async function claimedTrends(ctx: AuthedCtx): Promise<Response> {
   const body: ClaimedTrendsResponse = {
     teamId,
     teamName,
+    teamBelowMinSize: teamId !== null && size < MIN_TEAM_SIZE,
     last30Days: { personalDaily, teamWeekly: teamWeekly30 },
     last6Months: { personalWeekly, teamWeekly: teamWeekly6 },
   };

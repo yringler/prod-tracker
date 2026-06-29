@@ -45,8 +45,11 @@ Enforced in `worker/src/db/dao.ts`, tested in `worker/test/privacy.test.ts`:
 - Every aggregate method (`teamSeries`) groups by team and selects **sums only**,
   accepts **no** rater filter, and returns rows with **no account column**.
 
-> Edge case (hook left for later): a single-person team makes aggregate == individual.
-> A future minimum-team-size floor would go in the aggregate query.
+- A **minimum-team-size floor** (`MIN_TEAM_SIZE` in `shared/src/domain.ts`) keeps a team's
+  aggregate from standing in for an individual's: a team with fewer than that many current
+  members returns **no aggregate data at all** (empty series, `belowMinSize: true`), since on
+  a two-person team `team_sum − your_number` reveals the other person. Enforced at the route
+  boundary in `worker/src/routes/aggregates.ts` (and the team trend line in `ratings.ts`).
 
 ## Aggregation
 

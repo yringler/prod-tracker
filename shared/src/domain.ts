@@ -113,6 +113,14 @@ export function computeRatio(claimed: number, done: number): number | null {
 }
 
 /**
+ * Minimum current team headcount for a team to exist as an aggregate. Below this,
+ * team sums/averages are too close to an individual's numbers to be private — on a
+ * two-person team the sum or average trivially reveals the other person once you
+ * subtract your own. So a sub-floor team returns no aggregate data at all.
+ */
+export const MIN_TEAM_SIZE = 4;
+
+/**
  * Upper bound on a self-claim for a ticket: twice its story points (you can
  * claim at most 200% of the recorded estimate). Tickets with no estimate — or
  * an implausibly tiny one (< 1) — would otherwise cap at ~0 and be unclaimable,

@@ -3,7 +3,11 @@
 //   2. No aggregate path exposes a per-account breakdown (sums only, no rater
 //      filter, no account column).
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { AllTeamsAggregateResponse } from '@shared/contracts';
 import { Dao } from '../src/db/dao';
+import type { Env } from '../src/env';
+import type { AuthedCtx } from '../src/http';
+import { allAggregates } from '../src/routes/aggregates';
 import { SqliteD1 } from './support/sqlite-d1';
 
 let db: SqliteD1;
@@ -102,6 +106,49 @@ describe('aggregate endpoint — team-grouped, sums only', () => {
     // Documented as a runtime check too: only cloudId + teamId + sinceIso are
     // accepted — a date window, never a rater.
     expect(dao.teamSeries.length).toBe(3);
+  });
+});
+
+describe('minimum-team-size floor — tiny teams expose no aggregate at all', () => {
+  const ctx = (): AuthedCtx => ({
+    accountId: ALICE,
+    cloudId: CLOUD,
+    sid: 'sid-1',
+    dao,
+    env: {} as Env,
+  });
+
+  it('withholds the whole series for a sub-floor team (2 members)', async () => {
+    const res = await allAggregates(ctx());
+    const body = (await res.json()) as AllTeamsAggregateResponse;
+    const team = body.teams[0]!;
+
+    expect(team.belowMinSize).toBe(true);
+    expect(team.series).toEqual([]); // no sums, ratio, coverage, or averages leave the server
+
+    // Belt-and-suspenders: neither individual's claim total appears anywhere.
+    const blob = JSON.stringify(body);
+    expect(blob).not.toContain(ALICE);
+    expect(blob).not.toContain(BOB);
+  });
+
+  it('exposes the series once the team reaches the floor', async () => {
+    // Grow the existing 2-person team to MIN_TEAM_SIZE (4) current members.
+    const teamId = (await dao.listTeams(CLOUD))[0]!.teamId;
+    await dao.upsertUser('acct-carol', 'Carol', CLOUD);
+    await dao.upsertUser('acct-dave', 'Dave', CLOUD);
+    await dao.assignMembership('acct-carol', teamId, '2026-05-01T00:00:00.000Z');
+    await dao.assignMembership('acct-dave', teamId, '2026-05-01T00:00:00.000Z');
+
+    const res = await allAggregates(ctx());
+    const body = (await res.json()) as AllTeamsAggregateResponse;
+    const team = body.teams[0]!;
+
+    // The floor lifts: teamSeries() now runs and the response is no longer
+    // suppressed. (Series contents are governed by the date window and covered
+    // by the teamSeries test above; the floor's job is just to stop withholding.)
+    expect(team.belowMinSize).toBe(false);
+    expect(Array.isArray(team.series)).toBe(true);
   });
 });
 

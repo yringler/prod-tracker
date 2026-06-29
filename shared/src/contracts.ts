@@ -99,6 +99,13 @@ export interface TeamAggregateResponse {
   teamName: string;
   cloudId: string;
   series: ClaimedVsDone[];
+  /**
+   * True when the team has fewer than `MIN_TEAM_SIZE` current members. In that
+   * case `series` is `[]` and no aggregate figures (sums, ratio, coverage,
+   * averages) are returned — a tiny team's aggregate is too close to an
+   * individual's numbers to be private.
+   */
+  belowMinSize: boolean;
 }
 
 export interface AllTeamsAggregateResponse {
@@ -120,6 +127,12 @@ export interface TrendPoint {
 export interface ClaimedTrendsResponse {
   teamId: string | null;
   teamName: string | null;
+  /**
+   * True when the caller is on a team but it has fewer than `MIN_TEAM_SIZE`
+   * members. Distinguishes "no team" from "team too small" — both leave the
+   * `teamWeekly` lines empty, but only the latter is worth explaining in the UI.
+   */
+  teamBelowMinSize: boolean;
   /** Personal = that day's claimed sum; team = avg per person per day, weekly (week's sum ÷ size ÷ 7). */
   last30Days: { personalDaily: TrendPoint[]; teamWeekly: TrendPoint[] };
   /** Both lines are per-day averages within the week (week's sum ÷ 7, team also ÷ size). */

@@ -3,12 +3,18 @@
 // shapes (TeamAggregateResponse / ClaimedVsDone) carry no account column, and
 // dao.teamSeries() takes no rater filter. This is the aggregate half of the
 // privacy invariant.
+//
+// There is also a minimum-team-size floor: a team with fewer than MIN_TEAM_SIZE
+// current members returns NO aggregate data at all (empty series, belowMinSize
+// true). On a tiny team even a sum or average is a thin disguise over individual
+// data — `team_sum − your_number` reveals the other person.
 
 import { UTCDate } from '@date-fns/utc';
 import type {
   AllTeamsAggregateResponse,
   TeamAggregateResponse,
 } from '@shared/contracts';
+import { MIN_TEAM_SIZE } from '@shared/domain';
 import { isAfter, sub } from 'date-fns';
 import { type AuthedCtx, error, json } from '../http';
 
@@ -25,6 +31,29 @@ async function aggregateSince(ctx: AuthedCtx): Promise<string> {
     : twelveMonthsAgo;
 }
 
+/**
+ * Build one team's aggregate response. A team below the minimum-size floor gets
+ * an empty series and `belowMinSize: true` — we skip the teamSeries() query
+ * entirely so no aggregate figure ever leaves the server for a tiny team.
+ */
+async function buildTeamAggregate(
+  ctx: AuthedCtx,
+  team: { teamId: string; name: string; cloudId: string },
+  since: string,
+): Promise<TeamAggregateResponse> {
+  const size = await ctx.dao.teamSize(team.teamId);
+  if (size < MIN_TEAM_SIZE) {
+    return { teamId: team.teamId, teamName: team.name, cloudId: team.cloudId, series: [], belowMinSize: true };
+  }
+  return {
+    teamId: team.teamId,
+    teamName: team.name,
+    cloudId: team.cloudId,
+    series: await ctx.dao.teamSeries(ctx.cloudId, team.teamId, since),
+    belowMinSize: false,
+  };
+}
+
 export async function allAggregates(ctx: AuthedCtx): Promise<Response> {
   // Org-wide aggregate viewing: every team in a cloud the user's token can reach.
   // (Here: the user's own cloud.)
@@ -32,12 +61,7 @@ export async function allAggregates(ctx: AuthedCtx): Promise<Response> {
   const since = await aggregateSince(ctx);
   const out: TeamAggregateResponse[] = [];
   for (const t of teams) {
-    out.push({
-      teamId: t.teamId,
-      teamName: t.name,
-      cloudId: t.cloudId,
-      series: await ctx.dao.teamSeries(ctx.cloudId, t.teamId, since),
-    });
+    out.push(await buildTeamAggregate(ctx, t, since));
   }
   const body: AllTeamsAggregateResponse = { teams: out };
   return json(body);
@@ -48,11 +72,6 @@ export async function teamAggregate(ctx: AuthedCtx, teamId: string): Promise<Res
   const team = teams.find((t) => t.teamId === teamId);
   if (!team) return error(404, 'team not found');
   const since = await aggregateSince(ctx);
-  const body: TeamAggregateResponse = {
-    teamId: team.teamId,
-    teamName: team.name,
-    cloudId: team.cloudId,
-    series: await ctx.dao.teamSeries(ctx.cloudId, teamId, since),
-  };
+  const body = await buildTeamAggregate(ctx, team, since);
   return json(body);
 }

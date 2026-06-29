@@ -1,6 +1,7 @@
 import { DecimalPipe } from '@angular/common';
 import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, inject, signal } from '@angular/core';
 import type { ClaimedTrendsResponse, TeamAggregateResponse } from '@shared/contracts';
+import { MIN_TEAM_SIZE } from '@shared/domain';
 import { ApiService } from '../api.service';
 import { ClaimedTrendsComponent } from '../ui/claimed-trends.component';
 import { LineChartComponent } from '../ui/line-chart.component';
@@ -31,6 +32,9 @@ import { LineChartComponent } from '../ui/line-chart.component';
     @for (t of teams(); track t.teamId) {
       <div class="panel">
         <h3>{{ t.teamName }}</h3>
+        @if (t.belowMinSize) {
+          <p class="muted">Team aggregates appear once the team has at least {{ minTeamSize }} members.</p>
+        } @else {
         <sp-line-chart [series]="t.series" />
         <table style="margin-top:12px">
           <thead>
@@ -49,12 +53,14 @@ import { LineChartComponent } from '../ui/line-chart.component';
             }
           </tbody>
         </table>
+        }
       </div>
     }
   `,
 })
 export class AggregatesComponent implements OnInit {
   private api = inject(ApiService);
+  readonly minTeamSize = MIN_TEAM_SIZE;
   teams = signal<TeamAggregateResponse[]>([]);
   trends = signal<ClaimedTrendsResponse | null>(null);
   loading = signal(true);
