@@ -40,10 +40,15 @@ export async function seedPending(ctx: AuthedCtx): Promise<Response> {
   const issueKey = `DEV-${100 + Math.floor(Math.random() * 900)}`;
   const title = pick(FAKE_TITLES);
   const storyPoints = pick(FAKE_POINTS);
-  // Seed a short flurry of transitions for ONE issue so the grouped card (one item
-  // listing every move, rated once) is exercisable. Oldest-first; all "now"-ish so
-  // they survive the >1-day staleness filter in getPending.
-  const flurry = ['In Progress', 'In Review', 'Done'];
+  // Seed a flurry of transitions for ONE issue so the grouped card (one item
+  // listing every move, rated once) is exercisable. Take a random contiguous slice
+  // of 1-3 moves off the full path so seeding also exercises the single-transition
+  // case (reads just like before). Oldest-first; all "now"-ish so they survive the
+  // >1-day staleness filter in getPending.
+  const path = ['In Progress', 'In Review', 'Done'];
+  const len = 1 + Math.floor(Math.random() * path.length);
+  const start = Math.floor(Math.random() * (path.length - len + 1));
+  const flurry = path.slice(start, start + len);
   const baseMs = Date.now() - flurry.length * 60_000;
   for (let i = 0; i < flurry.length; i++) {
     const changelogId = crypto.randomUUID();
