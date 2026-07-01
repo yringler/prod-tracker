@@ -337,6 +337,24 @@ export class Dao {
     return results.map(mapPending);
   }
 
+  /** All pending rows for ONE issue owned by ONE account. Account-scoped like the
+   *  other pending reads. Used by the poller to dedup pushes (one per issue). */
+  async getPendingForIssue(
+    accountId: string,
+    cloudId: string,
+    issueKey: string,
+  ): Promise<PendingRow[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT * FROM pending_ratings
+         WHERE account_id = ? AND cloud_id = ? AND issue_key = ?
+         ORDER BY transitioned_at DESC`,
+      )
+      .bind(accountId, cloudId, issueKey)
+      .all();
+    return results.map(mapPending);
+  }
+
   async getPending(pendingId: string): Promise<PendingRow | null> {
     const r = await this.db
       .prepare(`SELECT * FROM pending_ratings WHERE pending_id = ?`)
@@ -347,6 +365,21 @@ export class Dao {
 
   async deletePending(pendingId: string): Promise<void> {
     await this.db.prepare(`DELETE FROM pending_ratings WHERE pending_id = ?`).bind(pendingId).run();
+  }
+
+  /** Clear every pending row for ONE issue owned by ONE account — a composite
+   *  claim rates the whole issue, so all its bundled transitions go at once. */
+  async deletePendingForIssue(
+    accountId: string,
+    cloudId: string,
+    issueKey: string,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `DELETE FROM pending_ratings WHERE account_id = ? AND cloud_id = ? AND issue_key = ?`,
+      )
+      .bind(accountId, cloudId, issueKey)
+      .run();
   }
 
   /** Clear ALL pending prompts for ONE account. Scoped by accountId (the owner). */

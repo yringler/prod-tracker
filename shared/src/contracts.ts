@@ -36,15 +36,28 @@ export interface AuthStartResponse {
 
 // --- Pending ratings (personal) ----------------------------------------------
 
+/** One unrated status transition of an issue. A PendingRating bundles all of an
+ *  issue's transitions so a flurry of moves is rated once, not once per move. */
+export interface PendingTransition {
+  toStatus: string;
+  transitionedAt: string;
+}
+
 export interface PendingRating {
-  /** issue_state-derived: one pending per unseen status transition. */
+  /**
+   * Representative pending id — the issue's LATEST transition. Used as the row
+   * key and as the id the client submits; the server clears the whole issue's
+   * pending rows on submit, so one claim rates every bundled transition.
+   */
   pendingId: string;
   issueKey: string;
   title: string;
   /** Deep link into Jira. */
   url: string;
   storyPoints: number | null;
-  toStatus: string;
+  /** Every unrated transition for this issue, oldest-first. */
+  transitions: PendingTransition[];
+  /** The representative (latest) transition time the claim buckets on. */
   transitionedAt: string;
 }
 

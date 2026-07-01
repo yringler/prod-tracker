@@ -136,6 +136,49 @@ describe('deletePendingForOwner', () => {
   });
 });
 
+describe('pending grouped by issue', () => {
+  const pending = (
+    pendingId: string,
+    issueKey: string,
+    transitionedAt: string,
+    accountId = 'u1',
+  ) => ({
+    pendingId,
+    cloudId: CLOUD,
+    accountId,
+    issueKey,
+    title: issueKey,
+    url: `https://example.atlassian.net/browse/${issueKey}`,
+    storyPoints: 3,
+    toStatus: 'Done',
+    changelogId: pendingId,
+    transitionedAt,
+  });
+
+  it('getPendingForIssue returns one account+issue, newest-first', async () => {
+    await dao.insertPending(pending('p1', 'X-1', '2026-06-22T09:00:00.000Z'));
+    await dao.insertPending(pending('p2', 'X-1', '2026-06-22T11:00:00.000Z'));
+    await dao.insertPending(pending('p3', 'X-2', '2026-06-22T10:00:00.000Z'));
+    await dao.insertPending(pending('p4', 'X-1', '2026-06-22T12:00:00.000Z', 'u2'));
+
+    const rows = await dao.getPendingForIssue('u1', CLOUD, 'X-1');
+    expect(rows.map((r) => r.pendingId)).toEqual(['p2', 'p1']); // newest-first
+  });
+
+  it('deletePendingForIssue clears only that account+issue', async () => {
+    await dao.insertPending(pending('p1', 'X-1', '2026-06-22T09:00:00.000Z'));
+    await dao.insertPending(pending('p2', 'X-1', '2026-06-22T11:00:00.000Z'));
+    await dao.insertPending(pending('p3', 'X-2', '2026-06-22T10:00:00.000Z'));
+    await dao.insertPending(pending('p4', 'X-1', '2026-06-22T12:00:00.000Z', 'u2'));
+
+    await dao.deletePendingForIssue('u1', CLOUD, 'X-1');
+
+    expect(await dao.getPendingForIssue('u1', CLOUD, 'X-1')).toHaveLength(0);
+    expect(await dao.getPendingForIssue('u1', CLOUD, 'X-2')).toHaveLength(1); // other issue intact
+    expect(await dao.getPendingForIssue('u2', CLOUD, 'X-1')).toHaveLength(1); // other owner intact
+  });
+});
+
 describe('issue_state cursor', () => {
   it('persists and advances the last-seen changelog id', async () => {
     expect(await dao.getLastSeenChangelogId(CLOUD, 'X-1')).toBeNull();

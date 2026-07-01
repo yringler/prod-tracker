@@ -89,8 +89,8 @@ type MyRating = MyRatingsResponse["ratings"][number];
                             — {{ p.title }}
                         </div>
                         <wa-tag size="small" appearance="outlined"
-                            >{{ p.storyPoints ?? "—" }} pts · →
-                            {{ p.toStatus }}</wa-tag
+                            >{{ p.storyPoints ?? "—" }} pts ·
+                            {{ transitionList(p) }}</wa-tag
                         >
                     </div>
                     <div class="muted" style="font-size:12px">
@@ -298,6 +298,13 @@ export class TrackerComponent implements OnInit {
                 },
                 error: () => this.busy.set(null),
             });
+    }
+
+    // All of an issue's unrated transitions, oldest-first, as "→ A, B, C". A single
+    // move reads "→ In Progress" exactly as before; a flurry lists every status the
+    // ticket passed through, so one composite claim covers the whole sequence.
+    transitionList(p: PendingRating): string {
+        return "→ " + p.transitions.map((t) => t.toStatus).join(", ");
     }
 
     // Mirror the server's claim ceiling so the UI never offers a value the server

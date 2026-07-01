@@ -117,6 +117,13 @@ async function pollOneSite(
     // gates both the pending/push and the done-series attribution below.
     const owned = transitionOwnership(issue, token.accountId);
 
+    // One push per issue per flurry: notify only on the FIRST fresh transition and
+    // stay silent for the rest — including transitions that land in later polls
+    // while the issue still has an unrated fresh prompt. `toEmit` is ascending by
+    // changelog id, so the first fresh one we insert is the oldest.
+    const existingPending = await dao.getPendingForIssue(token.accountId, cloudId, issue.key);
+    let alreadyNotified = existingPending.some((p) => !isStaleTransition(p.transitionedAt));
+
     for (const t of toEmit) {
       if (owned.get(t.changelogId) === false) continue;
       // Prompt on EVERY transition (the human decides if it was worth points) —
@@ -143,12 +150,15 @@ async function pollOneSite(
           changelogId: t.changelogId,
           toStatus: t.toStatus,
         });
-        await pushPending(env, dao, token.accountId, {
-          pendingId,
-          issueKey: issue.key,
-          title,
-          toStatus: t.toStatus,
-        }, log);
+        if (!alreadyNotified) {
+          await pushPending(env, dao, token.accountId, {
+            pendingId,
+            issueKey: issue.key,
+            title,
+            toStatus: t.toStatus,
+          }, log);
+          alreadyNotified = true;
+        }
       } else {
         log.info('poll: pending skipped (stale)', {
           issueKey: issue.key,

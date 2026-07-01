@@ -5,6 +5,7 @@
 import type {
   ClaimedTrendsResponse,
   MyRatingsResponse,
+  PendingRating,
   PendingRatingsResponse,
   SubmitRatingRequest,
   SubmitRatingResponse,
@@ -25,17 +26,31 @@ export async function getPending(ctx: AuthedCtx): Promise<Response> {
   // inserted by the poller, but rows predating that change (or that aged out
   // while sitting unrated) still need filtering here.
   const fresh = rows.filter((p) => !isStaleTransition(p.transitionedAt));
-  const body: PendingRatingsResponse = {
-    items: fresh.map((p) => ({
-      pendingId: p.pendingId,
-      issueKey: p.issueKey,
-      title: p.title,
-      url: p.url,
-      storyPoints: p.storyPoints,
-      toStatus: p.toStatus,
-      transitionedAt: p.transitionedAt,
-    })),
-  };
+
+  // One JIRA = one rateable item: bundle all of an issue's unrated transitions
+  // into a single prompt so a flurry of moves is rated once. `fresh` arrives
+  // newest-first (getPendingForOwner ORDER BY transitioned_at DESC), so the first
+  // row seen per issue is the latest — the representative for id/points/title and
+  // the time the eventual claim buckets on. Transitions are listed oldest-first.
+  const byIssue = new Map<string, PendingRating>();
+  for (const p of fresh) {
+    const existing = byIssue.get(p.issueKey);
+    if (existing) {
+      existing.transitions.unshift({ toStatus: p.toStatus, transitionedAt: p.transitionedAt });
+    } else {
+      byIssue.set(p.issueKey, {
+        pendingId: p.pendingId,
+        issueKey: p.issueKey,
+        title: p.title,
+        url: p.url,
+        storyPoints: p.storyPoints,
+        transitions: [{ toStatus: p.toStatus, transitionedAt: p.transitionedAt }],
+        transitionedAt: p.transitionedAt,
+      });
+    }
+  }
+
+  const body: PendingRatingsResponse = { items: [...byIssue.values()] };
   return json(body);
 }
 
@@ -98,7 +113,9 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
     title: pending.title,
     url: pending.url,
   });
-  await ctx.dao.deletePending(body.pendingId);
+  // The claim is composite — it rates the whole issue, so clear every one of its
+  // bundled pending transitions, not just the representative the client submitted.
+  await ctx.dao.deletePendingForIssue(ctx.accountId, ctx.cloudId, pending.issueKey);
 
   const res: SubmitRatingResponse = {
     id,

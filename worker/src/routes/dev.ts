@@ -38,19 +38,27 @@ function pick<T>(xs: readonly T[]): T {
  */
 export async function seedPending(ctx: AuthedCtx): Promise<Response> {
   const issueKey = `DEV-${100 + Math.floor(Math.random() * 900)}`;
-  const changelogId = crypto.randomUUID();
-  await ctx.dao.insertPending({
-    pendingId: `dev:${issueKey}:${changelogId}`,
-    cloudId: ctx.cloudId,
-    accountId: ctx.accountId,
-    issueKey,
-    title: pick(FAKE_TITLES),
-    url: `https://example.atlassian.net/browse/${issueKey}`,
-    storyPoints: pick(FAKE_POINTS),
-    toStatus: 'Done',
-    changelogId,
-    // Must be "now" so it survives the >1-day staleness filter in getPending.
-    transitionedAt: new Date().toISOString(),
-  });
+  const title = pick(FAKE_TITLES);
+  const storyPoints = pick(FAKE_POINTS);
+  // Seed a short flurry of transitions for ONE issue so the grouped card (one item
+  // listing every move, rated once) is exercisable. Oldest-first; all "now"-ish so
+  // they survive the >1-day staleness filter in getPending.
+  const flurry = ['In Progress', 'In Review', 'Done'];
+  const baseMs = Date.now() - flurry.length * 60_000;
+  for (let i = 0; i < flurry.length; i++) {
+    const changelogId = crypto.randomUUID();
+    await ctx.dao.insertPending({
+      pendingId: `dev:${issueKey}:${changelogId}`,
+      cloudId: ctx.cloudId,
+      accountId: ctx.accountId,
+      issueKey,
+      title,
+      url: `https://example.atlassian.net/browse/${issueKey}`,
+      storyPoints,
+      toStatus: flurry[i]!,
+      changelogId,
+      transitionedAt: new Date(baseMs + i * 60_000).toISOString(),
+    });
+  }
   return json({ ok: true });
 }
