@@ -3,9 +3,11 @@
 // + push, and record done-status transitions into the done series.
 
 import { isDoneTransition, isStaleTransition, sprintForTimestamp } from '@shared/domain';
+import type { StatusTransition } from '@shared/domain';
 import type { Dao, OAuthTokenRow } from '../db/dao';
 import type { Env } from '../env';
 import { extractStatusTransitions, diffNewTransitions, transitionOwnership } from '../jira/changelog';
+import { selectPushTransition } from '../pending';
 import { JiraClient, ReauthRequiredError } from '../jira/client';
 import { discoverFields } from '../jira/fields';
 import {
@@ -110,6 +112,7 @@ async function pollOneSite(
     const title = (issue.fields.summary as string | undefined) ?? issue.key;
     const base = config.siteUrl ?? 'https://your-site.atlassian.net';
     const url = `${base}/browse/${issue.key}`;
+    const idFor = (t: StatusTransition) => `${cloudId}:${issue.key}:${t.changelogId}`;
 
     // The broadened JQL (assignee WAS currentUser) can surface transitions a
     // reviewer performed after a hand-off. Only act on transitions that are
@@ -117,76 +120,83 @@ async function pollOneSite(
     // gates both the pending/push and the done-series attribution below.
     const owned = transitionOwnership(issue, token.accountId);
 
-    // One push per issue per flurry: notify only on the FIRST fresh transition and
-    // stay silent for the rest — including transitions that land in later polls
-    // while the issue still has an unrated fresh prompt. `toEmit` is ascending by
-    // changelog id, so the first fresh one we insert is the oldest.
+    // Whether this issue already had a live (fresh) pending BEFORE this poll's
+    // inserts — the push-dedup input, read now so the rows we insert below don't
+    // count as "already live". isStaleTransition here judges the live-ness of
+    // EXISTING rows: a separate check from the read transform's freshness filter,
+    // not a duplicate of it.
     const existingPending = await dao.getPendingForIssue(token.accountId, cloudId, issue.key);
-    let alreadyNotified = existingPending.some((p) => !isStaleTransition(p.transitionedAt));
+    const hadLive = existingPending.some((p) => !isStaleTransition(p.transitionedAt));
 
+    // 1. Pending inserts. Prompt on EVERY owned transition (the human decides if
+    //    it was worth points) — but only while fresh. Day-old transitions (first
+    //    poll of a long history, or after downtime) are never surfaced; the cursor
+    //    still advances below, so they are ignored for good. Done events (step 2)
+    //    are recorded regardless of freshness.
+    const ownedFresh = toEmit.filter(
+      (t) => owned.get(t.changelogId) !== false && !isStaleTransition(t.at),
+    );
+    for (const t of ownedFresh) {
+      await dao.insertPending({
+        pendingId: idFor(t),
+        cloudId,
+        accountId: token.accountId,
+        issueKey: issue.key,
+        title,
+        url,
+        storyPoints,
+        toStatus: t.toStatus,
+        changelogId: t.changelogId,
+        transitionedAt: t.at,
+      });
+      log.info('poll: pending inserted', {
+        issueKey: issue.key,
+        changelogId: t.changelogId,
+        toStatus: t.toStatus,
+      });
+    }
+    const staleSkipped = toEmit.filter(
+      (t) => owned.get(t.changelogId) !== false && isStaleTransition(t.at),
+    ).length;
+    if (staleSkipped > 0) {
+      log.info('poll: pending skipped (stale)', { issueKey: issue.key, count: staleSkipped });
+    }
+
+    // 2. Done series. Record owned done-status transitions, bucketed by the
+    //    CHANGELOG timestamp's sprint window (not the current sprint).
+    const toCat = issue.fields.status?.statusCategory?.key as
+      | 'new'
+      | 'indeterminate'
+      | 'done'
+      | undefined;
     for (const t of toEmit) {
       if (owned.get(t.changelogId) === false) continue;
-      // Prompt on EVERY transition (the human decides if it was worth points) —
-      // but only while it's fresh. Skipping the pending+push for day-old
-      // transitions (e.g. first poll of a long history, or after downtime) means
-      // we never surface stale prompts; the cursor still advances below, so they
-      // are ignored for good. Done events below are recorded regardless.
-      if (!isStaleTransition(t.at)) {
-        const pendingId = `${cloudId}:${issue.key}:${t.changelogId}`;
-        await dao.insertPending({
-          pendingId,
-          cloudId,
-          accountId: token.accountId,
-          issueKey: issue.key,
-          title,
-          url,
-          storyPoints,
-          toStatus: t.toStatus,
-          changelogId: t.changelogId,
-          transitionedAt: t.at,
-        });
-        log.info('poll: pending inserted', {
-          issueKey: issue.key,
-          changelogId: t.changelogId,
-          toStatus: t.toStatus,
-        });
-        if (!alreadyNotified) {
-          await pushPending(env, dao, token.accountId, {
-            pendingId,
-            issueKey: issue.key,
-            title,
-            toStatus: t.toStatus,
-          }, log);
-          alreadyNotified = true;
-        }
-      } else {
-        log.info('poll: pending skipped (stale)', {
-          issueKey: issue.key,
-          changelogId: t.changelogId,
-          transitionedAt: t.at,
-        });
-      }
+      if (!isDoneTransition(t.toStatus, config.doneStatusNames, toCat)) continue;
+      const sprintId = sprintForTimestamp(t.at, sprints);
+      await dao.insertDoneEvent({
+        cloudId,
+        issueKey: issue.key,
+        storyPoints,
+        sprintId,
+        transitionedToDoneAt: t.at,
+        changelogId: t.changelogId,
+        accountId: token.accountId,
+        teamIdAtDone: await dao.teamAt(token.accountId, t.at),
+      });
+    }
 
-      // Separately, record done-status transitions into the done series,
-      // bucketed by the CHANGELOG timestamp's sprint window (not current sprint).
-      const toCat = issue.fields.status?.statusCategory?.key as
-        | 'new'
-        | 'indeterminate'
-        | 'done'
-        | undefined;
-      if (isDoneTransition(t.toStatus, config.doneStatusNames, toCat)) {
-        const sprintId = sprintForTimestamp(t.at, sprints);
-        await dao.insertDoneEvent({
-          cloudId,
-          issueKey: issue.key,
-          storyPoints,
-          sprintId,
-          transitionedToDoneAt: t.at,
-          changelogId: t.changelogId,
-          accountId: token.accountId,
-          teamIdAtDone: await dao.teamAt(token.accountId, t.at),
-        });
-      }
+    // 3. Notify, after the writes: one push per issue per flurry — the oldest
+    //    fresh-owned transition, or silence if the issue already had a live
+    //    pending (see selectPushTransition).
+    const target = selectPushTransition(ownedFresh, hadLive);
+    if (target) {
+      await pushPending(
+        env,
+        dao,
+        token.accountId,
+        { pendingId: idFor(target), issueKey: issue.key, title, toStatus: target.toStatus },
+        log,
+      );
     }
 
     if (newLastSeen) await dao.setLastSeenChangelogId(cloudId, issue.key, newLastSeen);

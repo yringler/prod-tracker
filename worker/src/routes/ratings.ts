@@ -5,53 +5,19 @@
 import type {
   ClaimedTrendsResponse,
   MyRatingsResponse,
-  PendingRating,
   PendingRatingsResponse,
   SubmitRatingRequest,
   SubmitRatingResponse,
   TrendPoint,
 } from '@shared/contracts';
-import {
-  MIN_TEAM_SIZE,
-  claimCeiling,
-  isStaleTransition,
-  sprintForTimestamp,
-  weekStartOf,
-} from '@shared/domain';
+import { MIN_TEAM_SIZE, claimCeiling, sprintForTimestamp, weekStartOf } from '@shared/domain';
 import { type AuthedCtx, error, json, readJson } from '../http';
+import { groupPendingByIssue } from '../pending';
 
 export async function getPending(ctx: AuthedCtx): Promise<Response> {
+  // "One JIRA = one rateable item" — grouping + freshness are owned by pending.ts.
   const rows = await ctx.dao.getPendingForOwner(ctx.accountId);
-  // Hide prompts whose transition is more than a day old. New ones are no longer
-  // inserted by the poller, but rows predating that change (or that aged out
-  // while sitting unrated) still need filtering here.
-  const fresh = rows.filter((p) => !isStaleTransition(p.transitionedAt));
-
-  // One JIRA = one rateable item: bundle all of an issue's unrated transitions
-  // into a single prompt so a flurry of moves is rated once. `fresh` arrives
-  // newest-first (getPendingForOwner ORDER BY transitioned_at DESC), so the first
-  // row seen per issue is the latest — the representative for id/points/title and
-  // the time the eventual claim buckets on. Transitions are listed oldest-first.
-  const byIssue = new Map<string, PendingRating>();
-  for (const p of fresh) {
-    const existing = byIssue.get(p.issueKey);
-    if (existing) {
-      existing.transitions.unshift({ toStatus: p.toStatus, transitionedAt: p.transitionedAt });
-    } else {
-      byIssue.set(p.issueKey, {
-        pendingId: p.pendingId,
-        issueKey: p.issueKey,
-        title: p.title,
-        url: p.url,
-        storyPoints: p.storyPoints,
-        transitions: [{ toStatus: p.toStatus, transitionedAt: p.transitionedAt }],
-        transitionedAt: p.transitionedAt,
-      });
-    }
-  }
-
-  const body: PendingRatingsResponse = { items: [...byIssue.values()] };
-  return json(body);
+  return json({ items: groupPendingByIssue(rows) } satisfies PendingRatingsResponse);
 }
 
 /** Dismiss ALL of the caller's pending prompts at once (no ratings recorded). */
@@ -115,6 +81,8 @@ export async function submitRating(req: Request, ctx: AuthedCtx): Promise<Respon
   });
   // The claim is composite — it rates the whole issue, so clear every one of its
   // bundled pending transitions, not just the representative the client submitted.
+  // "Issue is the unit" is owned by pending.ts (grouping + push-dedup); this is the
+  // clear-all third of that rule.
   await ctx.dao.deletePendingForIssue(ctx.accountId, ctx.cloudId, pending.issueKey);
 
   const res: SubmitRatingResponse = {
