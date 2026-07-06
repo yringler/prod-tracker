@@ -27,6 +27,7 @@ import {
 } from './routes/admin';
 import { allAggregates, teamAggregate } from './routes/aggregates';
 import { claimedTrends, clearPending, getPending, myRatings, submitRating } from './routes/ratings';
+import { updateMySettings } from './routes/settings';
 import { subscribe, vapidPublicKey } from './routes/push';
 import { isDevEnv, seedPending } from './routes/dev';
 
@@ -98,6 +99,7 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/ratings' && m === 'POST') return submitRating(req, ctx);
   if (p === '/api/me/ratings' && m === 'GET') return myRatings(ctx);
   if (p === '/api/me/claimed-trends' && m === 'GET') return claimedTrends(ctx);
+  if (p === '/api/me/settings' && m === 'PUT') return updateMySettings(req, ctx);
   if (p === '/api/push/subscribe' && m === 'POST') return subscribe(req, ctx);
 
   // Aggregates (team-grouped, sums only)

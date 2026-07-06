@@ -64,7 +64,8 @@ export async function authCallback(req: Request, env: Env, dao: Dao): Promise<Re
     accessToken: tokens.accessToken,
     expiresAt: tokens.expiresAt,
   });
-  await dao.upsertUser(accountId, displayName, defaultSite.id);
+  // 48x48 is the size the header chip renders; falls back to initials when absent.
+  await dao.upsertUser(accountId, displayName, defaultSite.id, me.avatarUrls?.['48x48'] ?? null);
 
   // Record every reachable site (the picker's options) + its deep-link base.
   for (const r of resources) {
@@ -103,6 +104,7 @@ export async function me(req: Request, env: Env, dao: Dao): Promise<Response> {
   const role = await dao.roleFor(ctx.accountId, env.BOOTSTRAP_ADMIN_ACCOUNT_ID);
   const needsReauth = await dao.getUserNeedsReauth(ctx.accountId);
   const sites = await dao.listSites(ctx.accountId);
+  const settings = await dao.getUserSettings(ctx.accountId);
   const body: MeResponse = {
     accountId: ctx.accountId,
     displayName: await dao.getDisplayName(ctx.accountId),
@@ -110,6 +112,8 @@ export async function me(req: Request, env: Env, dao: Dao): Promise<Response> {
     sites: sites.map((s) => ({ cloudId: s.cloudId, name: s.name, url: s.siteUrl })),
     role,
     needsReauth,
+    avatarUrl: settings.avatarUrl,
+    dailyGoal: settings.dailyGoal,
   };
   return json(body);
 }

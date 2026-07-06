@@ -134,6 +134,12 @@ export function claimCeiling(storyPoints: number | null): number {
 }
 
 /**
+ * Sanity cap on the self-set daily claimed-points goal. Shared so the settings
+ * form's input `max` and the server-side validation in /api/me/settings agree.
+ */
+export const MAX_DAILY_GOAL = 100;
+
+/**
  * Monday (UTC) of the ISO week containing `iso`, as a `YYYY-MM-DD` string. Used
  * to fold day-bucketed claimed sums into weeks in one tested place (rather than
  * leaning on SQLite's `strftime('%W')`, whose week numbering is fiddly). Inputs

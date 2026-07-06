@@ -64,6 +64,62 @@ export function categoryOptions(): ChartOptions<'line'> {
 }
 
 /**
+ * Time-of-day x-axis for the daily-goal progress chart. LOCAL time on purpose —
+ * "my day" is the user's local day, matching the tracker's isToday grouping —
+ * unlike the UTC trend charts. Linear axis over epoch-ms across the whole day so
+ * the un-elapsed remainder reads as runway toward the goal. The y ticks step by
+ * goal/4, making the gridlines themselves the quarter milestones, with the
+ * goal's own gridline emphasized.
+ */
+export function timeOfDayOptions(
+  goal: number,
+  dayStartMs: number,
+  dayEndMs: number,
+): ChartOptions<'line'> {
+  const base = baseOptions();
+  const c = themeColors();
+  const pts = (v: number | string): string => {
+    const n = Number(v);
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  };
+  return {
+    ...base,
+    plugins: {
+      ...base.plugins,
+      // Single series — the panel heading names it, so a one-swatch legend box
+      // would only restate it.
+      legend: { display: false },
+      tooltip: {
+        ...base.plugins?.tooltip,
+        callbacks: {
+          title: (items) => format(new Date(Number(items[0]?.parsed.x ?? 0)), 'p'),
+          label: (item) => `${pts(item.parsed.y ?? 0)} pts so far`,
+        },
+      },
+    },
+    scales: {
+      y: {
+        ...base.scales?.y,
+        suggestedMax: goal,
+        ticks: { color: c.muted, stepSize: goal / 4, callback: (v) => pts(v as number) },
+        grid: { color: (ctx) => (ctx.tick.value === goal ? c.muted : c.line) },
+      },
+      x: {
+        type: 'linear',
+        min: dayStartMs,
+        max: dayEndMs,
+        grid: { color: c.line },
+        ticks: {
+          color: c.muted,
+          maxTicksLimit: 7,
+          callback: (value) => format(new Date(Number(value)), 'HH:mm'),
+        },
+      },
+    },
+  };
+}
+
+/**
  * Date x-axis without Chart.js's TimeScale/date adapter: a linear axis over
  * epoch-ms (so a daily line and a weekly line space correctly by real time on one
  * chart) with ticks/tooltips formatted by date-fns. UTCDate keeps formatting in

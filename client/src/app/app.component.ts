@@ -15,6 +15,7 @@ import {
 import { filter } from "rxjs";
 import { AuthService } from "./auth.service";
 import { ThemeService } from "./theme.service";
+import { AvatarComponent } from "./ui/avatar.component";
 
 // Routes that render without authentication (e.g. the privacy policy must be
 // publicly reachable for Atlassian's OAuth review).
@@ -23,7 +24,7 @@ const PUBLIC_ROUTES = ["/privacy"];
 @Component({
     selector: "sp-root",
     standalone: true,
-    imports: [RouterOutlet, RouterLink, RouterLinkActive],
+    imports: [RouterOutlet, RouterLink, RouterLinkActive, AvatarComponent],
     schemas: [CUSTOM_ELEMENTS_SCHEMA],
     template: `
         @if (isPublicRoute()) {
@@ -76,7 +77,19 @@ const PUBLIC_ROUTES = ["/privacy"];
                             me.sites[0].name
                         }}</wa-tag>
                     }
-                    <span class="muted">{{ me.displayName }}</span>
+                    <a
+                        class="user-chip"
+                        routerLink="/settings"
+                        routerLinkActive="active"
+                        title="Settings"
+                    >
+                        <sp-avatar
+                            [name]="me.displayName"
+                            [url]="me.avatarUrl"
+                            [size]="24"
+                        />
+                        <span>{{ me.displayName }}</span>
+                    </a>
                     <wa-button
                         size="small"
                         appearance="plain"

@@ -18,6 +18,15 @@ export interface MeResponse {
   sites: SiteRef[];
   role: Role;
   needsReauth: boolean;
+  /** Atlassian profile picture captured at login; null when Jira provides none. */
+  avatarUrl: string | null;
+  /** Self-set daily claimed-points goal (drives the tracker's goal panel); null = not set. */
+  dailyGoal: number | null;
+}
+
+/** PUT /api/me/settings — self-scoped preferences. `dailyGoal: null` clears the goal. */
+export interface UpdateMySettingsRequest {
+  dailyGoal: number | null;
 }
 
 export interface SwitchSiteRequest {

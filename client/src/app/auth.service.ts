@@ -33,6 +33,11 @@ export class AuthService {
     });
   }
 
+  /** Patch the local snapshot after a settings save — no /api/me refetch needed. */
+  setDailyGoal(dailyGoal: number | null): void {
+    this.me.update((m) => (m ? { ...m, dailyGoal } : m));
+  }
+
   /** Switch the active Jira site. Reloads so every cloud-scoped view refetches. */
   switchSite(cloudId: string): void {
     if (cloudId === this.me()?.cloudId) return;

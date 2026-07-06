@@ -3,14 +3,21 @@ import {
     CUSTOM_ELEMENTS_SCHEMA,
     Component,
     OnInit,
+    computed,
     inject,
     signal,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import type { MyRatingsResponse, PendingRating } from "@shared/contracts";
 import { claimCeiling } from "@shared/domain";
 import { isToday, parseISO } from "date-fns";
 import { ApiService } from "../api.service";
+import { AuthService } from "../auth.service";
 import { PushService } from "../push.service";
+import {
+    type GoalEvent,
+    GoalProgressComponent,
+} from "../ui/goal-progress.component";
 
 type MyRating = MyRatingsResponse["ratings"][number];
 
@@ -21,7 +28,7 @@ type MyRating = MyRatingsResponse["ratings"][number];
 @Component({
     selector: "sp-tracker",
     standalone: true,
-    imports: [DatePipe],
+    imports: [DatePipe, RouterLink, GoalProgressComponent],
     schemas: [CUSTOM_ELEMENTS_SCHEMA],
     template: `
         <div class="row" style="justify-content:space-between">
@@ -65,6 +72,15 @@ type MyRating = MyRatingsResponse["ratings"][number];
                 }
             </div>
         </div>
+
+        @if (dailyGoal(); as g) {
+            <sp-goal-progress [goal]="g" [events]="todayEvents()" />
+        } @else {
+            <p class="muted" style="margin-top:0">
+                <a routerLink="/settings">Set a daily goal</a> to see how your
+                day is adding up.
+            </p>
+        }
 
         @if (loading()) {
             <div class="row" style="gap:8px">
@@ -211,6 +227,7 @@ type MyRating = MyRatingsResponse["ratings"][number];
 })
 export class TrackerComponent implements OnInit {
     private api = inject(ApiService);
+    private auth = inject(AuthService);
     private push = inject(PushService);
 
     readonly presetPoints = [0, 1, 3, 5, 8] as const;
@@ -227,6 +244,16 @@ export class TrackerComponent implements OnInit {
     pushMsg = signal<string>("");
     pushOn = signal(false);
     confirmOpen = signal(false);
+
+    dailyGoal = computed(() => this.auth.me()?.dailyGoal ?? null);
+    // Goal-panel inputs: today's claims, timestamped the same way the "Done
+    // today" strip groups them (transition time, falling back to claim time).
+    todayEvents = computed<GoalEvent[]>(() =>
+        this.today().map((r) => ({
+            at: r.transitionedAt ?? r.ratedAt,
+            points: r.claimedPoints,
+        })),
+    );
 
     ngOnInit(): void {
         this.refresh();

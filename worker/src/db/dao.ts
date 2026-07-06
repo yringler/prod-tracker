@@ -123,18 +123,45 @@ export class Dao {
 
   // --- Users -----------------------------------------------------------------
 
-  async upsertUser(accountId: string, displayName: string, cloudId: string): Promise<void> {
+  async upsertUser(
+    accountId: string,
+    displayName: string,
+    cloudId: string,
+    avatarUrl: string | null = null,
+  ): Promise<void> {
+    // daily_goal is deliberately NOT in the SET list — a re-login must never
+    // clobber the user's saved goal.
     await this.db
       .prepare(
-        `INSERT INTO users (account_id, display_name, cloud_id, last_seen_at, needs_reauth)
-         VALUES (?, ?, ?, ?, 0)
+        `INSERT INTO users (account_id, display_name, cloud_id, avatar_url, last_seen_at, needs_reauth)
+         VALUES (?, ?, ?, ?, ?, 0)
          ON CONFLICT(account_id) DO UPDATE SET
            display_name = excluded.display_name,
            cloud_id     = excluded.cloud_id,
+           avatar_url   = excluded.avatar_url,
            last_seen_at = excluded.last_seen_at,
            needs_reauth = 0`,
       )
-      .bind(accountId, displayName, cloudId, now())
+      .bind(accountId, displayName, cloudId, avatarUrl, now())
+      .run();
+  }
+
+  /** Self-scoped settings/profile extras for /api/me. */
+  async getUserSettings(
+    accountId: string,
+  ): Promise<{ dailyGoal: number | null; avatarUrl: string | null }> {
+    const r = await this.db
+      .prepare(`SELECT daily_goal, avatar_url FROM users WHERE account_id = ?`)
+      .bind(accountId)
+      .first<{ daily_goal: number | null; avatar_url: string | null }>();
+    return { dailyGoal: r?.daily_goal ?? null, avatarUrl: r?.avatar_url ?? null };
+  }
+
+  /** Set (or clear, with null) the account's daily claimed-points goal. */
+  async setDailyGoal(accountId: string, dailyGoal: number | null): Promise<void> {
+    await this.db
+      .prepare(`UPDATE users SET daily_goal = ? WHERE account_id = ?`)
+      .bind(dailyGoal, accountId)
       .run();
   }
 

@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS users (
   display_name  TEXT NOT NULL,
   cloud_id      TEXT NOT NULL,
   last_seen_at  TEXT,
-  needs_reauth  INTEGER NOT NULL DEFAULT 0
+  needs_reauth  INTEGER NOT NULL DEFAULT 0,
+  daily_goal    REAL, -- self-set daily claimed-points goal; NULL = not set
+  avatar_url    TEXT  -- Atlassian profile picture captured at login
 );
 
 CREATE TABLE IF NOT EXISTS admins (

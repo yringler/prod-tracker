@@ -100,6 +100,8 @@ export async function accessibleResources(accessToken: string): Promise<Accessib
 export interface JiraMe {
   accountId: string;
   displayName?: string;
+  /** Profile pictures keyed by size, e.g. '48x48'. */
+  avatarUrls?: Record<string, string>;
 }
 
 export async function fetchMyself(accessToken: string, cloudId: string): Promise<JiraMe> {

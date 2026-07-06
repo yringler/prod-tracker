@@ -11,6 +11,7 @@ import {
   CategoryScale,
   Chart,
   type ChartConfiguration,
+  Filler,
   Legend,
   LinearScale,
   LineController,
@@ -32,6 +33,7 @@ Chart.register(
   Legend,
   Tooltip,
   Title,
+  Filler, // area wash under the goal-progress line
 );
 
 // Thin reusable Chart.js wrapper: hand it a ChartConfiguration, it owns the

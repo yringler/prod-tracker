@@ -122,6 +122,18 @@ nav a {
 nav a.active {
     background: var(--panel);
 }
+/* Header avatar chip → /settings. Muted like the old name label; the avatar
+   makes it read as "your account". */
+nav .user-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+}
+nav .user-chip.active,
+nav .user-chip:hover {
+    color: var(--ink);
+}
 main {
     max-width: 920px;
     margin: 0 auto;

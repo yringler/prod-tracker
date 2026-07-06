@@ -21,6 +21,7 @@ import type {
   SubmitRatingResponse,
   SwitchSiteRequest,
   Team,
+  UpdateMySettingsRequest,
   TeamMembership,
   VapidPublicKeyResponse,
 } from '@shared/contracts';
@@ -62,6 +63,9 @@ export class ApiService {
   }
   claimedTrends(): Observable<ClaimedTrendsResponse> {
     return this.http.get<ClaimedTrendsResponse>('/api/me/claimed-trends');
+  }
+  updateSettings(body: UpdateMySettingsRequest): Observable<unknown> {
+    return this.http.put('/api/me/settings', body);
   }
 
   aggregates(): Observable<AllTeamsAggregateResponse> {
