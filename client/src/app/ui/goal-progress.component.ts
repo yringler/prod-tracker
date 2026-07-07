@@ -1,6 +1,15 @@
-import { CUSTOM_ELEMENTS_SCHEMA, Component, Input, computed, inject, signal } from '@angular/core';
+import {
+  CUSTOM_ELEMENTS_SCHEMA,
+  Component,
+  DestroyRef,
+  Input,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
 import type { ChartConfiguration, ScriptableContext } from 'chart.js';
-import { parseISO, startOfDay } from 'date-fns';
+import { workdayPace } from '@shared/domain';
+import { format, parseISO, startOfDay } from 'date-fns';
 import { ThemeService } from '../theme.service';
 import { ChartComponent } from './chart.component';
 import { themeColors, timeOfDayOptions } from './chart-theme';
@@ -53,6 +62,20 @@ export interface GoalEvent {
 
       <p class="muted" style="margin:6px 0 12px">{{ message() }}</p>
 
+      @if (paceMsg(); as pm) {
+        @if (pace().state === 'behind') {
+          <wa-callout variant="warning" size="small" style="margin-bottom:12px">
+            <wa-icon slot="icon" name="triangle-exclamation" variant="regular"></wa-icon>
+            {{ pm }}
+          </wa-callout>
+        } @else {
+          <p class="muted pace">
+            <wa-icon name="stopwatch"></wa-icon>
+            {{ pm }}
+          </p>
+        }
+      }
+
       <sp-chart [config]="config()" style="height:180px" />
     </div>
   `,
@@ -101,6 +124,13 @@ export interface GoalEvent {
         color: var(--ink);
         font-weight: 600;
       }
+      .pace {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 12px;
+        font-size: 13px;
+      }
     `,
   ],
 })
@@ -116,6 +146,14 @@ export class GoalProgressComponent {
   }
 
   private theme = inject(ThemeService);
+
+  // Re-read "now" once a minute so the pace line (and the chart's now-anchor)
+  // advances while the tab sits open, not only when a claim lands.
+  private readonly clock = signal(Date.now());
+  constructor() {
+    const id = setInterval(() => this.clock.set(Date.now()), 60_000);
+    inject(DestroyRef).onDestroy(() => clearInterval(id));
+  }
 
   total = computed(() => this.eventsSig().reduce((sum, e) => sum + e.points, 0));
   fillPct = computed(() => Math.min((this.total() / this.goalSig()) * 100, 100));
@@ -144,6 +182,26 @@ export class GoalProgressComponent {
     return `Goal smashed — ${this.fmt(total - goal)} pts past your ${this.fmt(goal)}. Huge day.`;
   });
 
+  // Time-pacing against the 9–6 workday: which quarter target to chase and by
+  // when. Wall-clock local by design — see workdayPace in shared/domain.
+  pace = computed(() => workdayPace(this.goalSig(), this.total(), new Date(this.clock())));
+
+  /** The pace line above the chart; null when the goal is already reached. */
+  paceMsg = computed(() => {
+    const p = this.pace();
+    if (p.state === 'done') return null; // message() already celebrates
+    const by = format(p.deadline, 'p');
+    if (p.state === 'behind') {
+      return p.dayOver
+        ? `The workday's over with ${this.fmt(p.pointsRemaining)} pts still open — log what you did, or start fresh tomorrow.`
+        : `Behind pace — catch up to ${this.fmt(p.targetPoints)} pts by ${by} to get back on track.`;
+    }
+    if (p.state === 'ahead') {
+      return `Ahead of pace — next up ${this.fmt(p.targetPoints)} pts by ${by}.`;
+    }
+    return `Finish ${this.fmt(p.targetPoints)} pts by ${by} to stay on pace.`;
+  });
+
   // Cumulative step line across the local day: starts at midnight/0, steps up at
   // each claim, holds at the current total until "now". The x-axis runs to the
   // end of the day so what's left reads as runway toward the goal gridline.
@@ -153,9 +211,9 @@ export class GoalProgressComponent {
     const goal = this.goalSig();
     const events = [...this.eventsSig()].sort((a, b) => a.at.localeCompare(b.at));
 
-    const dayStart = startOfDay(new Date()).getTime();
+    const now = this.clock();
+    const dayStart = startOfDay(new Date(now)).getTime();
     const dayEnd = dayStart + 24 * 60 * 60 * 1000;
-    const now = Date.now();
     let cum = 0;
     const data = [
       { x: dayStart, y: 0 },

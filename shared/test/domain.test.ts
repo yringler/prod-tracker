@@ -9,6 +9,7 @@ import {
   isStaleTransition,
   sprintForTimestamp,
   weekStartOf,
+  workdayPace,
 } from '@shared/domain';
 
 describe('weekStartOf', () => {
@@ -84,6 +85,58 @@ describe('computeRatio', () => {
   it('is null when done is 0 (avoid divide-by-zero)', () => {
     expect(computeRatio(5, 0)).toBeNull();
     expect(computeRatio(9, 5)).toBeCloseTo(1.8);
+  });
+});
+
+describe('workdayPace', () => {
+  // Wall-clock local dates on purpose — the workday is the user's local 9–6,
+  // so these tests are timezone-independent by construction.
+  const at = (h: number, m = 0) => new Date(2026, 5, 22, h, m);
+  const goal = 16; // quarter targets: 4 / 8 / 12 / 16
+
+  it('starts the day pointed at the first quarter target', () => {
+    const p = workdayPace(goal, 0, at(9, 30));
+    expect(p).toMatchObject({ state: 'onTrack', quarter: 1, targetPoints: 4, pointsRemaining: 4 });
+    expect(p.deadline).toEqual(at(11, 15));
+  });
+
+  it('treats pre-workday time like the start of the day', () => {
+    const p = workdayPace(goal, 0, at(7));
+    expect(p.state).toBe('onTrack');
+    expect(p.deadline).toEqual(at(11, 15));
+  });
+
+  it('advances to the next quarter as soon as the current target is met', () => {
+    const p = workdayPace(goal, 5, at(10));
+    expect(p).toMatchObject({ state: 'ahead', quarter: 2, targetPoints: 8, pointsRemaining: 3 });
+    expect(p.deadline).toEqual(at(13, 30));
+  });
+
+  it('is on track when past a deadline whose target was met', () => {
+    // 12:00 is in Q2; 5 ≥ the Q1 target of 4, chasing 8 by 13:30.
+    expect(workdayPace(goal, 5, at(12))).toMatchObject({ state: 'onTrack', quarter: 2, targetPoints: 8 });
+  });
+
+  it('flags behind and points at the current quarter deadline as catch-up', () => {
+    // 14:00 is in Q3 and the Q2 target (8) was missed → catch up to 12 by 15:45.
+    const p = workdayPace(goal, 5, at(14));
+    expect(p).toMatchObject({ state: 'behind', quarter: 3, targetPoints: 12, pointsRemaining: 7 });
+    expect(p.deadline).toEqual(at(15, 45));
+  });
+
+  it('is done at (or past) the goal regardless of time', () => {
+    expect(workdayPace(goal, 16, at(10))).toMatchObject({ state: 'done', pointsRemaining: 0 });
+    expect(workdayPace(goal, 20, at(19))).toMatchObject({ state: 'done', dayOver: true });
+  });
+
+  it('stays behind on quarter 4 once the workday is over', () => {
+    const p = workdayPace(goal, 10, at(18, 30));
+    expect(p).toMatchObject({ state: 'behind', quarter: 4, targetPoints: 16, dayOver: true });
+    expect(p.deadline).toEqual(at(18));
+  });
+
+  it('handles goals that do not divide by 4', () => {
+    expect(workdayPace(10, 0, at(9)).targetPoints).toBe(2.5);
   });
 });
 

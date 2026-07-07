@@ -1,7 +1,7 @@
 // Domain primitives shared by client + worker. The only dependency is date-fns
 // (with @date-fns/utc) for date math — see CLAUDE.md.
 import { UTCDate } from '@date-fns/utc';
-import { format, startOfISOWeek } from 'date-fns';
+import { addHours, addMinutes, format, startOfDay, startOfISOWeek } from 'date-fns';
 
 export type Role = 'user' | 'admin';
 
@@ -138,6 +138,87 @@ export function claimCeiling(storyPoints: number | null): number {
  * form's input `max` and the server-side validation in /api/me/settings agree.
  */
 export const MAX_DAILY_GOAL = 100;
+
+/**
+ * The workday the daily goal is paced against, in wall-clock hours. Quartering
+ * 9→18 gives quarter deadlines of 11:15, 13:30, 15:45 and 18:00.
+ */
+export interface Workday {
+  startHour: number;
+  endHour: number;
+}
+export const DEFAULT_WORKDAY: Workday = { startHour: 9, endHour: 18 };
+
+export type PaceState = 'ahead' | 'onTrack' | 'behind' | 'done';
+
+export interface WorkdayPace {
+  state: PaceState;
+  /** Which quarter's cumulative target is in play (1–4). */
+  quarter: 1 | 2 | 3 | 4;
+  /** Cumulative points to have claimed by `deadline` (quarter/4 of the goal). */
+  targetPoints: number;
+  /** Wall-clock end of that quarter. */
+  deadline: Date;
+  /** Points still needed to hit `targetPoints`; 0 once met. */
+  pointsRemaining: number;
+  /** True once the whole workday has elapsed. */
+  dayOver: boolean;
+}
+
+/**
+ * Pace the daily goal across the workday: by the end of its i-th quarter you
+ * should have claimed i/4 of the goal. The reported target is the first
+ * cumulative quarter-target not yet met — hitting one mid-quarter advances the
+ * display to the next ('ahead') — but never earlier than the quarter the clock
+ * is in, so falling behind points at the *current* deadline as the catch-up
+ * target ('behind'), not one that already passed.
+ *
+ * Deliberately wall-clock, not UTC (the exception to the UTCDate rule): the
+ * workday is the user's local 9AM–6PM, so `now` is a plain local Date and
+ * `deadline` is local too. Assumes goal > 0.
+ */
+export function workdayPace(
+  goal: number,
+  claimedPoints: number,
+  now: Date,
+  workday: Workday = DEFAULT_WORKDAY,
+): WorkdayPace {
+  const quarterMinutes = ((workday.endHour - workday.startHour) * 60) / 4;
+  const workStart = addHours(startOfDay(now), workday.startHour);
+  const deadlineOf = (q: number) => addMinutes(workStart, q * quarterMinutes);
+
+  // How many quarter deadlines have already passed (0 before 11:15, 4 after 18:00).
+  let elapsed = 0;
+  while (elapsed < 4 && now.getTime() >= deadlineOf(elapsed + 1).getTime()) elapsed++;
+  const dayOver = elapsed === 4;
+
+  if (claimedPoints >= goal) {
+    return {
+      state: 'done',
+      quarter: 4,
+      targetPoints: goal,
+      deadline: deadlineOf(4),
+      pointsRemaining: 0,
+      dayOver,
+    };
+  }
+
+  // Smallest quarter whose cumulative target is unmet; exists since claimed < goal.
+  let firstUnmet = 1;
+  while (firstUnmet < 4 && claimedPoints >= (goal * firstUnmet) / 4) firstUnmet++;
+
+  const behind = firstUnmet <= elapsed;
+  const quarter = Math.min(Math.max(firstUnmet, elapsed + 1), 4) as 1 | 2 | 3 | 4;
+  const targetPoints = (goal * quarter) / 4;
+  return {
+    state: behind ? 'behind' : firstUnmet > elapsed + 1 ? 'ahead' : 'onTrack',
+    quarter,
+    targetPoints,
+    deadline: deadlineOf(quarter),
+    pointsRemaining: Math.max(0, targetPoints - claimedPoints),
+    dayOver,
+  };
+}
 
 /**
  * Monday (UTC) of the ISO week containing `iso`, as a `YYYY-MM-DD` string. Used
