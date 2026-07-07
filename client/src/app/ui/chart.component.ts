@@ -56,8 +56,18 @@ export class ChartComponent implements AfterViewInit, OnChanges, OnDestroy {
 
   ngOnChanges(): void {
     // First change fires before the view is ready; ngAfterViewInit does the
-    // initial render. Later config swaps (e.g. ratio toggle) re-render here.
-    if (this.chart) this.render();
+    // initial render. Later config swaps (e.g. ratio toggle, the goal panel's
+    // minutely clock) update the live chart in place: destroy+recreate would
+    // replay the from-zero entry animation on every swap, so instead only the
+    // delta animates. A type change still needs a full rebuild.
+    if (!this.chart) return;
+    if ((this.chart.config as ChartConfiguration).type !== this.config.type) {
+      this.render();
+      return;
+    }
+    this.chart.data = this.config.data;
+    if (this.config.options) this.chart.options = this.config.options;
+    this.chart.update();
   }
 
   private render(): void {
