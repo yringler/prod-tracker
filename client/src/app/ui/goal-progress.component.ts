@@ -8,8 +8,8 @@ import {
   signal,
 } from '@angular/core';
 import type { ChartConfiguration, ScriptableContext } from 'chart.js';
-import { workdayPace } from '@shared/domain';
-import { format, parseISO, startOfDay } from 'date-fns';
+import { DEFAULT_WORKDAY, workdayPace } from '@shared/domain';
+import { addHours, format, parseISO, startOfDay } from 'date-fns';
 import { ThemeService } from '../theme.service';
 import { ChartComponent } from './chart.component';
 import { themeColors, timeOfDayOptions } from './chart-theme';
@@ -202,9 +202,11 @@ export class GoalProgressComponent {
     return `Finish ${this.fmt(p.targetPoints)} pts by ${by} to stay on pace.`;
   });
 
-  // Cumulative step line across the local day: starts at midnight/0, steps up at
-  // each claim, holds at the current total until "now". The x-axis runs to the
-  // end of the day so what's left reads as runway toward the goal gridline.
+  // Cumulative step line across the 9–6 workday: starts at 9AM/0, steps up at
+  // each claim, holds at the current total until "now". Claims outside the
+  // workday still count — they're clamped onto the axis edge, so pre-9AM work
+  // credits the first quarter and post-6PM work the last. The x-axis runs to
+  // 6PM so what's left reads as runway toward the goal gridline.
   config = computed<ChartConfiguration<'line'>>(() => {
     this.theme.theme(); // re-read CSS-var colors when the theme switches
     const c = themeColors();
@@ -212,13 +214,15 @@ export class GoalProgressComponent {
     const events = [...this.eventsSig()].sort((a, b) => a.at.localeCompare(b.at));
 
     const now = this.clock();
-    const dayStart = startOfDay(new Date(now)).getTime();
-    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+    const dayStart = startOfDay(new Date(now));
+    const workStart = addHours(dayStart, DEFAULT_WORKDAY.startHour).getTime();
+    const workEnd = addHours(dayStart, DEFAULT_WORKDAY.endHour).getTime();
+    const clamp = (t: number) => Math.min(Math.max(t, workStart), workEnd);
     let cum = 0;
     const data = [
-      { x: dayStart, y: 0 },
-      ...events.map((e) => ({ x: parseISO(e.at).getTime(), y: (cum += e.points) })),
-      { x: now, y: cum },
+      { x: workStart, y: 0 },
+      ...events.map((e) => ({ x: clamp(parseISO(e.at).getTime()), y: (cum += e.points) })),
+      { x: clamp(now), y: cum },
     ];
     const lastIdx = data.length - 1;
 
@@ -244,7 +248,7 @@ export class GoalProgressComponent {
           },
         ],
       },
-      options: timeOfDayOptions(goal, dayStart, dayEnd),
+      options: timeOfDayOptions(goal, workStart, workEnd),
     };
   });
 
