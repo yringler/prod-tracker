@@ -112,7 +112,11 @@ export function timeOfDayOptions(
         ticks: {
           color: c.muted,
           maxTicksLimit: 7,
-          callback: (value) => format(new Date(Number(value)), 'HH:mm'),
+          // 12-hour clock; drop ":00" when the tick lands on a whole hour.
+          callback: (value) => {
+            const d = new Date(Number(value));
+            return format(d, d.getMinutes() === 0 ? 'h a' : 'h:mm a');
+          },
         },
       },
     },
