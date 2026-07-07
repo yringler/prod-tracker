@@ -82,8 +82,14 @@
 * {
     box-sizing: border-box;
 }
+/* <wa-page> needs html/body fully zeroed or it shows unexpected gaps. */
+html,
 body {
+    min-height: 100%;
+    padding: 0;
     margin: 0;
+}
+body {
     background: var(--bg);
     color: var(--ink);
     font:
@@ -104,12 +110,18 @@ a {
     padding: 16px;
     margin: 12px 0;
 }
-nav {
+/* Header row inside <wa-page>. Scoped to the header slot because the mobile
+   drawer nav (.drawer-nav) is also a <nav>; flex-wrap/background override
+   wa-page's ::slotted defaults (wrap, --panel), and the background must be
+   opaque now that the header is sticky. */
+nav[slot='header'] {
     display: flex;
+    flex-wrap: nowrap;
     gap: 8px;
     align-items: center;
     padding: 12px 16px;
     border-bottom: 1px solid var(--line);
+    background: var(--bg);
 }
 nav .spacer {
     flex: 1;
@@ -133,6 +145,38 @@ nav .user-chip {
 nav .user-chip.active,
 nav .user-chip:hover {
     color: var(--ink);
+}
+/* wa-page layout: the header/main regions get their spacing from our own nav
+   and main rules, not wa-page's slot padding. */
+wa-page::part(header) {
+    padding: 0;
+}
+wa-page::part(main-content) {
+    padding: 0;
+}
+/* Desktop: links live inline in the header; keep the navigation slot from
+   rendering as a left sidebar (its empty menu column collapses to 0 width). */
+wa-page[view='desktop'] .drawer-nav {
+    display: none;
+}
+/* Mobile: the burger + drawer take over the links; compact the right side. */
+wa-page[view='mobile'] .nav-links {
+    display: none;
+}
+wa-page[view='mobile'] nav .user-chip span {
+    display: none; /* avatar stays */
+}
+wa-page[view='mobile'] nav .signout-label {
+    display: none; /* icon stays */
+}
+wa-page[view='mobile'] nav wa-tag {
+    display: none; /* single-site name */
+}
+/* Drawer nav links: wa-page's ::slotted default already gives column layout,
+   gap and padding. The drawer surface is --panel, so the header's active
+   background would be invisible here. */
+.drawer-nav a.active {
+    background: var(--surface-lowered);
 }
 main {
     max-width: 920px;

@@ -23,7 +23,7 @@ Config / bootstrap:
 - `src/main.ts` — bootstrap; imports `./webawesome` once for side-effect registration.
 - `src/app/app.config.ts` — `ApplicationConfig`: `provideRouter`, `provideHttpClient(withFetch())`, zone change detection with event coalescing.
 - `src/app/app.routes.ts` — routes, all **lazy** via `loadComponent`. `''`→`tracker`; `**`→`tracker`.
-- `src/app/app.component.ts` — the shell: `<nav>` (links, dark-mode `wa-switch`, site picker, avatar chip → settings, sign out), auth gating, and the logged-out marketing/login landing. `/privacy` renders without auth (`PUBLIC_ROUTES`).
+- `src/app/app.component.ts` — the shell: a `<wa-page>` layout (breakpoint 920px). Its `header` slot holds the `<nav>` row (links, dark-mode `wa-switch`, site picker, avatar chip → settings, sign out); the `navigation` slot holds the same links (via a shared `ng-template`) for the mobile burger drawer, hidden on desktop in `styles.css`. Auth gating and the logged-out marketing/login landing live here too. `/privacy` renders without auth (`PUBLIC_ROUTES`).
 
 Pages — `src/app/pages/` (each a standalone route component):
 - `tracker.component.ts` — the core "rate your effort" flow: pending prompts, effort buttons (`claimCeiling`-gated), diary notes, "Done today" strip, daily-goal panel, push enable, dev "add fake item" (localhost only).
