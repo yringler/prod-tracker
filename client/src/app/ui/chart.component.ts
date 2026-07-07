@@ -65,7 +65,26 @@ export class ChartComponent implements AfterViewInit, OnChanges, OnDestroy {
       this.render();
       return;
     }
-    this.chart.data = this.config.data;
+    const live = this.chart.data;
+    live.labels = this.config.data.labels ?? [];
+    // Chart.js matches dataset metadata by object identity (getDatasetMeta's
+    // `_dataset === dataset`), so a rebuilt config's fresh dataset objects would
+    // orphan the meta and replay the entry animation. Merge into the existing
+    // dataset objects (matched by index — every chart here has a fixed series
+    // list) so references survive and only the data delta animates.
+    const incoming = this.config.data.datasets;
+    incoming.forEach((ds, i) => {
+      const existing = live.datasets[i] as Record<string, unknown> | undefined;
+      if (existing) {
+        for (const key of Object.keys(existing)) {
+          if (!(key in ds)) delete existing[key];
+        }
+        Object.assign(existing, ds);
+      } else {
+        live.datasets[i] = ds;
+      }
+    });
+    live.datasets.length = incoming.length;
     if (this.config.options) this.chart.options = this.config.options;
     this.chart.update();
   }
