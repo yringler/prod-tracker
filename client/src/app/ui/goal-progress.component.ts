@@ -65,7 +65,7 @@ export interface GoalEvent {
       @if (paceMsg(); as pm) {
         @if (pace().state === 'behind') {
           <wa-callout variant="warning" size="small" style="margin-bottom:12px">
-            <wa-icon slot="icon" name="triangle-exclamation" variant="regular"></wa-icon>
+            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
             {{ pm }}
           </wa-callout>
         } @else {
