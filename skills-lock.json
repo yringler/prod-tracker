@@ -13,6 +13,11 @@
       "skillPath": "angular-new-app/SKILL.md",
       "computedHash": "49bd84ab08bd3498c52f476bed48fbb942dc6dbc0925607e84549adbed34bccf"
     },
+    "stripe-best-practices": {
+      "source": "docs.stripe.com",
+      "sourceType": "well-known",
+      "computedHash": "7ff3b3441a1b1396584f85c3c7304ca4c28f2af5622a1932a046c86739063fd3"
+    },
     "webawesome": {
       "source": "/home/yehuda/prod-tracker/node_modules/@awesome.me/webawesome/dist/skills/webawesome",
       "sourceType": "local",
