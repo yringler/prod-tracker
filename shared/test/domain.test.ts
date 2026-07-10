@@ -7,7 +7,9 @@ import {
   computeRatio,
   isDoneTransition,
   isStaleTransition,
+  isTrackerToday,
   sprintForTimestamp,
+  trackerDayKey,
   weekStartOf,
   workdayPace,
 } from '@shared/domain';
@@ -28,6 +30,33 @@ describe('weekStartOf', () => {
   it('crosses the year boundary correctly', () => {
     // 2027-01-01 is a Friday → its week’s Monday is 2026-12-28.
     expect(weekStartOf('2027-01-01T00:00:00.000Z')).toBe('2026-12-28');
+  });
+});
+
+describe('trackerDayKey / isTrackerToday', () => {
+  // Wall-clock local by design — build local Dates so the assertions hold in any
+  // runtime timezone. Tue 2026-06-02; the day boundary is 3AM local.
+  it('folds pre-3AM work into the previous day', () => {
+    expect(trackerDayKey(new Date(2026, 5, 2, 2, 0))).toBe('2026-06-01'); // 2:00 → Mon
+    expect(trackerDayKey(new Date(2026, 5, 2, 2, 59))).toBe('2026-06-01'); // 2:59 → Mon
+  });
+
+  it('starts the new day at exactly 3AM', () => {
+    expect(trackerDayKey(new Date(2026, 5, 2, 3, 0))).toBe('2026-06-02'); // 3:00 → Tue
+  });
+
+  it('leaves daytime work on its own calendar day', () => {
+    expect(trackerDayKey(new Date(2026, 5, 2, 13, 30))).toBe('2026-06-02');
+    expect(trackerDayKey(new Date(2026, 5, 2, 23, 59))).toBe('2026-06-02');
+  });
+
+  it('isTrackerToday straddles the 3AM boundary against now', () => {
+    const now = new Date(2026, 5, 2, 10, 0); // Tue 10:00
+    expect(isTrackerToday(new Date(2026, 5, 2, 2, 0), now)).toBe(false); // 2AM Tue → Mon
+    expect(isTrackerToday(new Date(2026, 5, 2, 3, 0), now)).toBe(true); // 3AM Tue → Tue
+    // 1AM Wed folds back to Tue, so it still counts as "today" at Tue 10:00.
+    expect(isTrackerToday(new Date(2026, 5, 3, 1, 0), now)).toBe(true);
+    expect(isTrackerToday(new Date(2026, 5, 3, 3, 0), now)).toBe(false); // 3AM Wed → Wed
   });
 });
 

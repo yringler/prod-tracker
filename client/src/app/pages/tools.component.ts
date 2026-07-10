@@ -1,6 +1,7 @@
 import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, computed, inject, signal } from '@angular/core';
 import type { MyRatingsResponse } from '@shared/contracts';
-import { format, isToday, parseISO } from 'date-fns';
+import { isTrackerToday, trackerDayKey, trackerDayStart } from '@shared/domain';
+import { format, parseISO } from 'date-fns';
 import { ApiService } from '../api.service';
 
 type MyRating = MyRatingsResponse['ratings'][number];
@@ -91,17 +92,22 @@ export class ToolsComponent implements OnInit {
   ratings = signal<MyRating[]>([]);
   copied = signal(false);
 
-  // The most recent local calendar day with reported work, bucketed like
-  // History: the day the work transitioned, falling back to ratedAt.
+  // The most recent tracker day with reported work, bucketed like History: the
+  // day the work transitioned, falling back to ratedAt. The tracker day starts at
+  // 3AM local (see trackerDayKey), so a 2AM claim folds into the prior day.
   standupDay = computed<StandupDay | null>(() => {
+    const now = new Date();
     const byDay = new Map<string, StandupDay>();
     let latestKey: string | null = null;
     for (const r of this.ratings()) {
       const d = parseISO(r.transitionedAt ?? r.ratedAt);
-      const key = format(d, 'yyyy-MM-dd');
+      const key = trackerDayKey(d);
       let g = byDay.get(key);
       if (!g) {
-        g = { label: isToday(d) ? 'today' : format(d, 'EEEE, MMM d'), ratings: [] };
+        g = {
+          label: isTrackerToday(d, now) ? 'today' : format(trackerDayStart(d), 'EEEE, MMM d'),
+          ratings: [],
+        };
         byDay.set(key, g);
       }
       g.ratings.push(r);

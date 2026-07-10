@@ -1,7 +1,7 @@
 // Domain primitives shared by client + worker. The only dependency is date-fns
 // (with @date-fns/utc) for date math — see CLAUDE.md.
 import { UTCDate } from '@date-fns/utc';
-import { addHours, addMinutes, format, startOfDay, startOfISOWeek } from 'date-fns';
+import { addHours, addMinutes, format, startOfDay, startOfISOWeek, subHours } from 'date-fns';
 
 export type Role = 'user' | 'admin';
 
@@ -231,4 +231,36 @@ export function weekStartOf(iso: string): string {
   // UTCDate keeps startOfISOWeek/format in UTC regardless of the runtime's local
   // timezone; startOfISOWeek anchors to Monday.
   return format(startOfISOWeek(new UTCDate(iso)), 'yyyy-MM-dd');
+}
+
+/**
+ * The personal reflective "day" starts at 3AM local, not midnight: late-night
+ * work (a 2AM claim) belongs to the previous day's effort — nobody wakes at 2AM
+ * to start a new workday. Used only by the client's local "today/yesterday" and
+ * per-day groupings (Tools standup, "Done today", History); the UTC trend buckets
+ * are a separate axis and don't use this.
+ */
+export const DAY_BOUNDARY_HOUR = 3;
+
+/**
+ * `yyyy-MM-dd` of the tracker day a local `Date` falls in, with the day starting
+ * at DAY_BOUNDARY_HOUR: 2AM Tue → Mon, 3AM Tue → Tue. Deliberately wall-clock
+ * local (the same documented exception to the UTCDate rule as `workdayPace`) —
+ * "today" here is the user's local reflective day, not a UTC bucket.
+ */
+export function trackerDayKey(d: Date): string {
+  return format(subHours(d, DAY_BOUNDARY_HOUR), 'yyyy-MM-dd');
+}
+
+/**
+ * The wall-clock instant `d`'s tracker day began (local DAY_BOUNDARY_HOUR:00).
+ * Handy for labelling/sorting a day group by its own date.
+ */
+export function trackerDayStart(d: Date): Date {
+  return addHours(startOfDay(subHours(d, DAY_BOUNDARY_HOUR)), DAY_BOUNDARY_HOUR);
+}
+
+/** True when `d` falls in the same tracker day as `now` (both local). */
+export function isTrackerToday(d: Date, now: Date): boolean {
+  return trackerDayKey(d) === trackerDayKey(now);
 }

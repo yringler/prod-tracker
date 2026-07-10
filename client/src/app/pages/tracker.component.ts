@@ -9,8 +9,8 @@ import {
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import type { MyRatingsResponse, PendingRating } from "@shared/contracts";
-import { claimCeiling } from "@shared/domain";
-import { isToday, parseISO } from "date-fns";
+import { claimCeiling, isTrackerToday } from "@shared/domain";
+import { parseISO } from "date-fns";
 import { ApiService } from "../api.service";
 import { AuthService } from "../auth.service";
 import { PushService } from "../push.service";
@@ -272,15 +272,19 @@ export class TrackerComponent implements OnInit {
     }
 
     // Reflection strip: work that transitioned today, newest first. "Today" is the
-    // user's local day (isToday) — a reflective grouping, unlike the UTC trend
+    // user's local tracker day — starting at 3AM local (isTrackerToday), so a 2AM
+    // claim stays under the prior day — a reflective grouping, unlike the UTC trend
     // buckets. Grouped by transition time, not when the points were claimed, so a
     // ticket finished today still shows here even if claimed tomorrow (older rows
     // without a stored transition fall back to ratedAt).
     loadToday(): void {
+        const now = new Date();
         this.api.myRatings().subscribe({
             next: (r) =>
                 this.today.set(
-                    r.ratings.filter((x) => isToday(parseISO(x.transitionedAt ?? x.ratedAt))),
+                    r.ratings.filter((x) =>
+                        isTrackerToday(parseISO(x.transitionedAt ?? x.ratedAt), now),
+                    ),
                 ),
         });
     }

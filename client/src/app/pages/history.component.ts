@@ -1,6 +1,7 @@
 import { CUSTOM_ELEMENTS_SCHEMA, Component, OnInit, computed, inject, signal } from '@angular/core';
 import type { MyRatingsResponse } from '@shared/contracts';
-import { format, isThisWeek, parseISO } from 'date-fns';
+import { DAY_BOUNDARY_HOUR, trackerDayKey, trackerDayStart } from '@shared/domain';
+import { format, isThisWeek, parseISO, subHours } from 'date-fns';
 import { ApiService } from '../api.service';
 
 type MyRating = MyRatingsResponse['ratings'][number];
@@ -76,10 +77,11 @@ export class HistoryComponent implements OnInit {
     const byDay = new Map<string, DayGroup>();
     for (const r of this.weekRatings()) {
       const d = parseISO(r.transitionedAt ?? r.ratedAt);
-      const key = format(d, 'yyyy-MM-dd');
+      // Tracker day starts at 3AM local, so a 2AM item groups under the prior day.
+      const key = trackerDayKey(d);
       let g = byDay.get(key);
       if (!g) {
-        g = { key, label: format(d, 'EEEE, MMM d'), ratings: [] };
+        g = { key, label: format(trackerDayStart(d), 'EEEE, MMM d'), ratings: [] };
         byDay.set(key, g);
       }
       g.ratings.push(r);
@@ -93,9 +95,15 @@ export class HistoryComponent implements OnInit {
         // "This week" is the user's local week (Monday start) — a reflective
         // grouping, intentionally local rather than the UTC trend buckets. Bucketed
         // by when the work transitioned, not when it was claimed (older rows without
-        // a stored transition fall back to ratedAt).
+        // a stored transition fall back to ratedAt). Shift by the 3AM day boundary
+        // first so a pre-3AM Monday item stays with the previous week, matching the
+        // per-day grouping below.
         this.weekRatings.set(
-          r.ratings.filter((x) => isThisWeek(parseISO(x.transitionedAt ?? x.ratedAt), { weekStartsOn: 1 })),
+          r.ratings.filter((x) =>
+            isThisWeek(subHours(parseISO(x.transitionedAt ?? x.ratedAt), DAY_BOUNDARY_HOUR), {
+              weekStartsOn: 1,
+            }),
+          ),
         );
         this.loading.set(false);
       },

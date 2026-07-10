@@ -47,6 +47,11 @@ Small on purpose — three source files under `src/`, one test under `test/`.
     the documented exception to the UTCDate rule).
   - `weekStartOf(iso)` — Monday (UTC) of the ISO week for an ISO/day string; the canonical
     `UTCDate` example (see Conventions).
+  - `DAY_BOUNDARY_HOUR` (= 3), `trackerDayKey(d)` / `trackerDayStart(d)` /
+    `isTrackerToday(d, now)` — the personal reflective day starts at **3AM local**, not
+    midnight (a 2AM claim folds into the prior day). Deliberately **wall-clock local**,
+    like `workdayPace` (not the UTCDate rule). Used only by the client's local
+    "today/yesterday" & per-day groupings — the UTC trend buckets don't use it.
 
 - **`src/index.ts`** — barrel; re-exports `./domain` and `./contracts`. Import from
   `@shared/domain` / `@shared/contracts` (or the barrel) — never deep-import `dist/`.
