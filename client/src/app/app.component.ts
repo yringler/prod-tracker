@@ -163,19 +163,20 @@ const PUBLIC_ROUTES = ["/privacy"];
                     <main>
                         <div style="margin-top:64px; text-align:center">
                             <h1 style="font-size:32px; margin-bottom:8px">
-                                Story-point effort tracker
+                                How much have you done? How much can you do?
                             </h1>
                             <p
                                 class="muted"
                                 style="font-size:16px; max-width:580px; margin:0 auto 24px"
                             >
-                                A personal record of the work you actually get
+                                A personal coach for the work you actually get
                                 done. As your Jira tickets move, take a few
-                                seconds to note the effort you put in — then
-                                look back and see how much you did today, this
-                                week, this month, whether you're picking up
-                                pace, and how you're tracking against your team.
-                                Knowledge and well-earned pride in your work.
+                                seconds to note the effort you put in — then look
+                                back and see how much you did today, this week,
+                                and this month, whether you're picking up pace,
+                                and, from your own history, how much you're
+                                capable of. Knowledge and well-earned pride in
+                                your work.
                             </p>
                             <wa-button
                                 variant="brand"
@@ -240,13 +241,16 @@ const PUBLIC_ROUTES = ["/privacy"];
                                     name="chart-line"
                                     style="font-size:22px; color:var(--accent)"
                                 ></wa-icon>
-                                <h3 style="margin:8px 0 4px">Look back</h3>
+                                <h3 style="margin:8px 0 4px">
+                                    See what you can do
+                                </h3>
                                 <p class="muted" style="margin:0">
                                     See how much you got done today, this week,
-                                    and this month — whether you're speeding up,
-                                    and how you stack up next to your team. End
-                                    each week and month knowing exactly what you
-                                    accomplished.
+                                    and this month, and whether you're speeding
+                                    up. Over time your own history becomes the
+                                    measure of what you're capable of — and how
+                                    you're tracking with your team. End each week
+                                    knowing exactly what you did.
                                 </p>
                             </div>
                         </div>

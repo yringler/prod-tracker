@@ -1,9 +1,11 @@
 # Story-point effort tracker
 
-Personal/peer productivity tracker on top of Jira Cloud. Developers self-rate the
-effort they put into each ticket (0/25/50/100%) as it moves through statuses; the
-tool graphs **team-level** effort-claimed points against real Jira done points per
-sprint. It is **not** a surveillance tool — see the privacy invariant below.
+A private coach for your own effort, on top of Jira Cloud. As your Jira tickets move
+through statuses, take a few seconds to self-rate the effort you put into each one
+(0/25/50/100%). Then look back and see **how much you've done** — today, this week,
+this month — and, from that same history, **how much you can do**. It also graphs
+anonymized **team-level** claimed effort against real Jira done points per sprint. It
+is **not** a surveillance tool — see the privacy invariant below.
 
 Single Cloudflare Worker deploy: the Worker serves the API **and** ships the built
 Angular SPA as its static assets (same origin, no CORS, one `wrangler deploy`).
