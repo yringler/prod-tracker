@@ -23,14 +23,14 @@ Config / bootstrap:
 - `src/main.ts` — bootstrap; imports `./webawesome` once for side-effect registration.
 - `src/app/app.config.ts` — `ApplicationConfig`: `provideRouter`, `provideHttpClient(withFetch())`, zone change detection with event coalescing.
 - `src/app/app.routes.ts` — routes, all **lazy** via `loadComponent`. `''`→`tracker`; `**`→`tracker`.
-- `src/app/app.component.ts` — the shell: a `<wa-page>` layout (breakpoint 920px). Its `header` slot holds the `<nav>` row (links, dark-mode `wa-switch`, site picker, avatar chip → settings, sign out); the `navigation` slot holds the same links (via a shared `ng-template`) for the mobile burger drawer, hidden on desktop in `styles.css`. Auth gating and the logged-out marketing/login landing live here too. `/privacy` renders without auth (`PUBLIC_ROUTES`).
+- `src/app/app.component.ts` — the shell: a `<wa-page>` layout (breakpoint 920px). Its `header` slot holds the `<nav>` row (links, dark-mode `wa-switch`, site picker, avatar chip → settings, sign out); the `navigation` slot holds the same links (via a shared `ng-template`) for the mobile burger drawer, hidden on desktop in `styles.css`. Auth gating and the logged-out marketing/login landing live here too. `/privacy` renders without auth (`PUBLIC_ROUTES`). **Billing gating** also lives here: a trial `wa-callout` banner when `me.billing.state === 'trialing'` (N days left + Subscribe), and a full-page paywall hero swapped in for `<router-outlet/>` when `state === 'expired'` (header + sign-out kept, nav links hidden). Both redirect via `auth.subscribe()` — no card UI.
 
 Pages — `src/app/pages/` (each a standalone route component):
 - `tracker.component.ts` — the core "rate your effort" flow: pending prompts, effort buttons (`claimCeiling`-gated), diary notes, "Done today" strip, daily-goal panel, push enable, dev "add fake item" (localhost only).
 - `history.component.ts` — this-week personal history, grouped by local day.
 - `aggregates.component.ts` — stats: personal-vs-team claimed trends + per-team claimed-vs-done tables/charts.
 - `tools.component.ts` — client-side utilities; currently a copyable LLM standup prompt (`buildStandupPrompt`, pure/exported).
-- `settings.component.ts` — profile row + daily-goal editor (`MAX_DAILY_GOAL`).
+- `settings.component.ts` — profile row + daily-goal editor (`MAX_DAILY_GOAL`) + a Billing panel (status line; "Manage billing" → Portal when `state === 'active'`, else "Subscribe" → Checkout; success/canceled callout from the `?billing=` query param).
 - `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set. Uses **Signal Forms** (`@angular/forms/signals`) and `ChangeDetectionStrategy.OnPush`.
 - `privacy.component.ts` — public privacy policy (auth-free; keep in sync with actual data practices).
 
@@ -44,7 +44,7 @@ UI / charts — `src/app/ui/` (reusable):
 
 Services — `src/app/` (all `@Injectable({ providedIn: 'root' })`):
 - `api.service.ts` — typed client for every `/api/*` endpoint; returns RxJS `Observable`s.
-- `auth.service.ts` — session state (`me`, `loaded`, `isAdmin` signals); `login`/`logout`/`switchSite`, local `me` patching.
+- `auth.service.ts` — session state (`me`, `loaded`, `isAdmin` signals); `login`/`logout`/`switchSite`, local `me` patching, plus `subscribe()` / `openBillingPortal()` (POST for a redirect URL, then `window.location.href`, mirroring `login()`).
 - `theme.service.ts` — light/dark `theme` signal; `effect` toggles `wa-dark`/`wa-light` on `<html>`, persists to `localStorage`, updates `theme-color`.
 - `push.service.ts` — registers `sw-push.js`, requests notification permission, subscribes via VAPID key, POSTs the subscription server-side.
 

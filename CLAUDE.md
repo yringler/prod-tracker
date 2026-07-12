@@ -102,6 +102,17 @@ Short pointers — read the referenced code/tests before changing anything nearb
   that time — not the issue's current sprint.
 - **Schema mirroring:** `worker/src/db/schema.sql` mirrors the full migrated schema and
   backs the tests. Any migration change must keep it in sync — see `migrations/CLAUDE.md`.
+- **Billing entitlement gate.** A $5/mo Stripe subscription with a 7-day app-side
+  trial (from first login, tracked by `account_id` in the `billing` table). The
+  entitlement gate in `worker/src/index.ts` returns `402 SUBSCRIPTION_REQUIRED`
+  once the trial lapses and no entitling subscription (`active`/`past_due`)
+  exists. Never gate `/api/auth/*`, `/api/me`, or `/api/billing/*` — lapsed users
+  must still see state and pay. The Stripe **webhook is public** (above the auth
+  gate) and verifies its own signature. Only `env.BOOTSTRAP_ADMIN_ACCOUNT_ID` is
+  exempt. All Stripe SDK calls live in one file (`worker/src/billing/stripe.ts`);
+  entitlement math is pure in `worker/src/billing/entitlement.ts`. Env:
+  `STRIPE_PRICE_ID` (var), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (secrets;
+  prefer a restricted `rk_...` key). See `worker/CLAUDE.md` "Billing".
 
 ## Testing
 

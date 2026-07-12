@@ -3,6 +3,7 @@ import {
     Component,
     ElementRef,
     OnInit,
+    computed,
     inject,
     signal,
     viewChild,
@@ -63,9 +64,13 @@ const PUBLIC_ROUTES = ["/privacy"];
                     </ng-template>
                     <nav slot="header">
                         <strong>SP&nbsp;Tracker</strong>
-                        <span class="nav-links">
-                            <ng-container [ngTemplateOutlet]="navLinks" />
-                        </span>
+                        @if (!isPaywalled()) {
+                            <span class="nav-links">
+                                <ng-container
+                                    [ngTemplateOutlet]="navLinks"
+                                />
+                            </span>
+                        }
                         <span class="spacer"></span>
                         <wa-switch
                             size="small"
@@ -118,9 +123,11 @@ const PUBLIC_ROUTES = ["/privacy"];
                             <span class="signout-label">Sign out</span>
                         </wa-button>
                     </nav>
-                    <nav slot="navigation" class="drawer-nav">
-                        <ng-container [ngTemplateOutlet]="navLinks" />
-                    </nav>
+                    @if (!isPaywalled()) {
+                        <nav slot="navigation" class="drawer-nav">
+                            <ng-container [ngTemplateOutlet]="navLinks" />
+                        </nav>
+                    }
                 } @else {
                     <nav slot="header">
                         <span class="spacer"></span>
@@ -140,25 +147,93 @@ const PUBLIC_ROUTES = ["/privacy"];
                 <main><router-outlet /></main>
             } @else if (auth.loaded()) {
                 @if (auth.me(); as me) {
-                    @if (me.needsReauth) {
+                    @if (isPaywalled()) {
                         <main>
-                            <wa-callout variant="warning">
-                                <wa-icon
-                                    slot="icon"
-                                    name="triangle-exclamation"
-                                ></wa-icon>
-                                Your Jira consent expired.
-                                <a
-                                    href="#"
-                                    (click)="
-                                        auth.login(); $event.preventDefault()
-                                    "
-                                    >Re-connect Jira</a
-                                >.
-                            </wa-callout>
+                            <div
+                                style="margin-top:64px; text-align:center"
+                            >
+                                <h1
+                                    style="font-size:32px; margin-bottom:8px"
+                                >
+                                    Your free trial has ended
+                                </h1>
+                                <p
+                                    class="muted"
+                                    style="font-size:16px; max-width:580px; margin:0 auto 24px"
+                                >
+                                    Subscribe to keep tracking the effort you
+                                    put in, your history, and how you're
+                                    tracking against your team — $5/month,
+                                    cancel anytime.
+                                </p>
+                                <wa-button
+                                    variant="brand"
+                                    size="large"
+                                    (click)="auth.subscribe()"
+                                >
+                                    <wa-icon
+                                        slot="start"
+                                        name="credit-card"
+                                    ></wa-icon>
+                                    Subscribe for $5/month
+                                </wa-button>
+                                <p
+                                    class="muted"
+                                    style="font-size:13px; margin-top:10px"
+                                >
+                                    Secure checkout by Stripe. Manage or
+                                    cancel anytime from Settings.
+                                </p>
+                            </div>
                         </main>
+                    } @else {
+                        @if (me.needsReauth) {
+                            <main>
+                                <wa-callout variant="warning">
+                                    <wa-icon
+                                        slot="icon"
+                                        name="triangle-exclamation"
+                                    ></wa-icon>
+                                    Your Jira consent expired.
+                                    <a
+                                        href="#"
+                                        (click)="
+                                            auth.login();
+                                            $event.preventDefault()
+                                        "
+                                        >Re-connect Jira</a
+                                    >.
+                                </wa-callout>
+                            </main>
+                        }
+                        @if (isTrialing()) {
+                            <main>
+                                <wa-callout variant="brand">
+                                    <wa-icon
+                                        slot="icon"
+                                        name="circle-info"
+                                    ></wa-icon>
+                                    Free trial — {{ trialDaysLeft() }}
+                                    {{
+                                        trialDaysLeft() === 1
+                                            ? "day"
+                                            : "days"
+                                    }}
+                                    left.
+                                    <a
+                                        href="#"
+                                        (click)="
+                                            auth.subscribe();
+                                            $event.preventDefault()
+                                        "
+                                        >Subscribe for $5/month</a
+                                    >
+                                    to keep your tracker after it ends.
+                                </wa-callout>
+                            </main>
+                        }
+                        <main><router-outlet /></main>
                     }
-                    <main><router-outlet /></main>
                 } @else {
                     <main>
                         <div style="margin-top:64px; text-align:center">
@@ -283,6 +358,13 @@ export class AppComponent implements OnInit {
     private router = inject(Router);
     private page = viewChild.required<ElementRef<WaPage>>("page");
     isPublicRoute = signal(this.checkPublic(this.router.url));
+
+    // Billing gating: trialing shows a banner above the app; expired swaps the
+    // whole app for a paywall (nav links hidden, header + sign-out kept).
+    private billingState = computed(() => this.auth.me()?.billing.state);
+    isTrialing = computed(() => this.billingState() === "trialing");
+    isPaywalled = computed(() => this.billingState() === "expired");
+    trialDaysLeft = computed(() => this.auth.me()?.billing.daysLeft ?? 0);
 
     ngOnInit(): void {
         this.router.events

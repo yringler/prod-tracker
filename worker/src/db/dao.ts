@@ -58,6 +58,16 @@ export interface DoneEventInput {
   teamIdAtDone: string | null;
 }
 
+export interface BillingRow {
+  accountId: string;
+  trialStartedAt: string;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  subscriptionStatus: string | null;
+  currentPeriodEnd: string | null;
+  updatedAt: string;
+}
+
 export class Dao {
   constructor(private readonly db: D1Like) {}
 
@@ -684,6 +694,73 @@ export class Dao {
       .run();
   }
 
+  // --- Billing ---------------------------------------------------------------
+  // Lifecycle: `startTrialIfAbsent` stamps trial_started_at once (at first login,
+  // or first gated touch for grandfathered users); Stripe webhooks then own the
+  // subscription columns via `applySubscription`. All reads are account-scoped
+  // except `getBillingByCustomerId`, which is a single-row webhook correlation
+  // (customer id → account) and never exposes a per-account HTTP read path.
+
+  /** Start the free-trial clock for an account, once. Idempotent — a re-login (or
+   *  re-touch) never resets an existing trial. */
+  async startTrialIfAbsent(accountId: string): Promise<void> {
+    const ts = now();
+    await this.db
+      .prepare(
+        `INSERT INTO billing (account_id, trial_started_at, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(account_id) DO NOTHING`,
+      )
+      .bind(accountId, ts, ts)
+      .run();
+  }
+
+  async getBilling(accountId: string): Promise<BillingRow | null> {
+    const r = await this.db
+      .prepare(`SELECT * FROM billing WHERE account_id = ?`)
+      .bind(accountId)
+      .first();
+    return r ? mapBilling(r) : null;
+  }
+
+  /** Single-row webhook correlation: Stripe customer id → our billing row. */
+  async getBillingByCustomerId(customerId: string): Promise<BillingRow | null> {
+    const r = await this.db
+      .prepare(`SELECT * FROM billing WHERE stripe_customer_id = ? LIMIT 1`)
+      .bind(customerId)
+      .first();
+    return r ? mapBilling(r) : null;
+  }
+
+  /** Apply a subscription snapshot (from Checkout confirm or a webhook). Upserts so
+   *  a webhook that arrives before the trial row exists still records state. */
+  async applySubscription(
+    accountId: string,
+    s: {
+      customerId: string | null;
+      subscriptionId: string | null;
+      status: string | null;
+      currentPeriodEnd: string | null;
+    },
+  ): Promise<void> {
+    const ts = now();
+    await this.db
+      .prepare(
+        `INSERT INTO billing
+           (account_id, trial_started_at, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET
+           stripe_customer_id     = COALESCE(excluded.stripe_customer_id, billing.stripe_customer_id),
+           stripe_subscription_id = COALESCE(excluded.stripe_subscription_id, billing.stripe_subscription_id),
+           subscription_status    = excluded.subscription_status,
+           current_period_end     = excluded.current_period_end,
+           updated_at             = excluded.updated_at`,
+      )
+      .bind(
+        accountId, ts, s.customerId, s.subscriptionId, s.status, s.currentPeriodEnd, ts,
+      )
+      .run();
+  }
+
   // --- GDPR personal-data reporting & erasure --------------------------------
   //
   // CRON-ONLY. accountsForReport/accountsDueForReport return account-level data
@@ -714,6 +791,7 @@ export class Dao {
       ['pending_ratings', 'account_id'],
       ['push_subscriptions', 'account_id'],
       ['sessions', 'account_id'],
+      ['billing', 'account_id'],
     ];
     const ids = new Set<string>();
     for (const [table, column] of sources) {
@@ -790,6 +868,7 @@ export class Dao {
       this.db.prepare(`DELETE FROM push_subscriptions WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM sessions          WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM pd_report_state   WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM billing           WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`UPDATE ratings     SET rater_account_id = ? WHERE rater_account_id = ?`).bind(pseudonym, accountId),
       this.db.prepare(`UPDATE done_events SET account_id = ?       WHERE account_id = ?`).bind(pseudonym, accountId),
     ]);
@@ -975,6 +1054,18 @@ function mapPending(r: Record<string, unknown>): PendingRow {
     toStatus: r['to_status'] as string,
     changelogId: r['changelog_id'] as string,
     transitionedAt: r['transitioned_at'] as string,
+  };
+}
+
+function mapBilling(r: Record<string, unknown>): BillingRow {
+  return {
+    accountId: r['account_id'] as string,
+    trialStartedAt: r['trial_started_at'] as string,
+    stripeCustomerId: (r['stripe_customer_id'] as string | null) ?? null,
+    stripeSubscriptionId: (r['stripe_subscription_id'] as string | null) ?? null,
+    subscriptionStatus: (r['subscription_status'] as string | null) ?? null,
+    currentPeriodEnd: (r['current_period_end'] as string | null) ?? null,
+    updatedAt: r['updated_at'] as string,
   };
 }
 

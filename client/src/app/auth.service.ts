@@ -26,6 +26,16 @@ export class AuthService {
     this.api.authStart().subscribe((r) => (window.location.href = r.authorizeUrl));
   }
 
+  /** Start hosted Checkout — POST for the URL, then redirect (mirrors login()). */
+  subscribe(): void {
+    this.api.createCheckout().subscribe((r) => (window.location.href = r.url));
+  }
+
+  /** Open the Stripe Billing Portal (card/cancel/invoices) in the same tab. */
+  openBillingPortal(): void {
+    this.api.createPortal().subscribe((r) => (window.location.href = r.url));
+  }
+
   logout(): void {
     this.api.logout().subscribe(() => {
       this.me.set(null);

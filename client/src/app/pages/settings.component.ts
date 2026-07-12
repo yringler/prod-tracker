@@ -1,4 +1,5 @@
 import { CUSTOM_ELEMENTS_SCHEMA, Component, computed, inject, signal } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { MAX_DAILY_GOAL } from '@shared/domain';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
@@ -69,21 +70,89 @@ import { AvatarComponent } from '../ui/avatar.component';
           </p>
         }
       </div>
+
+      <div class="panel">
+        <h3 style="margin-top:0">Billing</h3>
+        @if (billingParam() === 'success') {
+          <wa-callout variant="success" style="margin-bottom:12px">
+            <wa-icon slot="icon" name="circle-check"></wa-icon>
+            You're subscribed — thanks! Your access is all set.
+          </wa-callout>
+        } @else if (billingParam() === 'canceled') {
+          <wa-callout variant="neutral" style="margin-bottom:12px">
+            <wa-icon slot="icon" name="circle-info"></wa-icon>
+            Checkout canceled — no charge was made.
+          </wa-callout>
+        }
+        <p class="muted" style="margin-top:0">{{ billingStatusLine() }}</p>
+        @switch (me.billing.state) {
+          @case ('exempt') {
+            <!-- Complimentary access — nothing to manage. -->
+          }
+          @case ('active') {
+            <wa-button
+              appearance="outlined"
+              [loading]="billingBusy()"
+              (click)="manage()"
+              >Manage billing</wa-button
+            >
+          }
+          @default {
+            <wa-button
+              variant="brand"
+              [loading]="billingBusy()"
+              (click)="subscribe()"
+              >Subscribe for $5/month</wa-button
+            >
+          }
+        }
+      </div>
     }
   `,
 })
 export class SettingsComponent {
   auth = inject(AuthService);
   private api = inject(ApiService);
+  private route = inject(ActivatedRoute);
 
   readonly maxGoal = MAX_DAILY_GOAL;
   saving = signal(false);
   savedMsg = signal<string | null>(null);
 
+  // The `?billing=success|canceled` marker Checkout/Portal redirect back with.
+  readonly billingParam = signal(this.route.snapshot.queryParamMap.get('billing'));
+  billingBusy = signal(false);
+
   currentSiteName = computed(() => {
     const me = this.auth.me();
     return me?.sites.find((s) => s.cloudId === me.cloudId)?.name ?? me?.sites[0]?.name ?? '';
   });
+
+  billingStatusLine = computed(() => {
+    const b = this.auth.me()?.billing;
+    switch (b?.state) {
+      case 'exempt':
+        return 'You have complimentary access — no subscription needed.';
+      case 'active':
+        return "You're subscribed — $5/month. Manage your card, invoices, or cancel below.";
+      case 'trialing':
+        return `Free trial — ${b.daysLeft ?? 0} ${b.daysLeft === 1 ? 'day' : 'days'} left. Subscribe any time to keep your tracker.`;
+      case 'expired':
+        return 'Your free trial has ended. Subscribe to keep using the tracker.';
+      default:
+        return '';
+    }
+  });
+
+  subscribe(): void {
+    this.billingBusy.set(true);
+    this.auth.subscribe();
+  }
+
+  manage(): void {
+    this.billingBusy.set(true);
+    this.auth.openBillingPortal();
+  }
 
   save(input: { value: string; reportValidity(): boolean }): void {
     const goal = Number(input.value);

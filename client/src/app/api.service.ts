@@ -6,6 +6,7 @@ import type {
   AppointAdminRequest,
   AssignMembershipRequest,
   AuthStartResponse,
+  CheckoutSessionResponse,
   ClaimedTrendsResponse,
   ConfigResponse,
   CreateTeamRequest,
@@ -15,6 +16,7 @@ import type {
   MyRatingsResponse,
   OrgMembersResponse,
   PendingRatingsResponse,
+  PortalSessionResponse,
   PushSubscriptionRequest,
   SetFieldsRequest,
   SubmitRatingRequest,
@@ -73,6 +75,14 @@ export class ApiService {
   }
   teams(): Observable<{ teams: Team[] }> {
     return this.http.get<{ teams: Team[] }>('/api/teams');
+  }
+
+  // --- billing (redirect flows — no card UI) ---
+  createCheckout(): Observable<CheckoutSessionResponse> {
+    return this.http.post<CheckoutSessionResponse>('/api/billing/checkout', {});
+  }
+  createPortal(): Observable<PortalSessionResponse> {
+    return this.http.post<PortalSessionResponse>('/api/billing/portal', {});
   }
 
   vapidPublicKey(): Observable<VapidPublicKeyResponse> {

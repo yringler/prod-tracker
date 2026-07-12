@@ -29,6 +29,13 @@ import { allAggregates, teamAggregate } from './routes/aggregates';
 import { claimedTrends, clearPending, getPending, myRatings, submitRating } from './routes/ratings';
 import { updateMySettings } from './routes/settings';
 import { subscribe, vapidPublicKey } from './routes/push';
+import {
+  confirmCheckout,
+  createCheckout,
+  createPortal,
+  getEntitlement,
+  stripeWebhook,
+} from './routes/billing';
 import { isDevEnv, seedPending } from './routes/dev';
 
 export default {
@@ -78,10 +85,24 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/auth/logout' && m === 'POST') return authLogout(req, env, dao);
   if (p === '/api/me' && m === 'GET') return me(req, env, dao);
   if (p === '/api/push/vapid-public-key' && m === 'GET') return vapidPublicKey(env);
+  // Stripe sends no cookie — the webhook MUST stay public. It verifies its own
+  // signature (worker/src/billing/stripe.ts) instead of relying on the session.
+  if (p === '/api/billing/webhook' && m === 'POST') return stripeWebhook(req, env, dao);
 
   // --- Authenticated routes ---
   const ctx = await authenticate(req, env, dao);
   if (!ctx) return error(401, 'not authenticated');
+
+  // Billing: reachable BEFORE the entitlement gate so a lapsed user can still pay
+  // and manage their subscription. (/api/me and /api/auth/* stay ungated too.)
+  if (p === '/api/billing/checkout' && m === 'POST') return createCheckout(ctx);
+  if (p === '/api/billing/portal' && m === 'POST') return createPortal(ctx);
+  if (p === '/api/billing/confirm' && m === 'GET') return confirmCheckout(req, ctx);
+
+  // Entitlement gate: everything below requires a live trial or a paying
+  // subscription. getEntitlement also lazily starts the trial (grandfathering).
+  const ent = await getEntitlement(ctx);
+  if (!ent.entitled) return error(402, 'subscription required', 'SUBSCRIPTION_REQUIRED');
 
   // Sites / current selection
   if (p === '/api/sites' && m === 'GET') return listSites(ctx);

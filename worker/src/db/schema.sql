@@ -170,3 +170,20 @@ CREATE TABLE IF NOT EXISTS pd_report_state (
   account_id        TEXT PRIMARY KEY,
   last_reported_at  TEXT NOT NULL
 );
+
+-- Stripe billing (added 0005). Its own table, NOT columns on `users`: upsertUser
+-- rewrites the users row on every login while billing is written by Stripe
+-- webhooks on a different lifecycle. No row = trial not started; the entitlement
+-- gate lazily inserts one (fresh 7-day trial) at an account's first touch, which
+-- is also how grandfathered users are handled. Keep in sync with
+-- migrations/0005_billing.sql.
+CREATE TABLE IF NOT EXISTS billing (
+  account_id             TEXT PRIMARY KEY,
+  trial_started_at       TEXT NOT NULL,       -- first login (or first touch post-deploy)
+  stripe_customer_id     TEXT,
+  stripe_subscription_id TEXT,
+  subscription_status    TEXT,                -- Stripe status verbatim; NULL = never subscribed
+  current_period_end     TEXT,                -- ISO
+  updated_at             TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_billing_customer ON billing(stripe_customer_id);

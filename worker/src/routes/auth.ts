@@ -21,6 +21,8 @@ import {
   exchangeCode,
   fetchMyself,
 } from '../jira/oauth';
+import { toBillingInfo } from '../billing/entitlement';
+import { getEntitlement } from './billing';
 
 const SESSION_TTL = 60 * 60 * 24 * 30; // 30 days
 
@@ -66,6 +68,10 @@ export async function authCallback(req: Request, env: Env, dao: Dao): Promise<Re
   });
   // 48x48 is the size the header chip renders; falls back to initials when absent.
   await dao.upsertUser(accountId, displayName, defaultSite.id, me.avatarUrls?.['48x48'] ?? null);
+  // Start the free-trial clock at first login. Idempotent — a re-login never
+  // resets it; grandfathered users who predate billing get theirs lazily on their
+  // first gated request (getEntitlement) instead.
+  await dao.startTrialIfAbsent(accountId);
 
   // Record every reachable site (the picker's options) + its deep-link base.
   for (const r of resources) {
@@ -105,6 +111,9 @@ export async function me(req: Request, env: Env, dao: Dao): Promise<Response> {
   const needsReauth = await dao.getUserNeedsReauth(ctx.accountId);
   const sites = await dao.listSites(ctx.accountId);
   const settings = await dao.getUserSettings(ctx.accountId);
+  // /api/me stays ungated so a lapsed user can still see their (expired) state and
+  // reach the paywall; getEntitlement lazily starts the trial and derives billing.
+  const ent = await getEntitlement(ctx);
   const body: MeResponse = {
     accountId: ctx.accountId,
     displayName: await dao.getDisplayName(ctx.accountId),
@@ -114,6 +123,7 @@ export async function me(req: Request, env: Env, dao: Dao): Promise<Response> {
     needsReauth,
     avatarUrl: settings.avatarUrl,
     dailyGoal: settings.dailyGoal,
+    billing: toBillingInfo(ent),
   };
   return json(body);
 }

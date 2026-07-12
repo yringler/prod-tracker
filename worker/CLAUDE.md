@@ -36,8 +36,9 @@ report-accounts job each tick.
   `auth.ts` (OAuth start/callback/logout, `me`, sites, site-switch), `ratings.ts`
   (pending, submit, personal history, claimed-trends), `aggregates.ts`
   (team-grouped sums), `admin.ts` (teams, memberships, admins, config, fields),
-  `settings.ts` (daily goal), `push.ts` (subscribe, VAPID key), `dev.ts`
-  (local-only pending seeder, 404 in prod via `isDevEnv`).
+  `settings.ts` (daily goal), `push.ts` (subscribe, VAPID key), `billing.ts`
+  (entitlement gate, Checkout/Portal redirects, Checkout-confirm, Stripe webhook),
+  `dev.ts` (local-only pending seeder, 404 in prod via `isDevEnv`).
 - [`src/jira/`](src/jira/) — Jira integration: `client.ts` (per-account/-cloud
   authed client + token rotation), `oauth.ts` (3LO code/refresh, accessible
   resources, `/myself`), `fields.ts` (Story Points/Sprint field discovery),
@@ -49,6 +50,12 @@ report-accounts job each tick.
 - [`src/db/`](src/db/) — `dao.ts` (the single data-access layer — **the privacy
   invariant lives here**), `driver.ts` (`D1Like` structural interface tests can
   back with SQLite), `schema.sql` (canonical schema; see Database below).
+- [`src/billing/`](src/billing/) — Stripe billing. `stripe.ts` is the **only**
+  payment-processing file (thin wrappers around the `stripe` SDK — Checkout,
+  Portal, webhook verify; constructed with `createFetchHttpClient` +
+  `createSubtleCryptoProvider` for Workers). `entitlement.ts` is **pure** trial /
+  subscription-status logic (`deriveBilling`, unit-tested). Routes in
+  `src/routes/billing.ts`.
 - [`src/push/webpush.ts`](src/push/webpush.ts) — VAPID + RFC 8291 `aes128gcm` web
   push on WebCrypto (no Node `web-push` dependency).
 
@@ -134,6 +141,31 @@ remaining admin (`409 LAST_ADMIN`) or self-revoke as the sole admin
 recovery hatch — always treated as admin (`http.requireAdmin`) and bootstraps the
 first admin on its first login (`routes/auth.ts`).
 
+### Billing entitlement (load-bearing wiring)
+$5/mo Stripe subscription + 7-day app-side trial from first login. Rules the
+router in [`src/index.ts`](src/index.ts) enforces — don't break them:
+- **Webhook is PUBLIC** — `POST /api/billing/webhook` sits **above** the
+  `authenticate()` gate (Stripe sends no cookie). It reads the **raw** body before
+  any parse and verifies the signature (`billing/stripe.ts` `verifyWebhookEvent`,
+  async `constructEventAsync`); a bad signature is a 400. It handles exactly three
+  events (`checkout.session.completed`, `customer.subscription.updated`,
+  `customer.subscription.deleted`) and 200s on anything else. Correlation order:
+  `client_reference_id` → subscription `metadata.account_id` →
+  `getBillingByCustomerId`.
+- **Gate placement** — the three authed billing routes (`checkout`, `portal`,
+  `confirm`) plus `/api/auth/*` and `/api/me` are **above** the entitlement gate;
+  everything else is below. The gate is `getEntitlement(ctx)` (which also lazily
+  starts the trial — grandfathering) → `402 SUBSCRIPTION_REQUIRED` when
+  `!entitled`. Never move `/api/me` or `/api/billing/*` below it, or a lapsed user
+  can neither see their state nor pay.
+- **Entitled ⇔** in the trial window OR `subscription_status ∈ {active, past_due}`.
+  Only `BOOTSTRAP_ADMIN_ACCOUNT_ID` is exempt (mirrors `requireAdmin` — appointing
+  an admin is not a payment bypass).
+- **All Stripe SDK calls live in `billing/stripe.ts`.** Entitlement math is pure in
+  `billing/entitlement.ts` (no I/O, unit-tested). DAO billing reads are
+  account-scoped except `getBillingByCustomerId` (single-row webhook correlation).
+  `billing` is included in the GDPR paths (`accountsForReport`, `eraseAccount`).
+
 ## Database
 
 - **Schema changes go through [`../migrations/`](../migrations/)** (see
@@ -157,9 +189,13 @@ Bindings/vars/secrets are typed in [`src/env.ts`](src/env.ts) and configured in
 to `../.dev.vars` for `wrangler dev`.
 - **Bindings**: `DB` (D1), `ASSETS` (static SPA).
 - **Vars** (`[vars]` in wrangler.toml): `APP_ORIGIN`, `OAUTH_REDIRECT_PATH`,
-  `VAPID_SUBJECT`, `BOOTSTRAP_ADMIN_ACCOUNT_ID`.
+  `VAPID_SUBJECT`, `BOOTSTRAP_ADMIN_ACCOUNT_ID`, `STRIPE_PRICE_ID` (the
+  recurring `price_...`).
 - **Secrets** (`wrangler secret put`, locally in `.dev.vars`): `JIRA_CLIENT_ID`,
-  `JIRA_CLIENT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`.
+  `JIRA_CLIENT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+  `STRIPE_SECRET_KEY` (prefer a restricted `rk_...` key — least privilege:
+  Checkout + Portal write, Subscriptions + Customers read), `STRIPE_WEBHOOK_SECRET`
+  (the `whsec_...` from the dashboard endpoint / `stripe listen`).
 - `isDevEnv` keys off `APP_ORIGIN` starting with `http://localhost` to gate
   dev-only routes.
 
@@ -179,6 +215,12 @@ SQL against better-sqlite3.
   issue's transitions.
 - `pd-report.test.ts` — GDPR report-accounts cadence + erasure/refresh (stubbed
   fetch).
+- `billing.test.ts` — pure `deriveBilling` boundaries (trial day 6 vs 8,
+  `active`/`past_due`/`canceled`/never-subscribed, exemption) + gate wiring
+  (idempotent trial start, grandfathering, customer correlation, GDPR).
+- `billing-webhook.test.ts` — real signature verify (signed with the SDK's
+  `generateTestHeaderString`), the three events applied against the shim,
+  customer-id correlation fallback, unknown-event no-op.
 - `dao.test.ts`, `memberships.test.ts` (effective-dated, idempotent assignment),
   `multisite.test.ts` (one grant, many sites, site-switch guard),
   `org-members.test.ts` (org boundary), `settings.test.ts` (daily-goal validation;

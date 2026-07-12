@@ -10,12 +10,20 @@ export interface Env {
   OAUTH_REDIRECT_PATH: string;
   VAPID_SUBJECT: string;
   BOOTSTRAP_ADMIN_ACCOUNT_ID: string;
+  /** Stripe recurring Price id for the $5/mo plan (test `price_...` locally). */
+  STRIPE_PRICE_ID: string;
 
   // secrets
   JIRA_CLIENT_ID: string;
   JIRA_CLIENT_SECRET: string;
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
+  /** Stripe API key. Prefer a RESTRICTED key (`rk_...`) with least privilege:
+   *  write Checkout Sessions + Billing Portal Sessions, read Subscriptions +
+   *  Customers. A full secret key (`sk_...`) also works. */
+  STRIPE_SECRET_KEY: string;
+  /** Signing secret (`whsec_...`) for the /api/billing/webhook endpoint. */
+  STRIPE_WEBHOOK_SECRET: string;
 }
 
 // Requested at consent (the /authorize URL). See README "Atlassian app setup"

@@ -46,9 +46,12 @@ database_id = "80bb229d-7a2c-4ca2-bedb-65bef36c410a"
 migrations_dir = "migrations"
 
 # Secrets (set via `wrangler secret put`), NOT vars:
-#   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY
+#   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
+#   STRIPE_SECRET_KEY (prefer a restricted `rk_...` key), STRIPE_WEBHOOK_SECRET
 [vars]
 APP_ORIGIN = "https://tracker.yehudardevelopment.com"
 OAUTH_REDIRECT_PATH = "/api/auth/callback"
 VAPID_SUBJECT = "mailto:admin@example.com"
 BOOTSTRAP_ADMIN_ACCOUNT_ID = "557058:fcacbb78-fa49-4419-beee-fe3f90526986"
+# The live recurring Price id for the $5/mo plan (a `price_...`, not a product id).
+STRIPE_PRICE_ID = "price_REPLACE_WITH_LIVE_PRICE_ID"

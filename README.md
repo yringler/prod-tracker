@@ -67,13 +67,44 @@ re-aggregation stays honest when points/teams change later.
 set. `BOOTSTRAP_ADMIN_ACCOUNT_ID` is a permanent recovery hatch. Cannot revoke the
 last admin or self-revoke as sole admin (`worker/test/admin-guard.test.ts`).
 
+## Billing (Stripe)
+
+$5/month subscription with a **7-day free trial** that starts at a user's **first
+login** — no card required during the trial. Once it lapses, unentitled users are
+gated (`402 SUBSCRIPTION_REQUIRED`) until they subscribe. **Zero payment UI**:
+Stripe **hosted Checkout** (redirect) to subscribe, the **Billing Portal** to
+update the card / cancel / view invoices. No Stripe.js, no card fields (PCI
+SAQ-A). The entitlement/gate wiring is load-bearing — see `worker/CLAUDE.md`.
+
+- **The trial is app-side**, tracked by `account_id` in the `billing` table
+  (`trial_started_at`) — not a Stripe trial. Existing/grandfathered users get a
+  fresh trial lazily at their first gated request. Idempotent: re-login never
+  resets it (no row = trial not started).
+- **Entitled ⇔** inside the trial window **or** Stripe `subscription_status ∈
+  {active, past_due}` (`past_due` hands the user Stripe's smart-retry window as a
+  grace period). Only `BOOTSTRAP_ADMIN_ACCOUNT_ID` is exempt — appointing an admin
+  is not a payment bypass.
+- **Enforcement** is a single gate in `worker/src/index.ts`, above the
+  sites/personal/admin routes. `/api/auth/*`, `/api/me`, and `/api/billing/*` stay
+  **ungated** so a lapsed user can still see their state and pay. The client shows
+  a trial banner (`trialing`) and swaps in a paywall for `<router-outlet/>` when
+  `expired`.
+- **The webhook is public** (`POST /api/billing/webhook`, above the auth gate —
+  Stripe sends no cookie) and verifies its own signature; it handles three events
+  (`checkout.session.completed`, `customer.subscription.{updated,deleted}`). The
+  Checkout return also hits `/api/billing/confirm`, which applies the same
+  idempotent upsert to close the webhook race on redirect.
+- All Stripe SDK calls live in one file (`worker/src/billing/stripe.ts`);
+  entitlement math is pure/tested in `worker/src/billing/entitlement.ts`. Tested in
+  `worker/test/billing.test.ts` + `billing-webhook.test.ts`.
+
 ## Develop
 
 ```bash
 npm install
-npm test                       # vitest: changelog idempotency, privacy, dao, domain
+npm test                       # vitest: changelog idempotency, privacy, dao, domain, billing
 npm run typecheck              # worker + shared (strict)
-cp .dev.vars.example .dev.vars # fill JIRA + VAPID secrets
+cp .dev.vars.example .dev.vars # fill JIRA + VAPID + Stripe secrets
 
 # D1
 wrangler d1 create storypoint-tracker          # paste id into wrangler.toml
@@ -135,6 +166,45 @@ Notes that bit us in practice:
   **re-authorize** (log out and back in) — existing grants keep their old scopes.
   An `invalid_grant` flags the user `needsReauth`; a *scope* change does not, so
   re-auth is manual.
+
+### Stripe setup
+
+The app needs a recurring **Price**, an API key, and a **webhook signing secret**.
+Prefer a **restricted key** (`rk_...`) with least privilege — write Checkout
+Sessions + Billing Portal Sessions, read Subscriptions + Customers.
+
+**Local (test mode):**
+
+```bash
+# 1. Stripe dashboard (test mode): create a Product + a $5/mo recurring Price.
+#    Put the price_... into STRIPE_PRICE_ID and an rk_test_.../sk_test_ key into
+#    STRIPE_SECRET_KEY in .dev.vars.
+# 2. Forward webhooks to the local worker. This prints a whsec_... — put it into
+#    STRIPE_WEBHOOK_SECRET in .dev.vars, then leave `stripe listen` running.
+stripe listen --forward-to http://localhost:8787/api/billing/webhook \
+  --events checkout.session.completed,customer.subscription.updated,customer.subscription.deleted
+
+# 3. Run it. A fresh login shows a "7 days left" trial banner.
+npm run db:migrate && npm run dev
+# 4. Subscribe with test card 4242 4242 4242 4242 -> lands on /settings?billing=success.
+# 5. To see the paywall, backdate the trial past 7 days:
+wrangler d1 execute storypoint-tracker --local \
+  --command "UPDATE billing SET trial_started_at='2000-01-01T00:00:00Z' WHERE account_id='<your-account-id>'"
+```
+
+**Production:** the price id is a **var**, the key and webhook secret are
+**secrets**, and the webhook endpoint is registered in the dashboard (not
+`stripe listen`).
+
+```bash
+wrangler secret put STRIPE_SECRET_KEY      # live rk_.../sk_...
+wrangler secret put STRIPE_WEBHOOK_SECRET  # live whsec_ (from the dashboard endpoint below)
+# Put the LIVE price_... into [vars] STRIPE_PRICE_ID in wrangler.toml.
+# Dashboard -> Developers -> Webhooks -> add endpoint
+#   https://<your-worker>/api/billing/webhook  with the 3 events above; copy its
+#   signing secret into STRIPE_WEBHOOK_SECRET.
+npm run db:migrate:remote && npm run deploy
+```
 
 ## Open flags (decide against your Jira)
 

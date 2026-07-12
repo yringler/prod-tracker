@@ -22,6 +22,37 @@ export interface MeResponse {
   avatarUrl: string | null;
   /** Self-set daily claimed-points goal (drives the tracker's goal panel); null = not set. */
   dailyGoal: number | null;
+  /** Subscription/trial state — drives the trial banner and paywall. */
+  billing: BillingInfo;
+}
+
+// --- Billing (Stripe) --------------------------------------------------------
+
+/**
+ * Entitlement state derived from the `billing` row + trial window:
+ * - `exempt`   — bootstrap admin; never gated, no banner.
+ * - `active`   — a paying subscription (`active` or `past_due` in Stripe).
+ * - `trialing` — inside the 7-day free-trial window.
+ * - `expired`  — trial over and no entitling subscription → gated (paywall).
+ */
+export type BillingState = 'exempt' | 'active' | 'trialing' | 'expired';
+
+export interface BillingInfo {
+  state: BillingState;
+  /** End of the free-trial window (ISO); null when subscribed or exempt. */
+  trialEndsAt: string | null;
+  /** Whole days left in the trial; null unless `state === 'trialing'`. */
+  daysLeft: number | null;
+}
+
+/** POST /api/billing/checkout — hosted Checkout redirect URL. */
+export interface CheckoutSessionResponse {
+  url: string;
+}
+
+/** POST /api/billing/portal — Billing Portal redirect URL. */
+export interface PortalSessionResponse {
+  url: string;
 }
 
 /** PUT /api/me/settings — self-scoped preferences. `dailyGoal: null` clears the goal. */

@@ -24,7 +24,10 @@ Small on purpose — three source files under `src/`, one test under `test/`.
   fields** — `belowMinSize` privacy flag), `ClaimedTrendsResponse` / `TrendPoint`, admin
   shapes (`Team`, `TeamMembership`, `CreateTeamRequest`, `AssignMembershipRequest`,
   `DoneStatusConfigRequest`, `ConfigResponse`, `FieldCandidatesResponse`, `SetFieldsRequest`),
-  push (`PushSubscriptionRequest`, `VapidPublicKeyResponse`), and the generic `ApiError`.
+  push (`PushSubscriptionRequest`, `VapidPublicKeyResponse`), billing
+  (`BillingState`, `BillingInfo` — on `MeResponse.billing`; `CheckoutSessionResponse`,
+  `PortalSessionResponse`, both just `{ url }` redirect targets), and the generic
+  `ApiError`.
 
 - **`src/domain.ts`** — pure domain constants + functions (only dependency is `date-fns` /
   `@date-fns/utc`). Key exports:

@@ -6,3 +6,15 @@ JIRA_CLIENT_SECRET=
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 APP_ORIGIN = "http://localhost:8787"
+
+# --- Stripe (test mode) ------------------------------------------------------
+# Prefer a RESTRICTED key (rk_test_...) with least privilege: write Checkout
+# Sessions + Billing Portal Sessions, read Subscriptions + Customers.
+STRIPE_SECRET_KEY=sk_test_or_rk_test_...
+# The test-mode recurring Price id for the $5/mo plan (a price_..., not a product).
+STRIPE_PRICE_ID=price_...
+# From `stripe listen` (below). It prints a whsec_... to paste here.
+STRIPE_WEBHOOK_SECRET=whsec_...
+# Forward webhooks to the local worker while developing:
+#   stripe listen --forward-to http://localhost:8787/api/billing/webhook \
+#     --events checkout.session.completed,customer.subscription.updated,customer.subscription.deleted

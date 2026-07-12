@@ -15,7 +15,8 @@ and points rather than duplicating them.
 - Config lives in [`../wrangler.toml`](../wrangler.toml): the `[[d1_databases]]`
   binding (`DB`, database `storypoint-tracker`) sets `migrations_dir = "migrations"`.
 - Current files: `0001_initial_schema.sql`, `0002_rating_notes.sql`,
-  `0003_rating_transitioned_at.sql`, `0004_user_settings.sql`.
+  `0003_rating_transitioned_at.sql`, `0004_user_settings.sql`,
+  `0005_billing.sql`.
 
 ## Current schema (what the migrations establish)
 
@@ -36,6 +37,7 @@ All timestamps are ISO-8601 **TEXT (UTC)**; points/money are `REAL`. One line pe
 - **`config`** — per-`cloud_id` Jira field ids + `done_status_names` (JSON) + `site_url`.
 - **`sessions`** — server session rows.
 - **`pd_report_state`** — GDPR report-accounts cadence (`last_reported_at`, gates the ≥7-day cycle).
+- **`billing`** — Stripe billing (added 0005), keyed by `account_id`: `trial_started_at` (first login / first gated touch), `stripe_customer_id` / `stripe_subscription_id`, `subscription_status` (verbatim Stripe status; NULL = never subscribed), `current_period_end`. Its own table (not columns on `users`) because `upsertUser` rewrites the users row on every login while billing is webhook-written on a different lifecycle. No row = trial not started.
 
 **Privacy-relevant columns:** `ratings.rater_account_id` is PD; `ratings.team_id_at_rating`
 and `ratings.story_points_at_rating` (and `done_events.account_id` / `team_id_at_done`) are
