@@ -11,4 +11,7 @@ VAPID_PRIVATE_KEY=
 # Outgoing-webhook bot and verify on the inbound route.
 ZULIP_API_KEY=
 ZULIP_WEBHOOK_TOKEN=
+# Email adapter secret (the EMAIL_FROM *var* lives in wrangler.toml [vars]).
+# Transport API key for a Resend/MailChannels-style HTTP send API.
+EMAIL_API_KEY=
 APP_ORIGIN = "http://localhost:8787"

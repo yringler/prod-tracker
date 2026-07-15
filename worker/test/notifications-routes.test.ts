@@ -46,12 +46,12 @@ describe('notification routes', () => {
 
     const res = await listChannels(ctxFor(ALICE));
     const body = (await res.json()) as ChannelListResponse;
-    expect(body.channels).toEqual([
-      {
-        descriptor: { channel: 'zulip', displayName: 'Zulip' },
-        status: { linked: true, label: 'Alice A' }, // Alice's, never Bob's
-      },
-    ]);
+    const zulip = body.channels.find((c) => c.descriptor.channel === 'zulip');
+    expect(zulip?.status).toEqual({ linked: true, label: 'Alice A' }); // Alice's, never Bob's
+    // Every registered channel is described; email is present but not linked here.
+    expect(body.channels.map((c) => c.descriptor.channel).sort()).toEqual(['email', 'zulip']);
+    const email = body.channels.find((c) => c.descriptor.channel === 'email');
+    expect(email?.status).toEqual({ linked: false });
   });
 
   it('reports not-linked for an account with no link', async () => {

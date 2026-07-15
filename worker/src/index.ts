@@ -34,6 +34,7 @@ import { isDevEnv, seedPending } from './routes/dev';
 import {
   beginChannelSetup,
   channelStatus,
+  completeChannelSetup,
   listChannels,
   unlinkChannel,
 } from './routes/notifications';
@@ -139,6 +140,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/notifications/channels' && m === 'GET') return listChannels(ctx);
   const setupMatch = p.match(/^\/api\/notifications\/([^/]+)\/setup$/);
   if (setupMatch && m === 'POST') return beginChannelSetup(ctx, decodeURIComponent(setupMatch[1]!));
+  const completeMatch = p.match(/^\/api\/notifications\/([^/]+)\/complete$/);
+  if (completeMatch && m === 'POST') {
+    return completeChannelSetup(req, ctx, decodeURIComponent(completeMatch[1]!));
+  }
   const statusMatch = p.match(/^\/api\/notifications\/([^/]+)\/status$/);
   if (statusMatch && m === 'GET') return channelStatus(ctx, decodeURIComponent(statusMatch[1]!));
   const unlinkMatch = p.match(/^\/api\/notifications\/([^/]+)$/);

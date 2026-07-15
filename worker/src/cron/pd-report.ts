@@ -12,6 +12,21 @@ import type { Dao } from '../db/dao';
 import type { Env } from '../env';
 import { JiraClient, ReauthRequiredError } from '../jira/client';
 import { fetchMyself } from '../jira/oauth';
+import { availableChannels, resolve } from '../notifications/registry';
+
+/** Wipe adapter-owned vendor data (zulip_links/email_links) for an erased account.
+ *  Those tables live outside dao (the eslint wall keeps adapters vendor-isolated),
+ *  so GDPR erasure reaches them through the registry `unlink` seam. Called right
+ *  after dao.eraseAccount so a closed account leaves no vendor address behind. */
+async function eraseAdapterData(env: Env, accountId: string): Promise<void> {
+  for (const channel of availableChannels()) {
+    try {
+      await resolve(env, channel)?.unlink(accountId);
+    } catch (e) {
+      console.error(`pd-report: adapter unlink (${channel}) failed during erase`, e);
+    }
+  }
+}
 
 const REPORT_URL = 'https://api.atlassian.com/app/report-accounts/';
 const DEFAULT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (Atlassian default)
@@ -69,6 +84,7 @@ export async function reportPersonalData(env: Env, dao: Dao): Promise<void> {
       for (const a of actions) {
         if (a.status === 'closed') {
           await dao.eraseAccount(a.accountId);
+          await eraseAdapterData(env, a.accountId);
           closed.add(a.accountId);
         } else if (a.status === 'updated') {
           await refreshOne(env, dao, a.accountId);

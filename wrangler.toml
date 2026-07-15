@@ -47,7 +47,7 @@ migrations_dir = "migrations"
 
 # Secrets (set via `wrangler secret put`), NOT vars:
 #   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
-#   ZULIP_API_KEY, ZULIP_WEBHOOK_TOKEN
+#   ZULIP_API_KEY, ZULIP_WEBHOOK_TOKEN, EMAIL_API_KEY
 [vars]
 APP_ORIGIN = "https://tracker.yehudardevelopment.com"
 OAUTH_REDIRECT_PATH = "/api/auth/callback"
@@ -55,3 +55,4 @@ VAPID_SUBJECT = "mailto:admin@example.com"
 BOOTSTRAP_ADMIN_ACCOUNT_ID = "557058:fcacbb78-fa49-4419-beee-fe3f90526986"
 ZULIP_SITE = "https://yourorg.zulipchat.com"
 ZULIP_BOT_EMAIL = "notify-bot@yourorg.zulipchat.com"
+EMAIL_FROM = "notify@yourorg.com"

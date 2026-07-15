@@ -9,8 +9,9 @@ import type {
   ChannelListItem,
   ChannelListResponse,
   LinkStatus,
+  SetupSubmission,
 } from '@shared/notifications';
-import { type AuthedCtx, error, json } from '../http';
+import { type AuthedCtx, error, json, readJson } from '../http';
 import { availableChannels, resolve } from '../notifications/registry';
 
 /** GET /api/notifications/channels — descriptor + link status for each channel,
@@ -34,6 +35,29 @@ export async function beginChannelSetup(ctx: AuthedCtx, channel: string): Promis
   if (!adapter) return error(404, 'unknown channel');
   const instructions: BeginSetupResponse = await adapter.beginSetup(ctx.accountId);
   return json(instructions);
+}
+
+/** POST /api/notifications/:channel/complete — finish an in-app setup (an `input`
+ *  flow, e.g. email). The route forwards the submitted fields to the adapter's
+ *  submitSetup, then — if the link succeeded — registers the app-owned channel with
+ *  the adapter's opaque label (the adapter can't touch user_channels). */
+export async function completeChannelSetup(
+  req: Request,
+  ctx: AuthedCtx,
+  channel: string,
+): Promise<Response> {
+  const adapter = resolve(ctx.env, channel);
+  if (!adapter || !adapter.submitSetup) return error(404, 'unknown channel');
+  const body = await readJson<SetupSubmission>(req);
+  const fields = body && typeof body.fields === 'object' && body.fields ? body.fields : {};
+  const status = await adapter.submitSetup(ctx.accountId, { fields });
+  if (status.linked) {
+    await ctx.dao.registerChannel(ctx.accountId, channel, status.label);
+  } else {
+    // Setup rejected the input — make sure no stale app-owned row lingers.
+    await ctx.dao.unregisterChannel(ctx.accountId, channel);
+  }
+  return json(status);
 }
 
 /** GET /api/notifications/:channel/status — poll target for the setup UI. */

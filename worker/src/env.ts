@@ -12,6 +12,7 @@ export interface Env {
   BOOTSTRAP_ADMIN_ACCOUNT_ID: string;
   ZULIP_SITE: string; // e.g. https://yourorg.zulipchat.com
   ZULIP_BOT_EMAIL: string; // e.g. notify-bot@yourorg.zulipchat.com
+  EMAIL_FROM: string; // From: address for escalation emails, e.g. notify@yourorg.com
 
   // secrets
   JIRA_CLIENT_ID: string;
@@ -20,6 +21,7 @@ export interface Env {
   VAPID_PRIVATE_KEY: string;
   ZULIP_API_KEY: string; // bot API key — Basic auth for POST /api/v1/messages
   ZULIP_WEBHOOK_TOKEN: string; // shared secret verified on the inbound webhook
+  EMAIL_API_KEY: string; // transport API key (Resend/MailChannels-style) for sends
 }
 
 // Requested at consent (the /authorize URL). See README "Atlassian app setup"

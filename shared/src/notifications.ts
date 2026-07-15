@@ -49,3 +49,10 @@ export interface ChannelListResponse {
   channels: ChannelListItem[];
 }
 export type BeginSetupResponse = SetupInstructions;
+
+/** Values collected from an in-app setup flow's `input` steps, keyed by step `name`.
+ *  Posted back to the generic /complete route for adapters that gather input in-app
+ *  (e.g. email) rather than out-of-band (e.g. Zulip's webhook). */
+export interface SetupSubmission {
+  fields: Record<string, string>;
+}

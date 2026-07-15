@@ -9,6 +9,7 @@
 import type { Env } from '../env';
 import type { NotifierAdapter } from './contract';
 import { makeZulipAdapter } from './adapters/zulip/adapter';
+import { makeEmailAdapter } from './adapters/email/adapter';
 
 /**
  * Structural guard: a stale `channel` row (e.g. an adapter that was removed)
@@ -27,6 +28,7 @@ export function isNotifier(x: unknown): x is NotifierAdapter {
  * module scope. Empty in this scaffold; the feature agent adds entries.
  */
 const REGISTRY: Record<string, (env: Env) => NotifierAdapter> = {
+  email: (env) => makeEmailAdapter(env),
   zulip: (env) => makeZulipAdapter(env),
 };
 

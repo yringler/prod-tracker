@@ -87,11 +87,20 @@ interface OpenSetup {
                     <a [href]="step.href" target="_blank" rel="noopener">{{ step.label }}</a>
                   }
                   @case ('input') {
-                    <wa-input
-                      [attr.type]="step.inputType"
-                      [attr.name]="step.name"
-                      [attr.label]="step.label"
-                    ></wa-input>
+                    <div class="row" style="gap:8px; align-items:end">
+                      <wa-input
+                        #inp
+                        [attr.type]="step.inputType"
+                        [attr.name]="step.name"
+                        [attr.label]="step.label"
+                      ></wa-input>
+                      <wa-button
+                        size="small"
+                        variant="brand"
+                        (click)="submitInput(s.channel, step.name, inp)"
+                        >Submit</wa-button
+                      >
+                    </div>
                   }
                   @case ('embed') {
                     <iframe
@@ -166,6 +175,20 @@ export class NotificationChannelsComponent {
 
   disconnect(channel: string): void {
     this.api.unlinkChannel(channel).subscribe({ next: () => this.refresh() });
+  }
+
+  // In-app setup completion (an `input` flow, e.g. email). On success, close the
+  // panel and refresh so the row flips to "Connected".
+  submitInput(channel: string, name: string, el: { value: string }): void {
+    this.api.completeChannelSetup(channel, { [name]: el.value }).subscribe({
+      next: (status) => {
+        if (status.linked) {
+          this.setup.set(null);
+          this.stopPolling();
+          this.refresh();
+        }
+      },
+    });
   }
 
   // Poll status while a setup panel is open; stop as soon as the link lands, then

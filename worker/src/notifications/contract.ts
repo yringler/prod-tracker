@@ -8,9 +8,10 @@
 // describe() is static/cacheable, beginSetup() mints live time-boxed state.
 
 import type {
+  LinkStatus,
   NotifierDescriptor,
   SetupInstructions,
-  LinkStatus,
+  SetupSubmission,
 } from '@shared/notifications';
 
 export interface NotificationPayload {
@@ -46,6 +47,11 @@ export interface NotifierAdapter {
   getStatus(userId: string): Promise<LinkStatus>;
   deliver(req: DeliverRequest): Promise<DeliverResult>;
   unlink(userId: string): Promise<void>;
+  /** Optional: complete a setup whose flow gathers input in-app (an `input` step)
+   *  rather than out-of-band (a webhook). The generic /complete route forwards the
+   *  submitted fields; the adapter validates + persists and returns the new status.
+   *  Adapters whose linking is fully out-of-band (Zulip's webhook) omit this. */
+  submitSetup?(userId: string, submission: SetupSubmission): Promise<LinkStatus>;
   /** Optional: handle a public inbound webhook (e.g. a Zulip outgoing-webhook). The
    *  app resolves the adapter by channel and calls this ABOVE the auth gate; the
    *  adapter verifies its own shared secret and returns the Response. */

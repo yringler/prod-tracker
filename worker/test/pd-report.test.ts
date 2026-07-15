@@ -233,6 +233,15 @@ describe('reportPersonalData', () => {
   it('erases a closed account and does not re-store its state', async () => {
     await dao.upsertUser(BOB, 'Bob', CLOUD);
     await seedFreshToken(OWNER);
+    // Adapter-owned vendor rows (outside dao) must also be wiped on erasure.
+    await db
+      .prepare(`INSERT INTO zulip_links (account_id, zulip_user_id, full_name, linked_at) VALUES (?, ?, ?, ?)`)
+      .bind(BOB, '4242', 'Bob', new Date().toISOString())
+      .run();
+    await db
+      .prepare(`INSERT INTO email_links (account_id, email, verified_at) VALUES (?, ?, ?)`)
+      .bind(BOB, 'bob@example.com', new Date().toISOString())
+      .run();
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => resp({ status: 200, body: { accounts: [{ accountId: BOB, status: 'closed' }] } })),
@@ -248,6 +257,13 @@ describe('reportPersonalData', () => {
       .bind(BOB)
       .first();
     expect(state).toBeNull();
+    // Adapter-owned vendor addresses are gone too (registry unlink seam).
+    expect(
+      await db.prepare(`SELECT account_id FROM zulip_links WHERE account_id = ?`).bind(BOB).first(),
+    ).toBeNull();
+    expect(
+      await db.prepare(`SELECT account_id FROM email_links WHERE account_id = ?`).bind(BOB).first(),
+    ).toBeNull();
   });
 
   it('refreshes the stored display name on "updated"', async () => {

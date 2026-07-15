@@ -29,6 +29,7 @@ import type {
   BeginSetupResponse,
   ChannelListResponse,
   LinkStatus,
+  SetupSubmission,
 } from '@shared/notifications';
 
 // Typed client for /api/*. Same-origin — the browser NEVER talks to Jira (no
@@ -95,6 +96,12 @@ export class ApiService {
     return this.http.post<BeginSetupResponse>(
       `/api/notifications/${encodeURIComponent(channel)}/setup`,
       {},
+    );
+  }
+  completeChannelSetup(channel: string, fields: Record<string, string>): Observable<LinkStatus> {
+    return this.http.post<LinkStatus>(
+      `/api/notifications/${encodeURIComponent(channel)}/complete`,
+      { fields } satisfies SetupSubmission,
     );
   }
   channelStatus(channel: string): Observable<LinkStatus> {
