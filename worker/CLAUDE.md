@@ -13,14 +13,16 @@ static assets (everything else falls through to `env.ASSETS`). It's a plain
 Cloudflare Worker (no Hono — a hand-rolled `route()` dispatcher), backed by
 Cloudflare **D1** (SQLite) for storage and a **cron** trigger (`*/3 * * * *`) that
 polls Jira. Entry point: [`src/index.ts`](src/index.ts) — its `fetch` handler
-dispatches HTTP, and its `scheduled` handler runs the poller + the GDPR
-report-accounts job each tick.
+dispatches HTTP, and its `scheduled` handler runs the poller, the GDPR
+report-accounts job, and the notification-escalation job each tick (each
+isolated).
 
 ## Directory map
 
 - [`src/index.ts`](src/index.ts) — the only router. `fetch` (static vs `/api`
-  split + `route()` dispatch table) and `scheduled` (cron: `runPoll` then
-  `reportPersonalData`, each isolated so one can't abort the other).
+  split + `route()` dispatch table) and `scheduled` (cron: `runPoll`, then
+  `reportPersonalData`, then `escalate` — each in its own `try/catch` so one
+  can't abort the others).
 - [`src/http.ts`](src/http.ts) — `json`/`error` helpers, cookie parse/set,
   `AuthedCtx`, `authenticate()` (sid cookie → session), `requireAdmin()`,
   `readJson()`.
@@ -37,20 +39,33 @@ report-accounts job each tick.
   (pending, submit, personal history, claimed-trends), `aggregates.ts`
   (team-grouped sums), `admin.ts` (teams, memberships, admins, config, fields),
   `settings.ts` (daily goal), `push.ts` (subscribe, VAPID key), `dev.ts`
-  (local-only pending seeder, 404 in prod via `isDevEnv`).
+  (local-only pending seeder, 404 in prod via `isDevEnv`), `notifications.ts`
+  (list/begin/complete/status/unlink notification channels; setup submit routed
+  to the resolved adapter).
 - [`src/jira/`](src/jira/) — Jira integration: `client.ts` (per-account/-cloud
   authed client + token rotation), `oauth.ts` (3LO code/refresh, accessible
   resources, `/myself`), `fields.ts` (Story Points/Sprint field discovery),
   `changelog.ts` (pure transition parsing, idempotency, ownership), `search.ts`
   (JQL search + Agile boards/sprints).
 - [`src/cron/`](src/cron/) — `poller.ts` (the poll: discover fields, refresh
-  sprints, diff transitions, write pending/done, push) and `pd-report.ts` (GDPR
-  report-accounts + erasure/refresh).
+  sprints, diff transitions, write pending/done, push), `pd-report.ts` (GDPR
+  report-accounts + erasure/refresh), and `escalate.ts` (the third isolated
+  `scheduled()` job: re-delivers an un-acted `pending_ratings` prompt through a
+  user's other linked channels once it survives `ESCALATION_DELAY_MS`, via the
+  registry seam only — never touching an adapter directly).
 - [`src/db/`](src/db/) — `dao.ts` (the single data-access layer — **the privacy
   invariant lives here**), `driver.ts` (`D1Like` structural interface tests can
   back with SQLite), `schema.sql` (canonical schema; see Database below).
 - [`src/push/webpush.ts`](src/push/webpush.ts) — VAPID + RFC 8291 `aes128gcm` web
   push on WebCrypto (no Node `web-push` dependency).
+- [`src/notifications/`](src/notifications/) — the pluggable notification layer.
+  `contract.ts` (the channel-neutral `NotifierAdapter` / `NotificationPayload` /
+  `SetupStep` types the app codes against), `registry.ts` (`resolve(env, channel)` /
+  `availableChannels()` — the only seam the app crosses to reach a channel), and
+  `adapters/<channel>/` (`zulip/`, `email/`), each owning its vendor wire format
+  (`render.ts` + `deliver.ts`), its persistence (`store.ts`, **`env.DB` only — never
+  the app's `dao`**), and Zulip's inbound `webhook.ts`. See "Notification adapters"
+  below.
 
 ## Key flows / where to make changes
 
@@ -134,6 +149,24 @@ remaining admin (`409 LAST_ADMIN`) or self-revoke as the sole admin
 recovery hatch — always treated as admin (`http.requireAdmin`) and bootstraps the
 first admin on its first login (`routes/auth.ts`).
 
+### Notification adapters (the app never composes a vendor string)
+The app owns *routing* and the neutral `NotificationPayload`; each adapter owns its
+vendor format and its own tables. Enforced by eslint walls (`.eslintrc.cjs`):
+`notifications/adapters/**` may not import `routes/**`, `cron/**`, `db/dao*`,
+`**/registry`, `**/index`, or a **sibling** adapter; `routes/**` and `cron/**` may
+not import `notifications/adapters/**`. The only crossing points are
+`registry.resolve()` and the neutral `dao.registerChannel` callback passed into the
+webhook.
+- **Data split.** App-owned rows (`user_channels`, self-scoped) live in `dao.ts` and
+  are reached by erasure/report (`eraseAccount`, `accountsForReport`). Adapter-owned
+  rows (`zulip_*`, `email_links`) stay out of `dao.ts` entirely, are touched only by
+  the adapter's `store.ts` via `env.DB`, and are wiped through the registry `unlink`
+  seam (`pd-report.ts:eraseAdapterData`) — keep any new adapter's tables reachable
+  from that seam or GDPR erasure will silently miss them.
+- **Adding a channel.** Implement `NotifierAdapter` under `adapters/<channel>/`,
+  register it in `registry.ts`; do **not** add a new `SetupStep` kind or touch
+  `cron/escalate.ts` (the email adapter proved the contract by needing neither).
+
 ## Database
 
 - **Schema changes go through [`../migrations/`](../migrations/)** (see
@@ -183,6 +216,13 @@ SQL against better-sqlite3.
   `multisite.test.ts` (one grant, many sites, site-switch guard),
   `org-members.test.ts` (org boundary), `settings.test.ts` (daily-goal validation;
   re-login never clobbers a saved goal).
+- `zulip-adapter.test.ts` / `zulip-webhook.test.ts` — Zulip deliver wire shape,
+  status/unlink/setup, and the inbound webhook (token, `direct_message` guard, rate
+  limit, atomic single-use TTL'd code redemption).
+- `email-adapter.test.ts` — email deliver + link store.
+- `notifications-routes.test.ts` — list/begin/complete/status/unlink route wiring.
+- `escalate.test.ts` — deliver-once, idempotent re-run, no-channel mark, stale-never,
+  fresh-not-yet.
 
 ## Conventions
 
