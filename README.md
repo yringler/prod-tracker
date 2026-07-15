@@ -155,3 +155,86 @@ when there's more than one. The cron poller polls **every** site per account, an
 Jira client re-reads the shared token before refreshing so concurrent per-site clients
 don't trip a false `invalid_grant` after a sibling rotates it. Tested in
 `worker/test/multisite.test.ts`.
+
+## Notification escalation & channels
+
+We already web-push a reminder when a ticket transitions and you haven't rated the
+effort. **Escalation** re-delivers that same reminder through another channel if you
+*still* haven't acted after `ESCALATION_DELAY_MS` (10 min, `shared/src/domain.ts`).
+The 3-min cron's third job (`worker/src/cron/escalate.ts`) scans `pending_ratings`
+rows older than the window with `escalated_at IS NULL`, builds a **channel-neutral**
+payload, and walks your linked channels until one accepts it — then marks the row so
+it escalates **at most once**.
+
+Channels are **pluggable adapters** (`worker/src/notifications/`), hard-isolated from
+the app by eslint import walls: the app owns routing + the neutral payload and **never
+composes a vendor string**; each adapter owns its vendor wire format, its own tables
+(`env.DB`, never `dao`), and its own link flow. Two ship today — **Zulip** and
+**email** — and the settings UI renders each adapter's self-described setup steps
+generically. See `worker/CLAUDE.md` → "Notification adapters". You connect a channel
+in the app under **Settings → Notifications**.
+
+### Zulip bot & webhook setup
+
+Sending and receiving are two different Zulip bot types (Zulip → *gear* → *Personal*
+(or *Organization*) *settings* → **Bots** → *Add a new bot*). Neither bot needs
+org-admin — the link flow stores your numeric Zulip `user_id` (captured from the DM
+you send), never your email, so it works regardless of Zulip's `email_address_visibility`
+settings.
+
+1. **Generic bot — for *sending*.** Create a *Generic bot* (e.g. "notify"). Copy its
+   **email** → `ZULIP_BOT_EMAIL` and its **API key** → `ZULIP_API_KEY`. This posts
+   your reminders via `POST /api/v1/messages` (HTTP Basic, `x-www-form-urlencoded` —
+   *not* JSON; see `adapters/zulip/deliver.ts`).
+2. **Outgoing-webhook bot — for *receiving* the `/link` DM.** Create an *Outgoing
+   webhook* bot and set its **Endpoint URL** to:
+
+   ```
+   https://<your-worker-domain>/api/notifications/zulip/webhook
+   ```
+
+   Copy the bot's **token** (shown in its config — Zulip includes it in every webhook
+   POST) → `ZULIP_WEBHOOK_TOKEN`. The route verifies it (token-is-capability) before
+   doing anything.
+3. Set `ZULIP_SITE` to your Zulip base URL (`https://yourorg.zulipchat.com`).
+4. Deploy, then **Settings → Notifications → Connect Zulip**: it mints a code, you DM
+   `/link YOURCODE` to the bot, it replies **"Connected ✓"**, and the panel flips to
+   connected (it polls `getStatus`).
+
+Config recap — **vars** go in `wrangler.toml [vars]`, **secrets** via `wrangler secret
+put` (or `.dev.vars` locally):
+
+| Key | Kind | Value |
+| --- | --- | --- |
+| `ZULIP_SITE` | var | `https://yourorg.zulipchat.com` |
+| `ZULIP_BOT_EMAIL` | var | the **generic** bot's email |
+| `ZULIP_API_KEY` | secret | the **generic** bot's API key |
+| `ZULIP_WEBHOOK_TOKEN` | secret | the **outgoing-webhook** bot's token |
+
+Notes that matter:
+
+- **The webhook fires only on DM-to-bot or @-mention** — exactly the link trigger, so
+  there's no event-queue daemon to keep alive. The route additionally **guards
+  `trigger === 'direct_message'`**, so a `/link CODE` pasted into a public stream can't
+  redeem the code (it would otherwise leak and be replayable), and it **rate-limits
+  failed `/link` attempts per sender** so a code can't be brute-forced into someone
+  else's account.
+- **Link codes** are bound to your account at generation, single-use, and expire in
+  ~15 min (atomic redemption — `store.ts:redeemCode`). Regenerate from the panel if one
+  lapses.
+- **One bot instead of two?** An outgoing-webhook bot can also send via its own API
+  key, so you may point `ZULIP_BOT_EMAIL`/`ZULIP_API_KEY` at the *same* outgoing-webhook
+  bot for a single, coherent identity (you DM and hear back from one bot). The two-bot
+  split above mirrors the design doc (`notifaction-adapters.md` §7); either works.
+- **Local dev:** Zulip must reach the endpoint over the public internet, so the
+  outgoing-webhook bot has to point at a deployed Worker (or a public tunnel) —
+  `wrangler dev` on localhost won't receive webhooks. Outbound delivery works fine
+  locally.
+
+### Email channel (optional)
+
+The email adapter delivers via a Resend/MailChannels-style HTTP send API. Set
+`EMAIL_FROM` (var, the `From:` address) and `EMAIL_API_KEY` (secret), then enter a
+destination address under **Settings → Notifications → email**. It's a deliberately
+second implementation — it keeps the adapter abstraction honest without needing a new
+setup-step kind or any change to the escalation loop.
