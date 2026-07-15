@@ -72,6 +72,18 @@ describe('zulip webhook — token + guard', () => {
     expect(await dao.getUserChannels(ALICE)).toEqual([]);
   });
 
+  it('accepts the legacy "private_message" trigger (older/self-hosted Zulip)', async () => {
+    // Zulip renamed private_message → direct_message; self-hosted servers on older
+    // versions still send the old name for a DM. Both must link.
+    const code = await mintCode(env, ALICE, 60_000);
+    const res = await call({ trigger: 'private_message', content: `/link ${code}` });
+    expect((await res.json()) as { content?: string }).toHaveProperty(
+      'content',
+      expect.stringContaining('Connected'),
+    );
+    expect(await dao.getUserChannels(ALICE)).toEqual([{ channel: 'zulip', label: 'Alice A' }]);
+  });
+
   it('does NOT redeem a valid code sent as a mention (direct_message guard)', async () => {
     const code = await mintCode(env, ALICE, 60_000);
     const res = await call({ trigger: 'mention', content: `/link ${code}` });

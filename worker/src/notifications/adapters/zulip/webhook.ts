@@ -4,21 +4,30 @@
 //
 // Security posture (see notifaction-adapters.md §7):
 //  - verify the shared ZULIP_WEBHOOK_TOKEN (token-is-capability),
-//  - GUARD trigger === 'direct_message' so a `/link` posted in a public stream
-//    (a mention) can never redeem a code,
+//  - GUARD on a DIRECT message so a `/link` posted in a public stream (a mention)
+//    can never redeem a code,
 //  - per-sender_id failed-attempt rate limit so codes can't be brute-forced,
 //  - codes are bound-at-generation, single-use, TTL'd (enforced in store.ts).
 //
-// This module never imports dao/registry: it reaches the app only through the
-// neutral InboundContext.registerChannel callback that index.ts injects.
+// Every decision point logs (structured, no secrets) so `wrangler tail` shows
+// exactly where an attempted link stops. This module never imports dao/registry:
+// it reaches the app only through the neutral InboundContext.registerChannel
+// callback that index.ts injects.
 
 import type { Env } from '../../../env';
+import { errFields, log as rootLog } from '../../../log';
 import type { InboundContext } from '../../contract';
 import { recentFailedAttempts, recordFailedAttempt, redeemCode, saveLink } from './store';
 
 /** Failed `/link` attempts allowed per sender within the window before we refuse. */
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_MAX_FAILED = 5;
+
+// Zulip renamed "private message" → "direct message"; self-hosted servers on older
+// versions still send `trigger: "private_message"` for a DM to the bot. Accept both
+// — both are DMs, so the security intent (never process a public-channel `/link`) is
+// preserved: we still reject "mention" and any stream message.
+const DM_TRIGGERS = new Set(['direct_message', 'private_message']);
 
 const INSTRUCTIONS =
   'To connect notifications, generate a code in the app settings and send it here as ' +
@@ -52,27 +61,35 @@ export async function handleZulipInbound(
   req: Request,
   ctx: InboundContext,
 ): Promise<Response> {
+  const log = rootLog.child({ webhook: 'zulip' });
+
   let body: ZulipWebhookBody;
   try {
     body = (await req.json()) as ZulipWebhookBody;
-  } catch {
+  } catch (e) {
+    log.warn('zulip webhook: unparseable JSON body', errFields(e));
     return json({}, 400);
   }
 
   // Token-is-capability: reject anything not carrying our shared secret.
   if (typeof body.token !== 'string' || body.token !== env.ZULIP_WEBHOOK_TOKEN) {
+    log.warn('zulip webhook: token missing or mismatched', {
+      hasToken: typeof body.token === 'string',
+    });
     return json({}, 401);
   }
 
   // GUARD: only direct messages may redeem. A `/link CODE` posted as a public
   // @-mention would otherwise leak the code to the channel and let anyone replay it.
-  if (body.trigger !== 'direct_message') {
+  if (typeof body.trigger !== 'string' || !DM_TRIGGERS.has(body.trigger)) {
+    log.info('zulip webhook: ignoring non-DM trigger', { trigger: body.trigger ?? null });
     return json({});
   }
 
   const msg = body.message ?? {};
   const senderId = msg.sender_id;
   if (typeof senderId !== 'number' && typeof senderId !== 'string') {
+    log.warn('zulip webhook: DM without a usable sender_id');
     return json({});
   }
   const sender = String(senderId);
@@ -82,6 +99,7 @@ export async function handleZulipInbound(
   const m = content.trim().match(/^\/link\s+([A-Za-z0-9]+)$/i);
   if (!m) {
     // Unknown content → instructions, the only affordance the user gets.
+    log.info('zulip webhook: DM did not match /link CODE', { sender });
     return reply(INSTRUCTIONS);
   }
 
@@ -90,6 +108,7 @@ export async function handleZulipInbound(
   const sinceIso = new Date(Date.now() - RATE_WINDOW_MS).toISOString();
   const failed = await recentFailedAttempts(env, sender, sinceIso);
   if (failed >= RATE_MAX_FAILED) {
+    log.warn('zulip webhook: sender rate-limited', { sender, failed });
     return reply('Too many attempts. Please wait a few minutes and try again.');
   }
 
@@ -97,10 +116,12 @@ export async function handleZulipInbound(
   const redeemed = await redeemCode(env, code);
   if (!redeemed) {
     await recordFailedAttempt(env, sender);
+    log.warn('zulip webhook: code invalid, expired, or already used', { sender });
     return reply('That code is invalid or has expired. Generate a fresh one in app settings.');
   }
 
   await saveLink(env, redeemed.accountId, sender, fullName);
   await ctx.registerChannel(redeemed.accountId, 'zulip', fullName ?? 'Zulip');
+  log.info('zulip webhook: account linked', { sender, account: redeemed.accountId });
   return reply('Connected ✓ You will now get effort-rating reminders here.');
 }
