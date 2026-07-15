@@ -25,6 +25,11 @@ import type {
   TeamMembership,
   VapidPublicKeyResponse,
 } from '@shared/contracts';
+import type {
+  BeginSetupResponse,
+  ChannelListResponse,
+  LinkStatus,
+} from '@shared/notifications';
 
 // Typed client for /api/*. Same-origin — the browser NEVER talks to Jira (no
 // CORS path, no client secret in the bundle); everything goes through the Worker.
@@ -80,6 +85,23 @@ export class ApiService {
   }
   subscribePush(body: PushSubscriptionRequest): Observable<unknown> {
     return this.http.post('/api/push/subscribe', body);
+  }
+
+  // --- notification channels (self-describing, vendor-agnostic) ---
+  notificationChannels(): Observable<ChannelListResponse> {
+    return this.http.get<ChannelListResponse>('/api/notifications/channels');
+  }
+  beginChannelSetup(channel: string): Observable<BeginSetupResponse> {
+    return this.http.post<BeginSetupResponse>(
+      `/api/notifications/${encodeURIComponent(channel)}/setup`,
+      {},
+    );
+  }
+  channelStatus(channel: string): Observable<LinkStatus> {
+    return this.http.get<LinkStatus>(`/api/notifications/${encodeURIComponent(channel)}/status`);
+  }
+  unlinkChannel(channel: string): Observable<unknown> {
+    return this.http.delete(`/api/notifications/${encodeURIComponent(channel)}`);
   }
 
   // --- admin ---

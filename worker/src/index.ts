@@ -31,6 +31,12 @@ import { claimedTrends, clearPending, getPending, myRatings, submitRating } from
 import { updateMySettings } from './routes/settings';
 import { subscribe, vapidPublicKey } from './routes/push';
 import { isDevEnv, seedPending } from './routes/dev';
+import {
+  beginChannelSetup,
+  channelStatus,
+  listChannels,
+  unlinkChannel,
+} from './routes/notifications';
 import { resolve } from './notifications/registry';
 
 export default {
@@ -127,6 +133,16 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/me/claimed-trends' && m === 'GET') return claimedTrends(ctx);
   if (p === '/api/me/settings' && m === 'PUT') return updateMySettings(req, ctx);
   if (p === '/api/push/subscribe' && m === 'POST') return subscribe(req, ctx);
+
+  // Notification channels (self-scoped to ctx.accountId; vendor-agnostic — reached
+  // via the registry). The public inbound webhook is handled above the auth gate.
+  if (p === '/api/notifications/channels' && m === 'GET') return listChannels(ctx);
+  const setupMatch = p.match(/^\/api\/notifications\/([^/]+)\/setup$/);
+  if (setupMatch && m === 'POST') return beginChannelSetup(ctx, decodeURIComponent(setupMatch[1]!));
+  const statusMatch = p.match(/^\/api\/notifications\/([^/]+)\/status$/);
+  if (statusMatch && m === 'GET') return channelStatus(ctx, decodeURIComponent(statusMatch[1]!));
+  const unlinkMatch = p.match(/^\/api\/notifications\/([^/]+)$/);
+  if (unlinkMatch && m === 'DELETE') return unlinkChannel(ctx, decodeURIComponent(unlinkMatch[1]!));
 
   // Aggregates (team-grouped, sums only)
   if (p === '/api/aggregates' && m === 'GET') return allAggregates(ctx);
