@@ -176,56 +176,52 @@ in the app under **Settings → Notifications**.
 
 ### Zulip bot & webhook setup
 
-Sending and receiving are two different Zulip bot types (Zulip → *gear* → *Personal*
-(or *Organization*) *settings* → **Bots** → *Add a new bot*). Neither bot needs
-org-admin — the link flow stores your numeric Zulip `user_id` (captured from the DM
-you send), never your email, so it works regardless of Zulip's `email_address_visibility`
-settings.
+**One Outgoing-webhook bot does everything** — it *sends* your reminders (via its API
+key) and *receives* the `/link` DM (via the webhook). Create it in Zulip → *gear* →
+*Personal* (or *Organization*) *settings* → **Bots** → *Add a new bot* → bot type
+**Outgoing webhook**. It needs **no org-admin** — the link flow stores your numeric
+Zulip `user_id` (captured from the DM you send), never your email, so it works
+regardless of `email_address_visibility`.
 
-1. **Generic bot — for *sending*.** Create a *Generic bot* (e.g. "notify"). Copy its
-   **email** → `ZULIP_BOT_EMAIL` and its **API key** → `ZULIP_API_KEY`. This posts
-   your reminders via `POST /api/v1/messages` (HTTP Basic, `x-www-form-urlencoded` —
-   *not* JSON; see `adapters/zulip/deliver.ts`).
-2. **Outgoing-webhook bot — for *receiving* the `/link` DM.** Create an *Outgoing
-   webhook* bot and set its **Endpoint URL** to:
+Set the bot's **Endpoint URL** (a.k.a. payload URL) to:
 
-   ```
-   https://<your-worker-domain>/api/notifications/zulip/webhook
-   ```
+```
+https://<your-worker-domain>/api/notifications/zulip/webhook
+```
 
-   Copy the bot's **token** (shown in its config — Zulip includes it in every webhook
-   POST) → `ZULIP_WEBHOOK_TOKEN`. The route verifies it (token-is-capability) before
-   doing anything.
-3. Set `ZULIP_SITE` to your Zulip base URL (`https://yourorg.zulipchat.com`).
-4. Deploy, then **Settings → Notifications → Connect Zulip**: it mints a code, you DM
-   `/link YOURCODE` to the bot, it replies **"Connected ✓"**, and the panel flips to
-   connected (it polls `getStatus`).
-
-Config recap — **vars** go in `wrangler.toml [vars]`, **secrets** via `wrangler secret
-put` (or `.dev.vars` locally):
+Then wire four settings — **vars** in `wrangler.toml [vars]`, **secrets** via `wrangler
+secret put` (or `.dev.vars` locally). Note `ZULIP_API_KEY` and `ZULIP_WEBHOOK_TOKEN`
+are **different values** — the single biggest trip-up:
 
 | Key | Kind | Value |
 | --- | --- | --- |
-| `ZULIP_SITE` | var | `https://yourorg.zulipchat.com` |
-| `ZULIP_BOT_EMAIL` | var | the **generic** bot's email |
-| `ZULIP_API_KEY` | secret | the **generic** bot's API key |
-| `ZULIP_WEBHOOK_TOKEN` | secret | the **outgoing-webhook** bot's token |
+| `ZULIP_SITE` | var | base URL, **no trailing slash** — `https://yourorg.zulipchat.com` |
+| `ZULIP_BOT_EMAIL` | var | the bot's **email** |
+| `ZULIP_API_KEY` | secret | the bot's **API key** — sends DMs via `POST /api/v1/messages` (HTTP Basic, `x-www-form-urlencoded` — *not* JSON; see `adapters/zulip/deliver.ts`) |
+| `ZULIP_WEBHOOK_TOKEN` | secret | the bot's **outgoing-webhook token** — the `token` Zulip puts in every webhook POST, which the route verifies. **This is NOT the API key**, and it's a distinct per-bot value. |
+
+**Finding the outgoing-webhook token** (Zulip doesn't display it on the bot card, and
+it is *not* the API key): on the **Bots** page click **"Download config of all active
+outgoing webhooks"** and read the `token=` line for your bot. If that's unavailable,
+the route logs the token it *received* on a 401 mismatch — so one `wrangler tail` +
+`/link` attempt reveals the exact value to set.
+
+Then **Settings → Notifications → Connect Zulip**: it mints a code, you DM
+`/link YOURCODE` to the bot, it replies **"Connected ✓"**, and the panel flips to
+connected (it polls `getStatus`).
 
 Notes that matter:
 
 - **The webhook fires only on DM-to-bot or @-mention** — exactly the link trigger, so
-  there's no event-queue daemon to keep alive. The route additionally **guards
-  `trigger === 'direct_message'`**, so a `/link CODE` pasted into a public stream can't
+  there's no event-queue daemon to keep alive. The route additionally **accepts only a
+  direct-message trigger** (`direct_message`, or the legacy `private_message` that some
+  self-hosted servers still send), so a `/link CODE` pasted into a public stream can't
   redeem the code (it would otherwise leak and be replayable), and it **rate-limits
   failed `/link` attempts per sender** so a code can't be brute-forced into someone
   else's account.
 - **Link codes** are bound to your account at generation, single-use, and expire in
   ~15 min (atomic redemption — `store.ts:redeemCode`). Regenerate from the panel if one
   lapses.
-- **One bot instead of two?** An outgoing-webhook bot can also send via its own API
-  key, so you may point `ZULIP_BOT_EMAIL`/`ZULIP_API_KEY` at the *same* outgoing-webhook
-  bot for a single, coherent identity (you DM and hear back from one bot). The two-bot
-  split above mirrors the design doc (`notifaction-adapters.md` §7); either works.
 - **Local dev:** Zulip must reach the endpoint over the public internet, so the
   outgoing-webhook bot has to point at a deployed Worker (or a public tunnel) —
   `wrangler dev` on localhost won't receive webhooks. Outbound delivery works fine

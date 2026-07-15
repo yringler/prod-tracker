@@ -71,10 +71,18 @@ export async function handleZulipInbound(
     return json({}, 400);
   }
 
-  // Token-is-capability: reject anything not carrying our shared secret.
+  // Token-is-capability: reject anything not carrying our shared secret. Zulip's
+  // outgoing-webhook `token` is a per-bot value DISTINCT from the bot's API key
+  // (find it via the Bots page → "Download config of all active outgoing webhooks",
+  // the `token=` line). On mismatch we surface the token Zulip actually sent — only
+  // here, only on misconfig — so you can set ZULIP_WEBHOOK_TOKEN to match; once it
+  // matches, this never fires. (Drop `receivedToken` once linking is confirmed.)
   if (typeof body.token !== 'string' || body.token !== env.ZULIP_WEBHOOK_TOKEN) {
     log.warn('zulip webhook: token missing or mismatched', {
       hasToken: typeof body.token === 'string',
+      secretConfigured:
+        typeof env.ZULIP_WEBHOOK_TOKEN === 'string' && env.ZULIP_WEBHOOK_TOKEN.length > 0,
+      receivedToken: typeof body.token === 'string' ? body.token : null,
     });
     return json({}, 401);
   }
