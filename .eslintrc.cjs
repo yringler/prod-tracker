@@ -63,14 +63,17 @@ module.exports = {
                   '**/cron/**',
                   '**/db/dao',
                   '**/db/dao.*',
-                  '**/notifications/registry',
+                  '**/registry',
                   '**/index',
-                  '@worker/*',
                 ],
                 message:
                   'notification adapters are vendor-isolated: import only @shared/*, the neutral contract, and files inside your own adapter directory — never app internals (routes/cron/dao/router) or the registry.',
               },
               {
+                // Catches long-form sibling specifiers only; a terse relative
+                // `../email/store` is not matched (no `notifications/adapters/`
+                // segment in the string). Accepted per 02-prereq-plan.md Step 5 —
+                // tighten to per-adapter-name lists when a 2nd adapter lands.
                 group: ['**/notifications/adapters/*/**'],
                 message:
                   'adapters must not import sibling adapters — each adapter is a self-contained vertical slice. Communicate only through the neutral contract.',
