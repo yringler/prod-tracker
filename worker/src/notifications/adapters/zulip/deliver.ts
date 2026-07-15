@@ -4,6 +4,7 @@
 // message content — it receives an already-rendered string from render.ts.
 
 import type { Env } from '../../../env';
+import { log } from '../../../log';
 
 export type SendResult =
   | { ok: true }
@@ -19,7 +20,11 @@ export async function sendZulipDM(
   content: string,
 ): Promise<SendResult> {
   const body = new URLSearchParams({
-    type: 'direct',
+    // `private` is the backward-compatible message type: modern Zulip keeps it as an
+    // alias for `direct`, while older self-hosted servers (like the one this deploys
+    // against — the inbound webhook already tolerates the legacy `private_message`
+    // trigger for the same reason) only accept `private` and reject `direct` with a 400.
+    type: 'private',
     to: JSON.stringify([recipient]), // JSON-encoded array, inside the form encoding
     content,
   });
@@ -35,5 +40,17 @@ export async function sendZulipDM(
 
   if (res.ok) return { ok: true };
   const retryable = res.status >= 500 || res.status === 429;
+  // Surface WHY: Zulip returns a JSON error body ({ result, msg, code }) that names the
+  // cause — "Invalid API key" (bad bot creds → 401), "Invalid message type" (→ 400),
+  // etc. It echoes no secret, so log it truncated. Without this the caller only sees a
+  // bare retryable flag and can't tell a bad key from a bad request. Cap head sampling
+  // notwithstanding, one line here makes the failure diagnosable from `wrangler tail`.
+  let errBody = '';
+  try {
+    errBody = (await res.text()).slice(0, 500);
+  } catch {
+    // body is best-effort; a failed read must not mask the send failure
+  }
+  log.warn('zulip: send rejected', { status: res.status, retryable, body: errBody });
   return { ok: false, retryable };
 }

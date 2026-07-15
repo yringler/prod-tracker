@@ -1,7 +1,7 @@
 // App-side notification routes: self-scoped channel list, setup 404 on an unknown
 // channel, and unlink clearing BOTH the adapter link and the app-owned user_channels
 // row. Real SQL (SqliteD1); channels resolved through the real registry (Zulip).
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dao } from '../src/db/dao';
 import type { Env } from '../src/env';
 import type { AuthedCtx } from '../src/http';
@@ -9,6 +9,7 @@ import {
   beginChannelSetup,
   channelStatus,
   listChannels,
+  sendTestNotification,
   unlinkChannel,
 } from '../src/routes/notifications';
 import { getLink, saveLink } from '../src/notifications/adapters/zulip/store';
@@ -113,5 +114,50 @@ describe('notification routes', () => {
     expect(res.status).toBe(200);
     expect(await getLink(env, ALICE)).toBeNull();
     expect(await dao.getUserChannels(ALICE)).toEqual([]);
+  });
+});
+
+describe('POST /api/notifications/test — self-serve delivery check', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('delivers to a linked channel and reports its status', async () => {
+    const fetchMock = vi.fn(
+      async () => ({ ok: true, status: 200, text: async () => '' }) as unknown as Response,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    // A registered app-owned channel + the adapter's own link row (both required: the
+    // route reads user_channels, the adapter reads its zulip_links address).
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A');
+
+    const res = await sendTestNotification(ctxFor(ALICE));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      channels: [{ channel: 'zulip', status: 'delivered' }],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the outbound send path actually ran
+  });
+
+  it('reports not_linked when the app channel exists but the adapter has no address', async () => {
+    const fetchMock = vi.fn(
+      async () => ({ ok: true, status: 200, text: async () => '' }) as unknown as Response,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A'); // no saveLink → no zulip address
+
+    const res = await sendTestNotification(ctxFor(ALICE));
+    expect(await res.json()).toEqual({
+      ok: true,
+      channels: [{ channel: 'zulip', status: 'not_linked' }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty result set for an account with no channels', async () => {
+    const res = await sendTestNotification(ctxFor(ALICE));
+    expect(await res.json()).toEqual({ ok: true, channels: [] });
   });
 });

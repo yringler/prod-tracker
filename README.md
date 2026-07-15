@@ -227,6 +227,49 @@ Notes that matter:
   `wrangler dev` on localhost won't receive webhooks. Outbound delivery works fine
   locally.
 
+#### Testing Zulip delivery
+
+**"Connected ✓" does *not* prove reminders will arrive.** That confirmation is the
+webhook's echoed reply (`adapters/zulip/webhook.ts`) and only exercises
+`ZULIP_WEBHOOK_TOKEN`. The actual send is a *separate* path — `POST
+${ZULIP_SITE}/api/v1/messages` with HTTP Basic `ZULIP_BOT_EMAIL:ZULIP_API_KEY`
+(`adapters/zulip/deliver.ts`) — reached only by the escalation cron. A wrong
+`ZULIP_API_KEY`/`ZULIP_BOT_EMAIL` links fine but fails every reminder.
+
+- **Fire a real test DM to yourself** (works locally *and* in prod — it's the only way
+  to verify prod bot creds; it's self-scoped to your own linked channels):
+
+  ```
+  curl -X POST https://<your-worker-domain>/api/notifications/test -H 'cookie: sid=<your-sid>'
+  ```
+
+  The JSON response reports one status per linked channel — `delivered` means the bot
+  credentials work; `failed` / `not_linked` / `unknown_channel` pinpoint the problem.
+  Grab your `sid` from the browser dev-tools cookie after logging in.
+
+- **Read the logs** in Workers Logs Explorer / `wrangler tail` (filter by `message`):
+  - `escalate: done` — per-tick summary; `due` > 0 means escalation found un-rated
+    prompts to send.
+  - `escalate: delivery failed` (warn) — the send was rejected. `retryable: false` is a
+    4xx (bad request / bad auth), `retryable: true` is a 5xx/429.
+  - `zulip: send rejected` (warn) — the exact HTTP `status` **and Zulip's error `body`**
+    (e.g. `"Invalid API key"` → bad creds; `"Invalid message type"` → server too old,
+    see below). This is the line that tells you *why*.
+
+- **Old self-hosted servers:** the send uses `type: "private"` (not `"direct"`), the
+  backward-compatible message type older Zulip versions require — the same reason the
+  inbound webhook tolerates the legacy `private_message` trigger.
+
+- **Exercise the full cron path locally:** seed a prompt (`POST /api/__dev/pending`),
+  run `wrangler dev --test-scheduled`, then trigger the scheduled handler:
+
+  ```
+  curl 'http://localhost:8787/__scheduled?cron=*/3+*+*+*+*'
+  ```
+
+  Note a pending must be older than `ESCALATION_DELAY_MS` (10 min) to be escalated, so
+  the direct `/api/notifications/test` route above is the faster credential check.
+
 ### Email channel (optional)
 
 The email adapter delivers via a Resend/MailChannels-style HTTP send API. Set

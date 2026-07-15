@@ -40,8 +40,9 @@ isolated).
   (team-grouped sums), `admin.ts` (teams, memberships, admins, config, fields),
   `settings.ts` (daily goal), `push.ts` (subscribe, VAPID key), `dev.ts`
   (local-only pending seeder, 404 in prod via `isDevEnv`), `notifications.ts`
-  (list/begin/complete/status/unlink notification channels; setup submit routed
-  to the resolved adapter).
+  (list/begin/complete/status/unlink notification channels; `POST /test` fires a
+  self-scoped test delivery to your own channels to verify the send path; setup submit
+  routed to the resolved adapter).
 - [`src/jira/`](src/jira/) — Jira integration: `client.ts` (per-account/-cloud
   authed client + token rotation), `oauth.ts` (3LO code/refresh, accessible
   resources, `/myself`), `fields.ts` (Story Points/Sprint field discovery),
@@ -225,7 +226,8 @@ SQL against better-sqlite3.
   status/unlink/setup, and the inbound webhook (token, `direct_message` guard, rate
   limit, atomic single-use TTL'd code redemption).
 - `email-adapter.test.ts` — email deliver + link store.
-- `notifications-routes.test.ts` — list/begin/complete/status/unlink route wiring.
+- `notifications-routes.test.ts` — list/begin/complete/status/unlink route wiring, plus
+  the `POST /test` self-serve delivery check (delivered / not_linked / no-channels).
 - `escalate.test.ts` — deliver-once, idempotent re-run, no-channel mark, stale-never,
   fresh-not-yet.
 

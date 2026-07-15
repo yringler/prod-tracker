@@ -36,6 +36,7 @@ import {
   channelStatus,
   completeChannelSetup,
   listChannels,
+  sendTestNotification,
   unlinkChannel,
 } from './routes/notifications';
 import { resolve } from './notifications/registry';
@@ -138,6 +139,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   // Notification channels (self-scoped to ctx.accountId; vendor-agnostic — reached
   // via the registry). The public inbound webhook is handled above the auth gate.
   if (p === '/api/notifications/channels' && m === 'GET') return listChannels(ctx);
+  // Self-serve: deliver a test reminder to your own linked channels now (verifies the
+  // outbound send path that "Connected ✓" never exercises). Above the :channel regexes
+  // so the literal `test` segment can't be swallowed as a channel name.
+  if (p === '/api/notifications/test' && m === 'POST') return sendTestNotification(ctx);
   const setupMatch = p.match(/^\/api\/notifications\/([^/]+)\/setup$/);
   if (setupMatch && m === 'POST') return beginChannelSetup(ctx, decodeURIComponent(setupMatch[1]!));
   const completeMatch = p.match(/^\/api\/notifications\/([^/]+)\/complete$/);

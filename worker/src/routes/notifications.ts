@@ -13,7 +13,7 @@ import type {
 } from '@shared/notifications';
 import { type AuthedCtx, error, json, readJson } from '../http';
 import { errFields, log } from '../log';
-import type { NotifierAdapter } from '../notifications/contract';
+import type { NotificationPayload, NotifierAdapter } from '../notifications/contract';
 import { availableChannels, resolve } from '../notifications/registry';
 
 /** An adapter is available unless it explicitly reports its secrets are missing.
@@ -82,6 +82,49 @@ export async function channelStatus(ctx: AuthedCtx, channel: string): Promise<Re
   if (!adapter) return error(404, 'unknown channel');
   const status: LinkStatus = await adapter.getStatus(ctx.accountId);
   return json(status);
+}
+
+/** POST /api/notifications/test — deliver a synthetic reminder to the caller's OWN
+ *  linked channels right now, bypassing the escalation window. This is the only way to
+ *  verify the outbound send path end-to-end: linking ("Connected ✓") is just the
+ *  webhook's echoed reply and never exercises the bot credentials, so a wrong
+ *  ZULIP_API_KEY/BOT_EMAIL passes linking but fails every real reminder. Hard-scoped to
+ *  ctx.accountId (you can only DM yourself), so it's safe in prod. Reaches channels via
+ *  the registry seam only — no adapter import (eslint wall). Returns a per-channel result
+ *  so the exact outcome (delivered / not_linked / failed / unknown) is visible in the
+ *  HTTP response; deliver.ts additionally logs the vendor status/body on a failure. */
+export async function sendTestNotification(ctx: AuthedCtx): Promise<Response> {
+  const payload: NotificationPayload = {
+    title: 'Test notification from storypoint-tracker',
+    body: 'If you can read this, your notification channel is delivering correctly.',
+    deepLink: `${ctx.env.APP_ORIGIN}/tracker`,
+    urgency: 'normal',
+  };
+  const channels = await ctx.dao.getUserChannels(ctx.accountId);
+  const results: { channel: string; status: string; retryable?: boolean }[] = [];
+  for (const { channel } of channels) {
+    const adapter = resolve(ctx.env, channel);
+    if (!adapter) {
+      results.push({ channel, status: 'unknown_channel' });
+      continue;
+    }
+    try {
+      const r = await adapter.deliver({
+        userId: ctx.accountId,
+        payload,
+        idempotencyKey: `test:${ctx.accountId}:${Date.now()}`,
+      });
+      results.push(
+        r.status === 'failed'
+          ? { channel, status: r.status, retryable: r.retryable }
+          : { channel, status: r.status },
+      );
+    } catch (e) {
+      log.warn('sendTestNotification: adapter threw', { channel, ...errFields(e) });
+      results.push({ channel, status: 'threw' });
+    }
+  }
+  return json({ ok: true, channels: results });
 }
 
 /** DELETE /api/notifications/:channel — unlink. The route orchestrates BOTH halves:

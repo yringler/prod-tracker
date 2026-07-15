@@ -1,7 +1,8 @@
 // Zulip adapter: outbound delivery + setup/status/unlink, against real SQL (SqliteD1)
 // with a stubbed fetch. Mirrors pd-report.test.ts's fetch-stub style. Asserts the
-// form-urlencoded, Basic-auth, type=direct wire shape and the not_linked/retryable
-// contract — and that vendor content is composed only inside the adapter.
+// form-urlencoded, Basic-auth, type=private wire shape (the backward-compatible message
+// type older self-hosted servers require) and the not_linked/retryable contract — and
+// that vendor content is composed only inside the adapter.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../src/env';
 import { makeZulipAdapter } from '../src/notifications/adapters/zulip/adapter';
@@ -51,7 +52,7 @@ describe('zulip adapter — deliver', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('posts a form-encoded direct message with Basic auth after linking', async () => {
+  it('posts a form-encoded private (direct) message with Basic auth after linking', async () => {
     const fetchMock = okFetch();
     vi.stubGlobal('fetch', fetchMock);
     await saveLink(env, ALICE, ZULIP_UID, 'Alice A');
@@ -69,7 +70,7 @@ describe('zulip adapter — deliver', () => {
     expect(headers.Authorization).toBe('Basic ' + btoa('notify-bot@org.zulipchat.com:apikey'));
 
     const body = new URLSearchParams(init.body as string);
-    expect(body.get('type')).toBe('direct');
+    expect(body.get('type')).toBe('private');
     expect(body.get('to')).toBe(JSON.stringify([ZULIP_UID]));
     // The vendor string is composed inside the adapter (render.ts), not by the app.
     expect(body.get('content')).toContain('ABC-1 — Do the thing');
