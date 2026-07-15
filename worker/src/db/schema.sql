@@ -187,3 +187,26 @@ CREATE TABLE IF NOT EXISTS pd_report_state (
   account_id        TEXT PRIMARY KEY,
   last_reported_at  TEXT NOT NULL
 );
+
+-- Zulip adapter-owned tables. Accessed ONLY by
+-- worker/src/notifications/adapters/zulip/store.ts via env.DB — never by dao.ts.
+-- Present here for test/bootstrap parity only; the access boundary (eslint wall +
+-- env.DB-only in store.ts) is the real guarantee. Added 0006; keep in sync with
+-- migrations/0006_zulip_adapter.sql.
+CREATE TABLE IF NOT EXISTS zulip_links (
+  account_id    TEXT PRIMARY KEY,     -- our Atlassian account id
+  zulip_user_id TEXT NOT NULL,        -- the vendor address (opaque to the app)
+  full_name     TEXT,                 -- for the opaque display label
+  linked_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zulip_link_codes (
+  code        TEXT PRIMARY KEY,       -- unambiguous 6-char alphabet
+  account_id  TEXT NOT NULL,          -- BOUND at generation, not redemption
+  expires_at  TEXT NOT NULL,          -- ~15 min TTL
+  consumed_at TEXT                    -- single-use
+);
+CREATE TABLE IF NOT EXISTS zulip_link_attempts (
+  sender_id    TEXT NOT NULL,         -- zulip sender_id
+  attempted_at TEXT NOT NULL          -- for per-sender failed-attempt rate limiting
+);
+CREATE INDEX IF NOT EXISTS idx_zulip_attempts_sender ON zulip_link_attempts(sender_id, attempted_at);

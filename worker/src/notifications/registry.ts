@@ -8,6 +8,7 @@
 
 import type { Env } from '../env';
 import type { NotifierAdapter } from './contract';
+import { makeZulipAdapter } from './adapters/zulip/adapter';
 
 /**
  * Structural guard: a stale `channel` row (e.g. an adapter that was removed)
@@ -25,7 +26,9 @@ export function isNotifier(x: unknown): x is NotifierAdapter {
  * Per-channel adapter factories. Built lazily from `env` so secrets never live at
  * module scope. Empty in this scaffold; the feature agent adds entries.
  */
-const REGISTRY: Record<string, (env: Env) => NotifierAdapter> = {};
+const REGISTRY: Record<string, (env: Env) => NotifierAdapter> = {
+  zulip: (env) => makeZulipAdapter(env),
+};
 
 export function resolve(env: Env, channel: string): NotifierAdapter | null {
   const make = REGISTRY[channel];
