@@ -166,6 +166,11 @@ webhook.
 - **Adding a channel.** Implement `NotifierAdapter` under `adapters/<channel>/`,
   register it in `registry.ts`; do **not** add a new `SetupStep` kind or touch
   `cron/escalate.ts` (the email adapter proved the contract by needing neither).
+- **Availability gating.** An adapter reports whether its required env/secrets are
+  present via the optional `isConfigured()` (contract.ts); `routes/notifications.ts`
+  hides unconfigured channels from the list and 404s their setup routes, so a channel
+  that can't deliver is never advertised. Implement it for any adapter that needs
+  secrets (email → `EMAIL_API_KEY`+`EMAIL_FROM`; zulip → its site/bot/api/webhook set).
 
 ## Database
 

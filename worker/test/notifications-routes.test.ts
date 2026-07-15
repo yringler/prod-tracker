@@ -28,6 +28,8 @@ beforeEach(() => {
   dao = new Dao(db);
   env = {
     DB: db,
+    EMAIL_FROM: 'notify@org.com',
+    EMAIL_API_KEY: 'ek',
     ZULIP_SITE: 'https://org.zulipchat.com',
     ZULIP_BOT_EMAIL: 'notify-bot@org.zulipchat.com',
     ZULIP_API_KEY: 'apikey',
@@ -67,6 +69,23 @@ describe('notification routes', () => {
     const names = body.channels.map((c) => c.descriptor.channel);
     expect(names).toContain('email'); // healthy channel still listed
     expect(names).not.toContain('zulip'); // failing channel skipped, not fatal
+  });
+
+  it('hides an unconfigured channel and 404s its setup', async () => {
+    // Drop the email transport secret: the channel can't deliver, so it must not be
+    // advertised in the list, and its setup routes must 404 (no connecting a channel
+    // that can never send).
+    const unconfigured = { ...env, EMAIL_API_KEY: '' } as unknown as Env;
+    const uctx: AuthedCtx = { accountId: ALICE, cloudId: CLOUD, sid: 'sid', dao, env: unconfigured };
+
+    const res = await listChannels(uctx);
+    const body = (await res.json()) as ChannelListResponse;
+    const names = body.channels.map((c) => c.descriptor.channel);
+    expect(names).toContain('zulip'); // still configured
+    expect(names).not.toContain('email'); // secret missing → hidden
+
+    const setup = await beginChannelSetup(uctx, 'email');
+    expect(setup.status).toBe(404);
   });
 
   it('reports not-linked for an account with no link', async () => {

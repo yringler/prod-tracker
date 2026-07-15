@@ -111,6 +111,14 @@ describe('zulip adapter — status / unlink / setup', () => {
     expect(await adapter.getStatus(ALICE)).toEqual({ linked: false });
   });
 
+  it('isConfigured requires the full site/bot/api/webhook secret set', () => {
+    expect(makeZulipAdapter(env).isConfigured!()).toBe(true);
+    for (const missing of ['ZULIP_SITE', 'ZULIP_BOT_EMAIL', 'ZULIP_API_KEY', 'ZULIP_WEBHOOK_TOKEN']) {
+      const partial = { ...env, [missing]: '' } as unknown as Env;
+      expect(makeZulipAdapter(partial).isConfigured!()).toBe(false);
+    }
+  });
+
   it('beginSetup mints a copyable /link command with an expiry', async () => {
     const adapter = makeZulipAdapter(env);
     const instr = await adapter.beginSetup(ALICE);

@@ -71,6 +71,16 @@ describe('email adapter', () => {
     expect([...availableChannels()].sort()).toEqual(['email', 'zulip']);
   });
 
+  it('isConfigured requires both the API key and a From address', () => {
+    expect(makeEmailAdapter(env).isConfigured!()).toBe(true);
+    expect(makeEmailAdapter({ ...env, EMAIL_API_KEY: '' } as unknown as Env).isConfigured!()).toBe(
+      false,
+    );
+    expect(makeEmailAdapter({ ...env, EMAIL_FROM: '' } as unknown as Env).isConfigured!()).toBe(
+      false,
+    );
+  });
+
   it('deliver is not_linked before save, delivered after, with a masked status label', async () => {
     const fetchMock = okFetch();
     vi.stubGlobal('fetch', fetchMock);

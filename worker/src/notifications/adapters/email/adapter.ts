@@ -39,6 +39,12 @@ export function makeEmailAdapter(env: Env): NotifierAdapter {
       return { channel: 'email', displayName: 'Email' };
     },
 
+    // Ready only when the transport can actually send: an API key to authenticate the
+    // send and a From: address to send it from. Absent either → the app hides Email.
+    isConfigured(): boolean {
+      return Boolean(env.EMAIL_API_KEY && env.EMAIL_FROM);
+    },
+
     async beginSetup(): Promise<SetupInstructions> {
       return {
         steps: [

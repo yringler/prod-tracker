@@ -43,6 +43,10 @@ export interface InboundContext {
 
 export interface NotifierAdapter {
   describe(): Promise<NotifierDescriptor>;
+  /** Optional: whether this adapter's required env/secrets are present. Absent →
+   *  treated as always-configured (back-compat). The app skips channels that report
+   *  false, so a channel that cannot deliver is never advertised. */
+  isConfigured?(): boolean;
   beginSetup(userId: string): Promise<SetupInstructions>;
   getStatus(userId: string): Promise<LinkStatus>;
   deliver(req: DeliverRequest): Promise<DeliverResult>;

@@ -28,6 +28,16 @@ export function makeZulipAdapter(env: Env): NotifierAdapter {
       return { channel: 'zulip', displayName: 'Zulip' };
     },
 
+    // Ready only when the channel is fully usable end-to-end: the three send secrets
+    // (site, bot email, api key) AND the webhook token the inbound `/link` flow
+    // verifies — without any of them linking or delivery can't work, so the app
+    // hides Zulip.
+    isConfigured(): boolean {
+      return Boolean(
+        env.ZULIP_SITE && env.ZULIP_BOT_EMAIL && env.ZULIP_API_KEY && env.ZULIP_WEBHOOK_TOKEN,
+      );
+    },
+
     async beginSetup(userId: string): Promise<SetupInstructions> {
       const code = await mintCode(env, userId, CODE_TTL_MS);
       // Compute the same TTL the store persisted so the UI can show an expiry hint.

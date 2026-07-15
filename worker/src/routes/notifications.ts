@@ -13,7 +13,14 @@ import type {
 } from '@shared/notifications';
 import { type AuthedCtx, error, json, readJson } from '../http';
 import { errFields, log } from '../log';
+import type { NotifierAdapter } from '../notifications/contract';
 import { availableChannels, resolve } from '../notifications/registry';
+
+/** An adapter is available unless it explicitly reports its secrets are missing.
+ *  Undefined `isConfigured` (adapters that don't gate) → treated as configured. */
+function configured(adapter: NotifierAdapter): boolean {
+  return adapter.isConfigured?.() !== false;
+}
 
 /** GET /api/notifications/channels — descriptor + link status for each channel,
  *  for the authed account only. */
@@ -22,6 +29,7 @@ export async function listChannels(ctx: AuthedCtx): Promise<Response> {
   for (const channel of availableChannels()) {
     const adapter = resolve(ctx.env, channel);
     if (!adapter) continue; // config drift: a registered key that failed the guard
+    if (!configured(adapter)) continue; // secrets absent → can't deliver, don't advertise
     try {
       const descriptor = await adapter.describe();
       const status = await adapter.getStatus(ctx.accountId);
@@ -40,7 +48,7 @@ export async function listChannels(ctx: AuthedCtx): Promise<Response> {
 /** POST /api/notifications/:channel/setup — mint live setup instructions. */
 export async function beginChannelSetup(ctx: AuthedCtx, channel: string): Promise<Response> {
   const adapter = resolve(ctx.env, channel);
-  if (!adapter) return error(404, 'unknown channel');
+  if (!adapter || !configured(adapter)) return error(404, 'unknown channel');
   const instructions: BeginSetupResponse = await adapter.beginSetup(ctx.accountId);
   return json(instructions);
 }
@@ -55,7 +63,7 @@ export async function completeChannelSetup(
   channel: string,
 ): Promise<Response> {
   const adapter = resolve(ctx.env, channel);
-  if (!adapter || !adapter.submitSetup) return error(404, 'unknown channel');
+  if (!adapter || !adapter.submitSetup || !configured(adapter)) return error(404, 'unknown channel');
   const body = await readJson<SetupSubmission>(req);
   const fields = body && typeof body.fields === 'object' && body.fields ? body.fields : {};
   const status = await adapter.submitSetup(ctx.accountId, { fields });
