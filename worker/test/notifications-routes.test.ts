@@ -54,6 +54,21 @@ describe('notification routes', () => {
     expect(email?.status).toEqual({ linked: false });
   });
 
+  it('skips a failing adapter instead of blanking the whole list', async () => {
+    await saveLink(env, ALICE, '4242', 'Alice A');
+    // Simulate the real-world cause of "no channels": an unmigrated D1 where an
+    // adapter's table is missing, so its getStatus throws. The route must degrade
+    // to the healthy channels, not 500 the whole list.
+    await env.DB.prepare('DROP TABLE zulip_links').run();
+
+    const res = await listChannels(ctxFor(ALICE));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ChannelListResponse;
+    const names = body.channels.map((c) => c.descriptor.channel);
+    expect(names).toContain('email'); // healthy channel still listed
+    expect(names).not.toContain('zulip'); // failing channel skipped, not fatal
+  });
+
   it('reports not-linked for an account with no link', async () => {
     const res = await channelStatus(ctxFor(ALICE), 'zulip');
     expect(await res.json()).toEqual({ linked: false });

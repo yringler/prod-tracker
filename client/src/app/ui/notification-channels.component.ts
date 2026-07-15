@@ -39,6 +39,11 @@ interface OpenSetup {
 
     @if (loading()) {
       <wa-spinner></wa-spinner>
+    } @else if (error()) {
+      <p class="muted" style="margin:.5rem 0; display:flex; gap:8px; align-items:center">
+        Couldn't load notification channels.
+        <wa-button size="small" appearance="outlined" (click)="refresh()">Retry</wa-button>
+      </p>
     } @else {
       @for (item of channels(); track item.descriptor.channel) {
         <div class="row" style="gap:8px; align-items:center; margin-bottom:8px">
@@ -140,6 +145,7 @@ export class NotificationChannelsComponent {
 
   channels = signal<ChannelListItem[]>([]);
   loading = signal(true);
+  error = signal(false);
   setup = signal<OpenSetup | null>(null);
 
   private poll: Subscription | null = null;
@@ -149,13 +155,21 @@ export class NotificationChannelsComponent {
     this.destroyRef.onDestroy(() => this.stopPolling());
   }
 
-  private refresh(): void {
+  // Public so the Retry button can re-run it. Distinguishes a failed request (show
+  // an error + Retry) from a genuinely empty list ("no channels available"), instead
+  // of collapsing both into the misleading empty message.
+  refresh(): void {
+    this.loading.set(true);
+    this.error.set(false);
     this.api.notificationChannels().subscribe({
       next: (res) => {
         this.channels.set(res.channels);
         this.loading.set(false);
       },
-      error: () => this.loading.set(false),
+      error: () => {
+        this.error.set(true);
+        this.loading.set(false);
+      },
     });
   }
 

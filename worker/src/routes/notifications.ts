@@ -12,6 +12,7 @@ import type {
   SetupSubmission,
 } from '@shared/notifications';
 import { type AuthedCtx, error, json, readJson } from '../http';
+import { errFields, log } from '../log';
 import { availableChannels, resolve } from '../notifications/registry';
 
 /** GET /api/notifications/channels — descriptor + link status for each channel,
@@ -21,9 +22,16 @@ export async function listChannels(ctx: AuthedCtx): Promise<Response> {
   for (const channel of availableChannels()) {
     const adapter = resolve(ctx.env, channel);
     if (!adapter) continue; // config drift: a registered key that failed the guard
-    const descriptor = await adapter.describe();
-    const status = await adapter.getStatus(ctx.accountId);
-    channels.push({ descriptor, status });
+    try {
+      const descriptor = await adapter.describe();
+      const status = await adapter.getStatus(ctx.accountId);
+      channels.push({ descriptor, status });
+    } catch (e) {
+      // One misconfigured adapter (e.g. an unmigrated table so getStatus throws)
+      // must NOT blank the whole list — skip it and log so it's visible in
+      // `wrangler tail`. The healthy channels still render.
+      log.warn('listChannels: adapter unavailable, skipping', { channel, ...errFields(e) });
+    }
   }
   const body: ChannelListResponse = { channels };
   return json(body);
