@@ -58,6 +58,29 @@ export function isStaleTransition(transitionedAt: string, now: number = Date.now
   return now - t > PENDING_MAX_AGE_MS;
 }
 
+/**
+ * How long after a pending prompt appears we wait before escalating it to another
+ * notification channel. Coarser than the design doc's ~10 min is fine — the
+ * 3-minute poll cron is the resolution floor anyway.
+ */
+export const ESCALATION_DELAY_MS = 10 * 60 * 1000;
+
+/**
+ * The `[notBefore, dueBefore)` window of `created_at` values ripe for escalation
+ * at `now`. `dueBefore = now − ESCALATION_DELAY_MS` (waited long enough);
+ * `notBefore = now − PENDING_MAX_AGE_MS` (don't force-escalate a post-outage
+ * backlog of stale rows). UTCDate keeps the ISO output timezone-stable regardless
+ * of the runtime's local zone.
+ */
+export function escalationWindow(
+  now: number = Date.now(),
+): { dueBeforeIso: string; notBeforeIso: string } {
+  return {
+    dueBeforeIso: new UTCDate(now - ESCALATION_DELAY_MS).toISOString(),
+    notBeforeIso: new UTCDate(now - PENDING_MAX_AGE_MS).toISOString(),
+  };
+}
+
 /** Compare two numeric-string changelog ids. Jira ids are monotonic per issue. */
 export function changelogIdGreater(a: string, b: string | null): boolean {
   if (b === null) return true;

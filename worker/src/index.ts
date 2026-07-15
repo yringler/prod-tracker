@@ -3,6 +3,7 @@ import type { Env } from './env';
 import { authenticate, error, requireAdmin } from './http';
 import { runPoll } from './cron/poller';
 import { reportPersonalData } from './cron/pd-report';
+import { escalate } from './cron/escalate';
 import { log, errFields } from './log';
 import {
   authCallback,
@@ -62,6 +63,13 @@ export default {
       await reportPersonalData(env, dao);
     } catch (e) {
       tick.error('pd-report failed', errFields(e));
+    }
+    // Escalate un-acted pending prompts to fallback channels. Isolated so it can
+    // never abort the poll or the pd-report job.
+    try {
+      await escalate(env, dao, tick);
+    } catch (e) {
+      tick.error('escalate failed', errFields(e));
     }
     tick.info('tick: done', { ms: Date.now() - startedAt });
   },

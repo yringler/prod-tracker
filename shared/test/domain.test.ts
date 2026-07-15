@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ESCALATION_DELAY_MS,
   FALLBACK_CLAIM_CEILING,
   PENDING_MAX_AGE_MS,
   changelogIdGreater,
   claimCeiling,
   computeRatio,
+  escalationWindow,
   isDoneTransition,
   isStaleTransition,
   isTrackerToday,
@@ -30,6 +32,23 @@ describe('weekStartOf', () => {
   it('crosses the year boundary correctly', () => {
     // 2027-01-01 is a Friday → its week’s Monday is 2026-12-28.
     expect(weekStartOf('2027-01-01T00:00:00.000Z')).toBe('2026-12-28');
+  });
+});
+
+describe('escalationWindow', () => {
+  it('has a 10-minute escalation delay', () => {
+    expect(ESCALATION_DELAY_MS).toBe(600000);
+  });
+
+  it('brackets created_at values: due = now−10m, notBefore = now−24h', () => {
+    const now = Date.parse('2026-06-15T12:00:00.000Z');
+    const { dueBeforeIso, notBeforeIso } = escalationWindow(now);
+    expect(dueBeforeIso).toBe('2026-06-15T11:50:00.000Z'); // now − 10m
+    expect(notBeforeIso).toBe('2026-06-14T12:00:00.000Z'); // now − 24h
+    expect(Date.parse(dueBeforeIso)).toBe(now - ESCALATION_DELAY_MS);
+    expect(Date.parse(notBeforeIso)).toBe(now - PENDING_MAX_AGE_MS);
+    // A ripe row sits inside [notBefore, dueBefore).
+    expect(Date.parse(notBeforeIso)).toBeLessThan(Date.parse(dueBeforeIso));
   });
 });
 
