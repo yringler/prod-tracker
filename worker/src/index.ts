@@ -31,6 +31,7 @@ import { claimedTrends, clearPending, getPending, myRatings, submitRating } from
 import { updateMySettings } from './routes/settings';
 import { subscribe, vapidPublicKey } from './routes/push';
 import { isDevEnv, seedPending } from './routes/dev';
+import { resolve } from './notifications/registry';
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -86,6 +87,23 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/auth/logout' && m === 'POST') return authLogout(req, env, dao);
   if (p === '/api/me' && m === 'GET') return me(req, env, dao);
   if (p === '/api/push/vapid-public-key' && m === 'GET') return vapidPublicKey(env);
+
+  // Public inbound notification webhooks (e.g. Zulip outgoing-webhook link flow).
+  // Above the auth gate — the request carries no session, only the adapter's own
+  // shared secret, which the adapter verifies. index.ts is the single sanctioned
+  // webhook-wiring point (not covered by the adapter wall); it reaches the adapter
+  // ONLY via the registry and hands it the neutral registerChannel callback so a
+  // successful link writes user_channels without the adapter touching dao.
+  const whMatch = p.match(/^\/api\/notifications\/([^/]+)\/webhook$/);
+  if (whMatch && m === 'POST') {
+    const adapter = resolve(env, decodeURIComponent(whMatch[1]!));
+    if (adapter?.handleInbound) {
+      return adapter.handleInbound(req, {
+        registerChannel: (u, c, l) => dao.registerChannel(u, c, l),
+      });
+    }
+    return error(404, 'not found');
+  }
 
   // --- Authenticated routes ---
   const ctx = await authenticate(req, env, dao);

@@ -8,10 +8,16 @@
 
 import type { SetupInstructions, LinkStatus, NotifierDescriptor } from '@shared/notifications';
 import type { Env } from '../../../env';
-import type { DeliverRequest, DeliverResult, NotifierAdapter } from '../../contract';
+import type {
+  DeliverRequest,
+  DeliverResult,
+  InboundContext,
+  NotifierAdapter,
+} from '../../contract';
 import { sendZulipDM } from './deliver';
 import { renderZulip } from './render';
 import { getLink, mintCode, deleteLink } from './store';
+import { handleZulipInbound } from './webhook';
 
 /** Link-code TTL: ~15 min, matching the settings-panel copy in the design doc. */
 const CODE_TTL_MS = 15 * 60 * 1000;
@@ -59,6 +65,10 @@ export function makeZulipAdapter(env: Env): NotifierAdapter {
 
     async unlink(userId: string): Promise<void> {
       await deleteLink(env, userId);
+    },
+
+    handleInbound(req: Request, ctx: InboundContext): Promise<Response> {
+      return handleZulipInbound(env, req, ctx);
     },
   };
 }

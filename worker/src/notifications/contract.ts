@@ -32,10 +32,22 @@ export type DeliverResult =
   | { status: 'not_linked' } // fall through to the next channel
   | { status: 'failed'; retryable: boolean };
 
+/** Neutral callback the app hands an adapter's inbound handler so a successful link
+ *  registers the channel app-side. The adapter passes its OWN channel name and an
+ *  opaque label; it never imports dao/registry (the eslint wall) and never learns
+ *  the app's storage shape. */
+export interface InboundContext {
+  registerChannel(userId: string, channel: string, label: string): Promise<void>;
+}
+
 export interface NotifierAdapter {
   describe(): Promise<NotifierDescriptor>;
   beginSetup(userId: string): Promise<SetupInstructions>;
   getStatus(userId: string): Promise<LinkStatus>;
   deliver(req: DeliverRequest): Promise<DeliverResult>;
   unlink(userId: string): Promise<void>;
+  /** Optional: handle a public inbound webhook (e.g. a Zulip outgoing-webhook). The
+   *  app resolves the adapter by channel and calls this ABOVE the auth gate; the
+   *  adapter verifies its own shared secret and returns the Response. */
+  handleInbound?(req: Request, ctx: InboundContext): Promise<Response>;
 }
