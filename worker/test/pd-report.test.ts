@@ -69,6 +69,8 @@ describe('accountsForReport', () => {
       sprintId: 10,
     });
     await dao.saveSubscription('acct-dave', 'https://push/1', 'p', 'a');
+    // An account that has ONLY linked a notification channel is still reportable.
+    await dao.registerChannel('acct-erin', 'zulip', '@erin');
     // An already-anonymized rating must NOT be reported.
     await dao.insertRating({
       cloudId: CLOUD,
@@ -82,7 +84,7 @@ describe('accountsForReport', () => {
 
     const rows = await dao.accountsForReport();
     const ids = rows.map((r) => r.accountId).sort();
-    expect(ids).toEqual([ALICE, 'acct-dave', BOB, OWNER].sort());
+    expect(ids).toEqual([ALICE, 'acct-dave', 'acct-erin', BOB, OWNER].sort());
     expect(ids).not.toContain('erased:dead-beef');
 
     // Alice's updatedAt is her stored last_seen_at; the token-only account falls
@@ -172,6 +174,7 @@ describe('eraseAccount', () => {
       transitionedAt: '2026-05-10T00:00:00.000Z',
     });
     await dao.saveSubscription(ALICE, 'https://push/1', 'p', 'a');
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
     const sid = await dao.createSession(ALICE, CLOUD, 3600);
     await dao.markReported([ALICE], new Date().toISOString());
 
@@ -187,6 +190,7 @@ describe('eraseAccount', () => {
     expect(await dao.teamAt(ALICE, '2026-06-01T00:00:00.000Z')).toBeNull();
     expect(await dao.getPendingForOwner(ALICE)).toHaveLength(0);
     expect(await dao.subscriptionsFor(ALICE)).toHaveLength(0);
+    expect(await dao.getUserChannels(ALICE)).toHaveLength(0);
     expect(await dao.getSession(sid)).toBeNull();
     expect(await dao.getRatingsForOwner(ALICE)).toHaveLength(0); // rewritten away
     // user row gone -> display name falls back to the (non-name) accountId.

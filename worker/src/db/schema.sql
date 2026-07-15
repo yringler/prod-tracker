@@ -135,7 +135,11 @@ CREATE TABLE IF NOT EXISTS pending_ratings (
   to_status       TEXT NOT NULL,
   changelog_id    TEXT NOT NULL,
   transitioned_at TEXT NOT NULL,
-  created_at      TEXT NOT NULL
+  created_at      TEXT NOT NULL,
+  -- The instant the escalation cron delivered this pending to a fallback channel,
+  -- so a pending is escalated at most once. NULL = not yet escalated. Added 0005;
+  -- keep in sync with migrations/0005_notification_channels.sql.
+  escalated_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_account ON pending_ratings(account_id);
 
@@ -146,6 +150,19 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   auth        TEXT NOT NULL,
   PRIMARY KEY (account_id, endpoint)
 );
+
+-- App-owned notification-channel registry: account_id -> [channel enum + opaque
+-- label]. The app stores ONLY the enum + a display label it renders but never
+-- parses; the vendor address (e.g. a zulip_user_id) lives in the adapter's own
+-- tables. Added 0005; keep in sync with migrations/0005_notification_channels.sql.
+CREATE TABLE IF NOT EXISTS user_channels (
+  account_id  TEXT NOT NULL,
+  channel     TEXT NOT NULL,          -- runtime enum: 'zulip', 'email', ...
+  label       TEXT NOT NULL,          -- opaque display string ("Connected as @yehuda")
+  linked_at   TEXT NOT NULL,          -- ISO UTC
+  PRIMARY KEY (account_id, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_user_channels_account ON user_channels(account_id);
 
 CREATE TABLE IF NOT EXISTS config (
   cloud_id              TEXT PRIMARY KEY,

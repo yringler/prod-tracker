@@ -47,6 +47,19 @@ export interface PendingRow {
   transitionedAt: string;
 }
 
+export interface UserChannel {
+  channel: string;
+  label: string;
+}
+
+export interface EscalationCandidate {
+  pendingId: string;
+  accountId: string;
+  issueKey: string;
+  title: string;
+  url: string;
+}
+
 export interface DoneEventInput {
   cloudId: string;
   issueKey: string;
@@ -647,6 +660,87 @@ export class Dao {
       .run();
   }
 
+  // --- Notification channels (app-owned registry) ----------------------------
+  //
+  // The app stores ONLY the channel enum + an opaque label it renders but never
+  // parses. The vendor address (e.g. a zulip_user_id) lives inside the adapter's
+  // own tables — the app never learns it. These reads are self-scoped by
+  // account_id, like every other per-account read here.
+
+  /** Idempotent upsert on (account_id, channel). Called from the app layer only
+   *  (index.ts webhook wiring / routes), never from an adapter. */
+  async registerChannel(accountId: string, channel: string, label: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO user_channels (account_id, channel, label, linked_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id, channel) DO UPDATE SET
+           label = excluded.label, linked_at = excluded.linked_at`,
+      )
+      .bind(accountId, channel, label, now())
+      .run();
+  }
+
+  async unregisterChannel(accountId: string, channel: string): Promise<void> {
+    await this.db
+      .prepare(`DELETE FROM user_channels WHERE account_id = ? AND channel = ?`)
+      .bind(accountId, channel)
+      .run();
+  }
+
+  /** Channels this account has linked. Self-scoped. Used by escalation + the list route. */
+  async getUserChannels(accountId: string): Promise<UserChannel[]> {
+    const { results } = await this.db
+      .prepare(`SELECT channel, label FROM user_channels WHERE account_id = ? ORDER BY channel`)
+      .bind(accountId)
+      .all<{ channel: string; label: string }>();
+    return results.map((r) => ({ channel: r.channel, label: r.label }));
+  }
+
+  // --- Escalation state ------------------------------------------------------
+
+  /** Pending prompts a user has NOT acted on (row still exists) that are ripe for
+   *  escalation: created before `dueBeforeIso` (past the delay) but after `notBeforeIso`
+   *  (so a backlog after downtime isn't force-escalated), and not already escalated.
+   *  A surviving pending_ratings row IS the "did not act" signal (rating deletes it). */
+  async pendingDueForEscalation(
+    dueBeforeIso: string,
+    notBeforeIso: string,
+  ): Promise<EscalationCandidate[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT pending_id, account_id, issue_key, title, url FROM pending_ratings
+         WHERE escalated_at IS NULL AND created_at <= ? AND created_at > ?
+         ORDER BY created_at`,
+      )
+      .bind(dueBeforeIso, notBeforeIso)
+      .all<{
+        pending_id: string;
+        account_id: string;
+        issue_key: string;
+        title: string;
+        url: string;
+      }>();
+    return results.map((r) => ({
+      pendingId: r.pending_id,
+      accountId: r.account_id,
+      issueKey: r.issue_key,
+      title: r.title,
+      url: r.url,
+    }));
+  }
+
+  /** Mark rows escalated (at most once). Batched like markReported(). */
+  async markEscalated(pendingIds: string[], atIso: string): Promise<void> {
+    if (pendingIds.length === 0) return;
+    await this.db.batch(
+      pendingIds.map((id) =>
+        this.db
+          .prepare(`UPDATE pending_ratings SET escalated_at = ? WHERE pending_id = ?`)
+          .bind(atIso, id),
+      ),
+    );
+  }
+
   // --- Sessions --------------------------------------------------------------
 
   async createSession(accountId: string, cloudId: string, ttlSeconds: number): Promise<string> {
@@ -713,6 +807,12 @@ export class Dao {
       ['done_events', 'account_id'],
       ['pending_ratings', 'account_id'],
       ['push_subscriptions', 'account_id'],
+      // An account that has only linked a notification channel is still reportable.
+      // Adapter-owned zulip_*/email_links are NOT listed here on purpose: linking
+      // always writes user_channels for the same account_id (so the account is
+      // already covered), and keeping vendor table names out of dao preserves
+      // "the app never learns what a zulip_user_id is."
+      ['user_channels', 'account_id'],
       ['sessions', 'account_id'],
     ];
     const ids = new Set<string>();
@@ -788,6 +888,9 @@ export class Dao {
       this.db.prepare(`DELETE FROM team_memberships  WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM pending_ratings   WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM push_subscriptions WHERE account_id = ?`).bind(accountId),
+      // Adapter-owned zulip_*/email_links rows are erased separately, via the
+      // registry unlink seam (routes/notifications), not from here.
+      this.db.prepare(`DELETE FROM user_channels     WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM sessions          WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM pd_report_state   WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`UPDATE ratings     SET rater_account_id = ? WHERE rater_account_id = ?`).bind(pseudonym, accountId),

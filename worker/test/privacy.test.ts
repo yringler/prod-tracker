@@ -152,6 +152,31 @@ describe('minimum-team-size floor — tiny teams expose no aggregate at all', ()
   });
 });
 
+describe('notification channels — self-scoped', () => {
+  it('returns only the owner’s channels and clears them on erase', async () => {
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    await dao.registerChannel(BOB, 'zulip', '@bob');
+
+    const aliceChannels = await dao.getUserChannels(ALICE);
+    expect(aliceChannels).toEqual([{ channel: 'zulip', label: '@alice' }]);
+    // Never leaks Bob's channel or label.
+    expect(JSON.stringify(aliceChannels)).not.toContain('@bob');
+
+    await dao.eraseAccount(ALICE);
+    expect(await dao.getUserChannels(ALICE)).toEqual([]);
+    // Bob's link is untouched by Alice's erasure.
+    expect(await dao.getUserChannels(BOB)).toEqual([{ channel: 'zulip', label: '@bob' }]);
+  });
+
+  it('upserts on (account_id, channel) rather than accumulating rows', async () => {
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    await dao.registerChannel(ALICE, 'zulip', '@alice-renamed');
+    expect(await dao.getUserChannels(ALICE)).toEqual([
+      { channel: 'zulip', label: '@alice-renamed' },
+    ]);
+  });
+});
+
 describe('claimed-trends — same personal/team split', () => {
   const ANY = '2000-01-01T00:00:00.000Z';
   const FUTURE = '2999-01-01T00:00:00.000Z';
