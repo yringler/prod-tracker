@@ -46,5 +46,59 @@ module.exports = {
         ],
       },
     },
+    {
+      // Dependency arrows point inward. A notification adapter is a vendor-isolated
+      // vertical slice: it may import @shared/*, the neutral contract, and files in
+      // its OWN adapter directory — never app internals, never a sibling adapter,
+      // never the registry (the registry imports adapters, not the reverse).
+      files: ['worker/src/notifications/adapters/**/*.ts'],
+      rules: {
+        'no-restricted-imports': [
+          'error',
+          {
+            patterns: [
+              {
+                group: [
+                  '**/routes/**',
+                  '**/cron/**',
+                  '**/db/dao',
+                  '**/db/dao.*',
+                  '**/notifications/registry',
+                  '**/index',
+                  '@worker/*',
+                ],
+                message:
+                  'notification adapters are vendor-isolated: import only @shared/*, the neutral contract, and files inside your own adapter directory — never app internals (routes/cron/dao/router) or the registry.',
+              },
+              {
+                group: ['**/notifications/adapters/*/**'],
+                message:
+                  'adapters must not import sibling adapters — each adapter is a self-contained vertical slice. Communicate only through the neutral contract.',
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      // App code (routes + cron) reaches notification channels ONLY through the
+      // registry seam — never by deep-importing adapter internals. This keeps the
+      // "app never learns what a zulip_user_id is" invariant CI-enforced.
+      files: ['worker/src/routes/**/*.ts', 'worker/src/cron/**/*.ts'],
+      rules: {
+        'no-restricted-imports': [
+          'error',
+          {
+            patterns: [
+              {
+                group: ['**/notifications/adapters/**'],
+                message:
+                  'app code must reach notification channels via worker/src/notifications/registry — never deep-import an adapter’s internals.',
+              },
+            ],
+          },
+        ],
+      },
+    },
   ],
 };

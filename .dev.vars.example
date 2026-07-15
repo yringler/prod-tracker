@@ -5,4 +5,10 @@ JIRA_CLIENT_SECRET=
 # Generate with: npx web-push generate-vapid-keys  (then base64url, no padding)
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
+# Zulip adapter secrets (the two ZULIP_ *vars* — SITE, BOT_EMAIL — live in
+# wrangler.toml [vars], not here). Get the API key from Zulip: Settings → Bots →
+# your Generic bot. ZULIP_WEBHOOK_TOKEN is the shared secret you set on the
+# Outgoing-webhook bot and verify on the inbound route.
+ZULIP_API_KEY=
+ZULIP_WEBHOOK_TOKEN=
 APP_ORIGIN = "http://localhost:8787"
