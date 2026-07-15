@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../src/env';
 import { makeZulipAdapter } from '../src/notifications/adapters/zulip/adapter';
-import { saveLink } from '../src/notifications/adapters/zulip/store';
+import { mintCode, redeemCode, saveLink } from '../src/notifications/adapters/zulip/store';
 import type { NotificationPayload } from '../src/notifications/contract';
 import { SqliteD1 } from './support/sqlite-d1';
 
@@ -121,5 +121,26 @@ describe('zulip adapter — status / unlink / setup', () => {
       expect(copyable.value).toMatch(/^\/link [A-Z0-9]{6}$/);
       expect(copyable.expiresAt).toBeGreaterThan(Date.now());
     }
+  });
+});
+
+describe('zulip link codes — redemption', () => {
+  it('double-redeem fails: the second redemption returns null', async () => {
+    const code = await mintCode(env, ALICE, 60_000);
+    expect(await redeemCode(env, code)).toEqual({ accountId: ALICE });
+    expect(await redeemCode(env, code)).toBeNull();
+  });
+
+  it('race — exactly one winner across concurrent redemptions', async () => {
+    const code = await mintCode(env, ALICE, 60_000);
+    const [a, b] = await Promise.all([redeemCode(env, code), redeemCode(env, code)]);
+    const winners = [a, b].filter(Boolean);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]).toEqual({ accountId: ALICE });
+  });
+
+  it('expired code fails', async () => {
+    const code = await mintCode(env, ALICE, -1);
+    expect(await redeemCode(env, code)).toBeNull();
   });
 });

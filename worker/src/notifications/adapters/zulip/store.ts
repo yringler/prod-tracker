@@ -73,24 +73,23 @@ export async function mintCode(env: Env, accountId: string, ttlMs: number): Prom
   return code;
 }
 
-/** Redeem a code: must be unexpired + unconsumed. Marks it consumed and returns
- *  the bound account. Null if the code is unknown, expired, or already used. */
+/** Redeem a code: must be unexpired + unconsumed. Atomically marks it consumed and
+ *  returns the bound account. Null if the code is unknown, expired, or already used.
+ *  The consume + guards are one statement (conditional CAS) so two concurrent
+ *  webhook redemptions of the same code can't both win. */
 export async function redeemCode(
   env: Env,
   code: string,
 ): Promise<{ accountId: string } | null> {
+  const now = nowIso();
   const r = await env.DB.prepare(
-    `SELECT account_id, expires_at, consumed_at FROM zulip_link_codes WHERE code = ?`,
+    `UPDATE zulip_link_codes SET consumed_at = ?
+       WHERE code = ? AND consumed_at IS NULL AND expires_at > ?
+       RETURNING account_id`,
   )
-    .bind(code)
-    .first<{ account_id: string; expires_at: string; consumed_at: string | null }>();
-  if (!r) return null;
-  if (r.consumed_at !== null) return null;
-  if (Date.parse(r.expires_at) < Date.now()) return null;
-  await env.DB.prepare(`UPDATE zulip_link_codes SET consumed_at = ? WHERE code = ?`)
-    .bind(nowIso(), code)
-    .run();
-  return { accountId: r.account_id };
+    .bind(now, code, now)
+    .first<{ account_id: string }>();
+  return r ? { accountId: r.account_id } : null;
 }
 
 // --- Failed-attempt rate limiting (per sender_id) ---------------------------
