@@ -3,6 +3,7 @@ import { MAX_DAILY_GOAL } from '@shared/domain';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
 import { AvatarComponent } from '../ui/avatar.component';
+import { NotificationChannelsComponent } from '../ui/notification-channels.component';
 
 // Personal settings. Currently just the daily goal that drives the tracker's
 // goal-progress panel; the profile row at the top is the destination the header
@@ -10,7 +11,7 @@ import { AvatarComponent } from '../ui/avatar.component';
 @Component({
   selector: 'sp-settings',
   standalone: true,
-  imports: [AvatarComponent],
+  imports: [AvatarComponent, NotificationChannelsComponent],
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     <h2>Settings</h2>
@@ -68,6 +69,10 @@ import { AvatarComponent } from '../ui/avatar.component';
             Milestones: {{ quarters(g) }}
           </p>
         }
+      </div>
+
+      <div class="panel">
+        <sp-notification-channels />
       </div>
     }
   `,
