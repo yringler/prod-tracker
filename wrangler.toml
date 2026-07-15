@@ -53,6 +53,9 @@ APP_ORIGIN = "https://tracker.yehudardevelopment.com"
 OAUTH_REDIRECT_PATH = "/api/auth/callback"
 VAPID_SUBJECT = "mailto:admin@example.com"
 BOOTSTRAP_ADMIN_ACCOUNT_ID = "557058:fcacbb78-fa49-4419-beee-fe3f90526986"
+# ZULIP_SITE: base URL, NO trailing slash. The Zulip adapter builds request URLs
+# as `${ZULIP_SITE}/api/v1/messages` (worker/src/notifications/adapters/zulip/
+# deliver.ts), so a trailing slash yields a double slash (…org//api/v1/messages).
 ZULIP_SITE = "https://zulip.chabad.org"
 ZULIP_BOT_EMAIL = "trackerout-bot@zulip.chabad.org"
 EMAIL_FROM = "notify@yourorg.com"
