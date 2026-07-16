@@ -71,7 +71,9 @@ describe('zulip adapter — deliver', () => {
 
     const body = new URLSearchParams(init.body as string);
     expect(body.get('type')).toBe('private');
-    expect(body.get('to')).toBe(JSON.stringify([ZULIP_UID]));
+    // Numeric user id goes out as a JSON integer (`[4242]`, not `["4242"]`); Zulip reads
+    // string entries in `to` as email addresses ("Invalid email '4242'"), integers as ids.
+    expect(body.get('to')).toBe(JSON.stringify([Number(ZULIP_UID)]));
     // The vendor string is composed inside the adapter (render.ts), not by the app.
     expect(body.get('content')).toContain('ABC-1 — Do the thing');
     expect(body.get('content')).toContain(payload.deepLink);
