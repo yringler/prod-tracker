@@ -19,13 +19,16 @@ export async function sendZulipDM(
   recipient: string,
   content: string,
 ): Promise<SendResult> {
+  const n = Number(recipient);
+  const to = Number.isInteger(n) ? [n] : [recipient]
+
   const body = new URLSearchParams({
     // `private` is the backward-compatible message type: modern Zulip keeps it as an
     // alias for `direct`, while older self-hosted servers (like the one this deploys
     // against — the inbound webhook already tolerates the legacy `private_message`
     // trigger for the same reason) only accept `private` and reject `direct` with a 400.
     type: 'private',
-    to: JSON.stringify([recipient]), // JSON-encoded array, inside the form encoding
+    to: JSON.stringify(to), // JSON-encoded array, inside the form encoding
     content,
   });
 
