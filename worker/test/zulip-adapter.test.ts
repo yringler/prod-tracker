@@ -169,6 +169,30 @@ describe('zulip adapter — per-org deliver routing', () => {
     expect(r).toEqual({ status: 'failed', retryable: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('seeded row but SECRETS_KEY absent: failed{retryable:false}, no send', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', CLOUD); // CLOUD is seeded in beforeEach
+
+    const noKey = { DB: db } as unknown as Env; // SECRETS_KEY missing → can't decrypt
+    const adapter = makeZulipAdapter(noKey);
+    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    expect(r).toEqual({ status: 'failed', retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('row sealed under a DIFFERENT SECRETS_KEY: failed{retryable:false}, no send', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', CLOUD); // sealed under TEST_SECRETS_KEY
+
+    const wrongKey = btoa('ABCDEFGHABCDEFGHABCDEFGHABCDEFGH'); // 32 bytes, valid but wrong
+    const adapter = makeZulipAdapter({ DB: db, SECRETS_KEY: wrongKey } as unknown as Env);
+    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    expect(r).toEqual({ status: 'failed', retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('zulip adapter — status / unlink / setup', () => {

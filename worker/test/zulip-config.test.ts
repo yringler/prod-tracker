@@ -116,6 +116,26 @@ describe('configureZulipOrg', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects an http:// site (bot creds would go over the wire in cleartext)', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await configureZulipOrg(env, CLOUD, { ...FIELDS, site: 'http://org.zulipchat.com' }, ADMIN);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/https/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await storedRow(CLOUD)).toBeNull();
+  });
+
+  it('allows http:// for localhost (self-hosted dev Zulip)', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await configureZulipOrg(env, CLOUD, { ...FIELDS, site: 'http://localhost:9991' }, ADMIN);
+    expect(r).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces a Zulip credential rejection and persists nothing', async () => {
     vi.stubGlobal(
       'fetch',

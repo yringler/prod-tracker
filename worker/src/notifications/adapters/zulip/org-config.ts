@@ -46,8 +46,15 @@ export async function configureZulipOrg(
   } catch {
     return { ok: false, error: `"${site}" is not a valid URL — expected e.g. https://yourorg.zulipchat.com` };
   }
+  const isLocalhost = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname);
+  if (parsed.protocol === 'http:' && !isLocalhost) {
+    return {
+      ok: false,
+      error: `Site must use https:// — bot credentials are sent as HTTP Basic auth and would go over the wire in cleartext (got "${site}").`,
+    };
+  }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    return { ok: false, error: `Site must be an http(s) URL, got "${parsed.protocol}//".` };
+    return { ok: false, error: `Site must be an https URL, got "${parsed.protocol}//".` };
   }
   if (!env.SECRETS_KEY) {
     // A knowable operator error, not a 500: the master key was never provisioned.

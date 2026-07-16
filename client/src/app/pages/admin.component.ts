@@ -198,6 +198,8 @@ import { AuthService } from '../auth.service';
               <label style="min-width:110px">{{ f }}</label>
               <wa-input
                 style="flex:1"
+                [attr.type]="isSecretField(f) ? 'password' : 'text'"
+                autocomplete="off"
                 [attr.placeholder]="f"
                 [value]="channelFieldValue(c.descriptor.channel, f)"
                 (input)="setChannelField(c.descriptor.channel, f, $event)"
@@ -301,6 +303,12 @@ export class AdminComponent implements OnInit {
 
   channelFieldValue(channel: string, field: string): string {
     return this.channelFields()[channel]?.[field] ?? '';
+  }
+
+  /** Mask credential-like fields (apiKey, webhookToken) as passwords; leave
+   *  non-secret config (site, botEmail) legible. Names come from the descriptor. */
+  protected isSecretField(field: string): boolean {
+    return /key|token|secret|password/i.test(field);
   }
 
   setChannelField(channel: string, field: string, ev: Event): void {

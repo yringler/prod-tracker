@@ -129,6 +129,12 @@ describe('notification routes', () => {
     expect(await getLink(env, ALICE)).toBeNull();
     expect(await dao.getUserChannels(ALICE)).toEqual([]);
   });
+
+  it('404s setup (not 500) when isConfigured throws (unmigrated config table)', async () => {
+    await env.DB.prepare('DROP TABLE zulip_org_config').run(); // hasOrgConfig now throws
+    const res = await beginChannelSetup(ctxFor(ALICE), 'zulip');
+    expect(res.status).toBe(404);
+  });
 });
 
 describe('POST /api/notifications/test — self-serve delivery check', () => {
