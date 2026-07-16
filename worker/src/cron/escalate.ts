@@ -10,6 +10,7 @@ import type { Dao } from '../db/dao';
 import type { Env } from '../env';
 import type { NotificationPayload } from '../notifications/contract';
 import { resolve } from '../notifications/registry';
+import { selectEscalations } from '../pending';
 import { log as rootLog, errFields, type Logger } from '../log';
 
 export async function escalate(env: Env, dao: Dao, log: Logger = rootLog): Promise<void> {
@@ -18,8 +19,8 @@ export async function escalate(env: Env, dao: Dao, log: Logger = rootLog): Promi
   const due = await dao.pendingDueForEscalation(dueBeforeIso, notBeforeIso);
   if (due.length === 0) return;
 
-  const escalated: string[] = [];
-  for (const p of due) {
+  const toDeliver = selectEscalations(due);
+  for (const p of toDeliver) {
     const channels = await dao.getUserChannels(p.accountId);
     // Channel-neutral payload — deepLink is just a URL back into our own app.
     const payload: NotificationPayload = {
@@ -47,11 +48,11 @@ export async function escalate(env: Env, dao: Dao, log: Logger = rootLog): Promi
         log.warn('escalate: adapter threw', { channel, ...errFields(e) });
       }
     }
-    // Mark once regardless of outcome: the escalation window is time-bound, so a
-    // user with no channels (or a transient failure) isn't retried forever.
-    escalated.push(p.pendingId);
   }
 
-  await dao.markEscalated(escalated, new UTCDate(nowMs).toISOString());
-  log.info('escalate: done', { due: due.length, marked: escalated.length });
+  // Mark the FULL due set (the collapsed siblings too), regardless of outcome: the
+  // escalation window is time-bound, so a user with no channels (or a transient
+  // failure) isn't retried forever, and un-delivered siblings don't re-escalate.
+  await dao.markEscalated(due.map((p) => p.pendingId), new UTCDate(nowMs).toISOString());
+  log.info('escalate: done', { due: due.length, delivered: toDeliver.length });
 }

@@ -42,6 +42,8 @@ async function seedPending(
   accountId: string,
   pendingId: string,
   createdAtMs: number,
+  issueKey = 'ABC-1',
+  changelogId = '900',
 ): Promise<void> {
   await db
     .prepare(
@@ -50,8 +52,8 @@ async function seedPending(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
-      pendingId, CLOUD, accountId, 'ABC-1', 'Do the thing', 'https://jira/ABC-1',
-      3, 'Done', '900', new Date(createdAtMs).toISOString(), new Date(createdAtMs).toISOString(),
+      pendingId, CLOUD, accountId, issueKey, 'Do the thing', `https://jira/${issueKey}`,
+      3, 'Done', changelogId, new Date(createdAtMs).toISOString(), new Date(createdAtMs).toISOString(),
     )
     .run();
 }
@@ -84,6 +86,45 @@ describe('escalate', () => {
     // Idempotent: a second run does nothing (escalated_at IS NULL filter excludes it).
     await escalate(env, dao, silent);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses a flurry to one DM but marks every row escalated', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const ripe = Date.now() - ESCALATION_DELAY_MS - 60_000;
+    // Three ripe rows for the SAME account+issue (a flurry of status moves).
+    await seedPending(ALICE, 'p-a', ripe, 'ABC-1', '900');
+    await seedPending(ALICE, 'p-b', ripe + 1_000, 'ABC-1', '901');
+    await seedPending(ALICE, 'p-c', ripe + 2_000, 'ABC-1', '902');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    await escalate(env, dao, silent);
+    // One DM, not three.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Every collapsed sibling is marked, so none re-escalates next tick.
+    expect(await escalatedAt('p-a')).not.toBeNull();
+    expect(await escalatedAt('p-b')).not.toBeNull();
+    expect(await escalatedAt('p-c')).not.toBeNull();
+
+    // Idempotent: a second run does nothing (all excluded by escalated_at IS NULL).
+    await escalate(env, dao, silent);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('two different issues for one user produce two DMs', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const ripe = Date.now() - ESCALATION_DELAY_MS - 60_000;
+    await seedPending(ALICE, 'p-1', ripe, 'ABC-1', '900');
+    await seedPending(ALICE, 'p-2', ripe + 1_000, 'ABC-2', '901');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    await escalate(env, dao, silent);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await escalatedAt('p-1')).not.toBeNull();
+    expect(await escalatedAt('p-2')).not.toBeNull();
   });
 
   it('marks a ripe pending with no channels escalated without any fetch', async () => {

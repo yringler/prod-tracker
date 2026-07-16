@@ -9,7 +9,7 @@
 import type { PendingRating } from '@shared/contracts';
 import type { StatusTransition } from '@shared/domain';
 import { isStaleTransition } from '@shared/domain';
-import type { PendingRow } from './db/dao';
+import type { EscalationCandidate, PendingRow } from './db/dao';
 
 /**
  * Group an owner's pending rows into one rateable item per issue — a flurry of
@@ -54,4 +54,21 @@ export function selectPushTransition(
 ): StatusTransition | null {
   if (hadLivePendingBefore) return null;
   return freshOwned[0] ?? null;
+}
+
+/**
+ * Collapse ripe escalation rows to one per (account, issue) — a flurry escalates
+ * once, not once per move (the escalate-path twin of groupPendingByIssue). Rows
+ * arrive oldest-first (pendingDueForEscalation ORDER BY created_at), so the first
+ * seen per key is the earliest and becomes the representative for the deep link.
+ * Callers must still markEscalated the FULL input set (the collapsed siblings),
+ * or the un-delivered rows re-escalate next tick.
+ */
+export function selectEscalations(due: EscalationCandidate[]): EscalationCandidate[] {
+  const byKey = new Map<string, EscalationCandidate>();
+  for (const p of due) {
+    const key = `${p.accountId} ${p.issueKey}`;
+    if (!byKey.has(key)) byKey.set(key, p);
+  }
+  return [...byKey.values()];
 }

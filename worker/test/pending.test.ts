@@ -3,8 +3,8 @@
 // (selectPushTransition) — the subtle new code that had no unit test pre-refactor.
 import { describe, expect, it } from 'vitest';
 import type { StatusTransition } from '@shared/domain';
-import type { PendingRow } from '../src/db/dao';
-import { groupPendingByIssue, selectPushTransition } from '../src/pending';
+import type { EscalationCandidate, PendingRow } from '../src/db/dao';
+import { groupPendingByIssue, selectEscalations, selectPushTransition } from '../src/pending';
 
 // A fixed clock so staleness is deterministic (the function takes `now`), rather
 // than anchoring to the real clock as the DB-backed ratings test must.
@@ -95,5 +95,45 @@ describe('selectPushTransition', () => {
 
   it('returns null when the fresh-owned set is empty', () => {
     expect(selectPushTransition([], false)).toBeNull();
+  });
+});
+
+describe('selectEscalations', () => {
+  const cand = (
+    pendingId: string,
+    accountId: string,
+    issueKey: string,
+  ): EscalationCandidate => ({
+    pendingId,
+    accountId,
+    issueKey,
+    title: `${issueKey} title`,
+    url: `https://example.atlassian.net/browse/${issueKey}`,
+  });
+
+  it('collapses a flurry to one escalation per (account, issue), keeping the earliest', () => {
+    // Oldest-first, as pendingDueForEscalation returns (ORDER BY created_at).
+    const due = [
+      cand('p1', 'u1', 'X-1'),
+      cand('p2', 'u1', 'X-1'),
+      cand('p3', 'u1', 'X-1'),
+      cand('p4', 'u1', 'X-2'),
+    ];
+
+    const out = selectEscalations(due);
+
+    expect(out).toHaveLength(2);
+    // Representative = first (earliest) seen for the collapsed issue.
+    expect(out.find((c) => c.issueKey === 'X-1')!.pendingId).toBe('p1');
+    expect(out.find((c) => c.issueKey === 'X-2')!.pendingId).toBe('p4');
+  });
+
+  it('does not collapse the same issue across different accounts', () => {
+    const due = [cand('p1', 'u1', 'X-1'), cand('p2', 'u2', 'X-1')];
+    expect(selectEscalations(due)).toHaveLength(2);
+  });
+
+  it('returns [] for empty input', () => {
+    expect(selectEscalations([])).toEqual([]);
   });
 });
