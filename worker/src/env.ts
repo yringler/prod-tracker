@@ -10,8 +10,6 @@ export interface Env {
   OAUTH_REDIRECT_PATH: string;
   VAPID_SUBJECT: string;
   BOOTSTRAP_ADMIN_ACCOUNT_ID: string;
-  ZULIP_SITE: string; // e.g. https://yourorg.zulipchat.com
-  ZULIP_BOT_EMAIL: string; // e.g. notify-bot@yourorg.zulipchat.com
   EMAIL_FROM: string; // From: address for escalation emails, e.g. notify@yourorg.com
 
   // secrets
@@ -19,8 +17,10 @@ export interface Env {
   JIRA_CLIENT_SECRET: string;
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
-  ZULIP_API_KEY: string; // bot API key — Basic auth for POST /api/v1/messages
-  ZULIP_WEBHOOK_TOKEN: string; // shared secret verified on the inbound webhook
+  // base64(32 random bytes) — AES-256-GCM master key for per-org adapter secrets
+  // stored in D1 (notifications/secretbox.ts). Zulip credentials are admin-entered
+  // per org (Admin → Notification channels), not env config.
+  SECRETS_KEY: string;
   EMAIL_API_KEY: string; // transport API key (Resend/MailChannels-style) for sends
 }
 

@@ -197,7 +197,8 @@ CREATE TABLE IF NOT EXISTS zulip_links (
   account_id    TEXT PRIMARY KEY,     -- our Atlassian account id
   zulip_user_id TEXT NOT NULL,        -- the vendor address (opaque to the app)
   full_name     TEXT,                 -- for the opaque display label
-  linked_at     TEXT NOT NULL
+  linked_at     TEXT NOT NULL,
+  cloud_id      TEXT                  -- org stamped at link time; NULL = pre-0008 link (added 0008)
 );
 CREATE TABLE IF NOT EXISTS zulip_link_codes (
   code        TEXT PRIMARY KEY,       -- unambiguous 6-char alphabet
@@ -210,6 +211,19 @@ CREATE TABLE IF NOT EXISTS zulip_link_attempts (
   attempted_at TEXT NOT NULL          -- for per-sender failed-attempt rate limiting
 );
 CREATE INDEX IF NOT EXISTS idx_zulip_attempts_sender ON zulip_link_attempts(sender_id, attempted_at);
+-- Per-org Zulip config, admin-entered. secrets_enc is AES-256-GCM (SECRETS_KEY)
+-- over JSON {site,botEmail,apiKey}; the webhook token is stored ONLY as a SHA-256
+-- hex hash — a matching inbound token both authenticates the webhook AND resolves
+-- the org. Added 0008; keep in sync with migrations/0008_zulip_org_config.sql.
+CREATE TABLE IF NOT EXISTS zulip_org_config (
+  cloud_id           TEXT PRIMARY KEY,   -- the org ("site") this config belongs to
+  secrets_enc        TEXT NOT NULL,      -- base64(iv||ciphertext) of {site,botEmail,apiKey}
+  webhook_token_hash TEXT NOT NULL,      -- sha256 hex; inbound lookup key, never plaintext
+  configured_by      TEXT,               -- admin account_id (audit)
+  configured_at      TEXT NOT NULL       -- ISO UTC
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_zulip_org_config_token
+  ON zulip_org_config(webhook_token_hash);
 
 -- Email adapter-owned table. Accessed ONLY by
 -- worker/src/notifications/adapters/email/store.ts via env.DB — never by dao.ts.

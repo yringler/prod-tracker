@@ -33,6 +33,10 @@ export type DeliverResult =
   | { status: 'not_linked' } // fall through to the next channel
   | { status: 'failed'; retryable: boolean };
 
+/** Outcome of persisting admin-entered org config. `error` is a human-readable
+ *  message the admin UI shows verbatim (vendor rejection, missing field, …). */
+export type ConfigureOrgResult = { ok: true } | { ok: false; error: string };
+
 /** Neutral callback the app hands an adapter's inbound handler so a successful link
  *  registers the channel app-side. The adapter passes its OWN channel name and an
  *  opaque label; it never imports dao/registry (the eslint wall) and never learns
@@ -43,10 +47,21 @@ export interface InboundContext {
 
 export interface NotifierAdapter {
   describe(): Promise<NotifierDescriptor>;
-  /** Optional: whether this adapter's required env/secrets are present. Absent →
-   *  treated as always-configured (back-compat). The app skips channels that report
-   *  false, so a channel that cannot deliver is never advertised. */
-  isConfigured?(): boolean;
+  /** Optional: whether this channel can deliver FOR THIS ORG. Env-based adapters
+   *  (email) may ignore `orgId` and answer synchronously; DB-config adapters
+   *  (zulip) look up the org's row and return a Promise. Absent → treated as
+   *  always-configured (back-compat). The app skips channels that report false,
+   *  so a channel that cannot deliver is never advertised. */
+  isConfigured?(orgId: string): boolean | Promise<boolean>;
+  /** Optional: validate + persist admin-entered per-org config (the values named
+   *  by the descriptor's `requestedFields`). The adapter live-verifies against its
+   *  vendor before storing and returns a human-readable error on failure. Secrets
+   *  are write-only: nothing stored here ever flows back to a client. */
+  configureOrg?(
+    orgId: string,
+    fields: Record<string, string>,
+    configuredBy: string,
+  ): Promise<ConfigureOrgResult>;
   beginSetup(userId: string): Promise<SetupInstructions>;
   getStatus(userId: string): Promise<LinkStatus>;
   deliver(req: DeliverRequest): Promise<DeliverResult>;

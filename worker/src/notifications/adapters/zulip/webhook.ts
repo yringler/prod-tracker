@@ -3,7 +3,9 @@
 // `/link CODE` and we bind their Atlassian account to their Zulip sender_id.
 //
 // Security posture (see notifaction-adapters.md §7):
-//  - verify the shared ZULIP_WEBHOOK_TOKEN (token-is-capability),
+//  - verify the webhook token against the per-org config (token-is-capability;
+//    stored only as a sha256 hash — the hash lookup both authenticates AND
+//    resolves which org the /link belongs to),
 //  - GUARD on a DIRECT message so a `/link` posted in a public stream (a mention)
 //    can never redeem a code,
 //  - per-sender_id failed-attempt rate limit so codes can't be brute-forced,
@@ -17,7 +19,14 @@
 import type { Env } from '../../../env';
 import { errFields, log as rootLog } from '../../../log';
 import type { InboundContext } from '../../contract';
-import { recentFailedAttempts, recordFailedAttempt, redeemCode, saveLink } from './store';
+import { sha256Hex } from '../../secretbox';
+import {
+  findOrgByTokenHash,
+  recentFailedAttempts,
+  recordFailedAttempt,
+  redeemCode,
+  saveLink,
+} from './store';
 
 /** Failed `/link` attempts allowed per sender within the window before we refuse. */
 const RATE_WINDOW_MS = 10 * 60 * 1000;
@@ -71,16 +80,20 @@ export async function handleZulipInbound(
     return json({}, 400);
   }
 
-  // Token-is-capability: reject anything not carrying our shared secret. Zulip's
-  // outgoing-webhook `token` is a per-bot value DISTINCT from the bot's API key
-  // (find it via the Bots page → "Download config of all active outgoing webhooks",
-  // the `token=` line). We log only non-sensitive shape — never the token itself.
-  if (typeof body.token !== 'string' || body.token !== env.ZULIP_WEBHOOK_TOKEN) {
-    log.warn('zulip webhook: token missing or mismatched', {
-      hasToken: typeof body.token === 'string',
-      secretConfigured:
-        typeof env.ZULIP_WEBHOOK_TOKEN === 'string' && env.ZULIP_WEBHOOK_TOKEN.length > 0,
-    });
+  // Token-is-capability: reject anything not carrying a configured org's secret.
+  // Zulip's outgoing-webhook `token` is a per-bot value DISTINCT from the bot's API
+  // key (find it via the Bots page → "Download config of all active outgoing
+  // webhooks", the `token=` line). It's stored only as a sha256 hash; a hash hit
+  // both authenticates the request AND resolves which org this /link belongs to —
+  // the bot that received the DM defines the org, not the linker's session. We log
+  // only non-sensitive shape — never the token itself.
+  if (typeof body.token !== 'string' || body.token.length === 0) {
+    log.warn('zulip webhook: token missing', { hasToken: typeof body.token === 'string' });
+    return json({}, 401);
+  }
+  const cloudId = await findOrgByTokenHash(env, await sha256Hex(body.token));
+  if (!cloudId) {
+    log.warn('zulip webhook: token matched no org config', { hasToken: true });
     return json({}, 401);
   }
 
@@ -125,8 +138,8 @@ export async function handleZulipInbound(
     return reply('That code is invalid or has expired. Generate a fresh one in app settings.');
   }
 
-  await saveLink(env, redeemed.accountId, sender, fullName);
+  await saveLink(env, redeemed.accountId, sender, fullName, cloudId);
   await ctx.registerChannel(redeemed.accountId, 'zulip', fullName ?? 'Zulip');
-  log.info('zulip webhook: account linked', { sender, account: redeemed.accountId });
+  log.info('zulip webhook: account linked', { sender, account: redeemed.accountId, cloudId });
   return reply('Connected ✓ You will now get effort-rating reminders here.');
 }

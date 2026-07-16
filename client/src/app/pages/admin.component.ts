@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { form, required } from '@angular/forms/signals';
 import type { ConfigResponse, FieldOption, OrgMember, Team, TeamMembership } from '@shared/contracts';
+import type { AdminChannelConfigItem } from '@shared/notifications';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
 
@@ -175,6 +176,53 @@ import { AuthService } from '../auth.service';
       </div>
       @if (fieldsMsg()) { <wa-callout variant="neutral" style="margin-top:8px">{{ fieldsMsg() }}</wa-callout> }
     </div>
+
+    <div class="panel">
+      <h3>Notification channels</h3>
+      <p class="muted" style="font-size:12px">
+        Per-site channel credentials, stored encrypted server-side. Values are
+        write-only — saving verifies them live with the vendor; to change anything,
+        re-enter all fields.
+      </p>
+      @for (c of adminChannels(); track c.descriptor.channel) {
+        <div style="margin-top:10px">
+          <div class="row">
+            <strong>{{ c.descriptor.displayName }}</strong>
+            <wa-tag size="small" [attr.variant]="c.configured ? 'success' : 'neutral'">
+              {{ c.configured ? 'Configured' : 'Not configured' }}
+            </wa-tag>
+          </div>
+          <!-- Vendor-agnostic: the server's requestedFields drive the inputs. -->
+          @for (f of c.descriptor.requestedFields ?? []; track f) {
+            <div class="row" style="margin-top:8px">
+              <label style="min-width:110px">{{ f }}</label>
+              <wa-input
+                style="flex:1"
+                [attr.placeholder]="f"
+                [value]="channelFieldValue(c.descriptor.channel, f)"
+                (input)="setChannelField(c.descriptor.channel, f, $event)"
+              ></wa-input>
+            </div>
+          }
+          <div class="row" style="margin-top:8px">
+            <wa-button
+              variant="brand"
+              [disabled]="!channelComplete(c) || busyChannel() === c.descriptor.channel"
+              (click)="saveChannel(c)"
+            >
+              Save
+            </wa-button>
+          </div>
+          @if (channelMsg()[c.descriptor.channel]; as msg) {
+            <wa-callout [attr.variant]="msg.ok ? 'success' : 'danger'" style="margin-top:8px">
+              {{ msg.text }}
+            </wa-callout>
+          }
+        </div>
+      } @empty {
+        <p class="muted">No channels take per-site configuration.</p>
+      }
+    </div>
   `,
 })
 export class AdminComponent implements OnInit {
@@ -189,6 +237,13 @@ export class AdminComponent implements OnInit {
   spOptions = signal<FieldOption[]>([]);
   sprintOptions = signal<FieldOption[]>([]);
   fieldsMsg = signal('');
+
+  // Per-org notification-channel config. Dynamic field set (the descriptor's
+  // requestedFields), so plain signals rather than the static Signal Forms model.
+  adminChannels = signal<AdminChannelConfigItem[]>([]);
+  private channelFields = signal<Record<string, Record<string, string>>>({});
+  channelMsg = signal<Record<string, { ok: boolean; text: string }>>({});
+  busyChannel = signal<string | null>(null);
 
   // Signal Forms model — all string fields, no null/undefined initial values.
   protected readonly adminModel = signal({
@@ -213,6 +268,7 @@ export class AdminComponent implements OnInit {
 
   ngOnInit(): void {
     this.refreshTeams();
+    this.refreshChannelConfigs();
     this.api.orgMembers().subscribe((r) => this.orgMembers.set(r.members));
     this.api.adminConfig().subscribe((c: ConfigResponse) =>
       this.adminModel.update((m) => ({ ...m, doneNames: c.doneStatusNames.join(', ') })),
@@ -237,6 +293,51 @@ export class AdminComponent implements OnInit {
 
   private refreshTeams(): void {
     this.api.teams().subscribe((r) => this.teams.set(r.teams));
+  }
+
+  private refreshChannelConfigs(): void {
+    this.api.adminChannelConfigs().subscribe((r) => this.adminChannels.set(r.channels));
+  }
+
+  channelFieldValue(channel: string, field: string): string {
+    return this.channelFields()[channel]?.[field] ?? '';
+  }
+
+  setChannelField(channel: string, field: string, ev: Event): void {
+    const value = (ev.target as HTMLInputElement).value;
+    this.channelFields.update((m) => ({ ...m, [channel]: { ...m[channel], [field]: value } }));
+  }
+
+  channelComplete(c: AdminChannelConfigItem): boolean {
+    // No per-field validation (admin tool) — just require every requested field.
+    return (c.descriptor.requestedFields ?? []).every(
+      (f) => this.channelFieldValue(c.descriptor.channel, f).trim().length > 0,
+    );
+  }
+
+  saveChannel(c: AdminChannelConfigItem): void {
+    const channel = c.descriptor.channel;
+    this.busyChannel.set(channel);
+    this.api.configureChannel(channel, this.channelFields()[channel] ?? {}).subscribe({
+      next: () => {
+        this.busyChannel.set(null);
+        this.channelMsg.update((m) => ({
+          ...m,
+          [channel]: { ok: true, text: 'Saved — credentials verified.' },
+        }));
+        // Write-only secrets: clear the inputs rather than leaving them on screen.
+        this.channelFields.update((m) => ({ ...m, [channel]: {} }));
+        this.refreshChannelConfigs();
+      },
+      error: (e) => {
+        this.busyChannel.set(null);
+        // The adapter's human-readable message (400 body) surfaces verbatim.
+        this.channelMsg.update((m) => ({
+          ...m,
+          [channel]: { ok: false, text: e?.error?.error ?? 'Save failed' },
+        }));
+      },
+    });
   }
 
   /** Bridge a webawesome <wa-input>/<wa-select> value into the Signal Forms model.

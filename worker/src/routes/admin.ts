@@ -15,9 +15,15 @@ import type {
   Team,
   TeamMembership,
 } from '@shared/contracts';
+import type {
+  AdminChannelConfigItem,
+  AdminChannelConfigResponse,
+  ConfigureChannelRequest,
+} from '@shared/notifications';
 import { type AuthedCtx, error, json, readJson } from '../http';
 import { JiraClient } from '../jira/client';
 import { listFieldCandidates } from '../jira/fields';
+import { availableChannels, resolve } from '../notifications/registry';
 
 export async function createTeam(req: Request, ctx: AuthedCtx): Promise<Response> {
   const body = await readJson<CreateTeamRequest>(req);
@@ -131,5 +137,39 @@ export async function setFields(req: Request, ctx: AuthedCtx): Promise<Response>
     return error(400, 'cloudId, storyPointsFieldId and sprintFieldId required');
   }
   await ctx.dao.setFieldIds(body.cloudId, body.storyPointsFieldId, body.sprintFieldId);
+  return json({ ok: true });
+}
+
+/** GET /api/admin/notifications/channels — the channels that take per-org config,
+ *  with the ADMIN'S org's configured state. Vendor-agnostic: the descriptor's
+ *  `requestedFields` drive the admin UI. Write-only — stored secret values are
+ *  never returned, only a configured boolean. */
+export async function listChannelConfigs(ctx: AuthedCtx): Promise<Response> {
+  const channels: AdminChannelConfigItem[] = [];
+  for (const channel of availableChannels()) {
+    const adapter = resolve(ctx.env, channel);
+    if (!adapter?.configureOrg) continue; // env-based channels (email) have no org config
+    const descriptor = await adapter.describe();
+    if (!descriptor.requestedFields?.length) continue;
+    const configured = (await adapter.isConfigured?.(ctx.cloudId)) === true;
+    channels.push({ descriptor, configured });
+  }
+  return json({ channels } satisfies AdminChannelConfigResponse);
+}
+
+/** PUT /api/admin/notifications/:channel/config — forward the admin-entered
+ *  fields to the adapter, which validates them live against its vendor before
+ *  persisting (encrypted). The adapter's human-readable error surfaces as a 400. */
+export async function configureChannel(
+  req: Request,
+  ctx: AuthedCtx,
+  channel: string,
+): Promise<Response> {
+  const adapter = resolve(ctx.env, channel);
+  if (!adapter?.configureOrg) return error(404, 'unknown channel');
+  const body = await readJson<ConfigureChannelRequest>(req);
+  const fields = body && typeof body.fields === 'object' && body.fields ? body.fields : {};
+  const r = await adapter.configureOrg(ctx.cloudId, fields, ctx.accountId);
+  if (!r.ok) return error(400, r.error);
   return json({ ok: true });
 }

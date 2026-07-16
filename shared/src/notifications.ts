@@ -32,6 +32,11 @@ export interface NotifierDescriptor {
   channel: string; // e.g. "zulip"
   displayName: string; // e.g. "Zulip"
   iconUrl?: string; // exactOptionalPropertyTypes: omit the key, never set undefined
+  /** Org-level config field names an admin supplies (write-only; stored values are
+   *  never echoed back to any client). The admin UI renders one plain text input
+   *  per name — no client-side validation, no vendor knowledge. Absent → the
+   *  channel has no per-org config. */
+  requestedFields?: string[];
 }
 
 /** Link state for a user+channel; `label` is an opaque display string. */
@@ -54,5 +59,21 @@ export type BeginSetupResponse = SetupInstructions;
  *  Posted back to the generic /complete route for adapters that gather input in-app
  *  (e.g. email) rather than out-of-band (e.g. Zulip's webhook). */
 export interface SetupSubmission {
+  fields: Record<string, string>;
+}
+
+// ---- Wire shapes (client <-> worker /api/admin/notifications/*) ----
+
+/** One channel's per-org config surface, for the admin UI. `configured` is for the
+ *  ADMIN'S org only; stored secret values are write-only and never returned. */
+export interface AdminChannelConfigItem {
+  descriptor: NotifierDescriptor;
+  configured: boolean;
+}
+export interface AdminChannelConfigResponse {
+  channels: AdminChannelConfigItem[];
+}
+/** Admin-entered values keyed by the descriptor's `requestedFields` names. */
+export interface ConfigureChannelRequest {
   fields: Record<string, string>;
 }

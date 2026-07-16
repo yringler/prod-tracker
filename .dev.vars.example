@@ -5,12 +5,10 @@ JIRA_CLIENT_SECRET=
 # Generate with: npx web-push generate-vapid-keys  (then base64url, no padding)
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
-# Zulip adapter secrets (the two ZULIP_ *vars* — SITE, BOT_EMAIL — live in
-# wrangler.toml [vars], not here). Get the API key from Zulip: Settings → Bots →
-# your Generic bot. ZULIP_WEBHOOK_TOKEN is the shared secret you set on the
-# Outgoing-webhook bot and verify on the inbound route.
-ZULIP_API_KEY=
-ZULIP_WEBHOOK_TOKEN=
+# AES-256-GCM master key for per-org adapter secrets stored in D1 (e.g. Zulip
+# credentials, entered by an admin at Admin → Notification channels). Generate:
+#   openssl rand -base64 32
+SECRETS_KEY=
 # Email adapter secret (the EMAIL_FROM *var* lives in wrangler.toml [vars]).
 # Transport API key for a Resend/MailChannels-style HTTP send API.
 EMAIL_API_KEY=

@@ -14,8 +14,8 @@ and points rather than duplicating them.
   table, so each file runs **once, in order**.
 - Config lives in [`../wrangler.toml`](../wrangler.toml): the `[[d1_databases]]`
   binding (`DB`, database `storypoint-tracker`) sets `migrations_dir = "migrations"`.
-- Current files: `0001_initial_schema.sql`, `0002_rating_notes.sql`,
-  `0003_rating_transitioned_at.sql`, `0004_user_settings.sql`.
+- Current files: `0001_initial_schema.sql` … `0008_zulip_org_config.sql`
+  (zero-padded, one per change — see the folder listing).
 
 ## Current schema (what the migrations establish)
 
@@ -36,6 +36,10 @@ All timestamps are ISO-8601 **TEXT (UTC)**; points/money are `REAL`. One line pe
 - **`config`** — per-`cloud_id` Jira field ids + `done_status_names` (JSON) + `site_url`.
 - **`sessions`** — server session rows.
 - **`pd_report_state`** — GDPR report-accounts cadence (`last_reported_at`, gates the ≥7-day cycle).
+- **`user_channels`** — app-owned notification channel registry per account (channel enum + opaque label; added 0005).
+- **`zulip_links`** / **`zulip_link_codes`** / **`zulip_link_attempts`** — Zulip adapter-owned link rows, single-use TTL'd codes, and rate-limit attempts (added 0006; `zulip_links.cloud_id` — the link's org — added 0008).
+- **`email_links`** — email adapter-owned delivery addresses (added 0007).
+- **`zulip_org_config`** — per-org (cloud_id) admin-entered Zulip credentials: AES-256-GCM `secrets_enc` under the `SECRETS_KEY` worker secret + `webhook_token_hash` (sha256; unique — routes inbound webhooks to the org). Added 0008.
 
 **Privacy-relevant columns:** `ratings.rater_account_id` is PD; `ratings.team_id_at_rating`
 and `ratings.story_points_at_rating` (and `done_events.account_id` / `team_id_at_done`) are

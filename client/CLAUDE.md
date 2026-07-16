@@ -31,7 +31,7 @@ Pages — `src/app/pages/` (each a standalone route component):
 - `aggregates.component.ts` — stats: personal-vs-team claimed trends + per-team claimed-vs-done tables/charts.
 - `tools.component.ts` — client-side utilities; currently a copyable LLM standup prompt (`buildStandupPrompt`, pure/exported).
 - `settings.component.ts` — profile row + daily-goal editor (`MAX_DAILY_GOAL`).
-- `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set. Uses **Signal Forms** (`@angular/forms/signals`) and `ChangeDetectionStrategy.OnPush`.
+- `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set, custom-field pickers, and per-site notification-channel config (a vendor-agnostic panel driven by each descriptor's `requestedFields`; secret values are write-only). Uses **Signal Forms** (`@angular/forms/signals`) for the static fields (plain signals for the dynamic channel fields) and `ChangeDetectionStrategy.OnPush`.
 - `privacy.component.ts` — public privacy policy (auth-free; keep in sync with actual data practices).
 
 UI / charts — `src/app/ui/` (reusable):

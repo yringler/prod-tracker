@@ -37,7 +37,8 @@ isolated).
 - [`src/routes/`](src/routes/) — HTTP handlers, one file per area:
   `auth.ts` (OAuth start/callback/logout, `me`, sites, site-switch), `ratings.ts`
   (pending, submit, personal history, claimed-trends), `aggregates.ts`
-  (team-grouped sums), `admin.ts` (teams, memberships, admins, config, fields),
+  (team-grouped sums), `admin.ts` (teams, memberships, admins, config, fields,
+  per-org notification-channel config),
   `settings.ts` (daily goal), `push.ts` (subscribe, VAPID key), `dev.ts`
   (local-only pending seeder, 404 in prod via `isDevEnv`), `notifications.ts`
   (list/begin/complete/status/unlink notification channels; `POST /test` fires a
@@ -167,11 +168,27 @@ webhook.
 - **Adding a channel.** Implement `NotifierAdapter` under `adapters/<channel>/`,
   register it in `registry.ts`; do **not** add a new `SetupStep` kind or touch
   `cron/escalate.ts` (the email adapter proved the contract by needing neither).
-- **Availability gating.** An adapter reports whether its required env/secrets are
-  present via the optional `isConfigured()` (contract.ts); `routes/notifications.ts`
-  hides unconfigured channels from the list and 404s their setup routes, so a channel
-  that can't deliver is never advertised. Implement it for any adapter that needs
-  secrets (email → `EMAIL_API_KEY`+`EMAIL_FROM`; zulip → its site/bot/api/webhook set).
+- **Availability gating.** An adapter reports whether it can deliver **for an org**
+  via the optional `isConfigured(orgId)` (contract.ts; env-based adapters ignore the
+  orgId — email → `EMAIL_API_KEY`+`EMAIL_FROM`; zulip → a `zulip_org_config` row for
+  that org). `routes/notifications.ts` passes `ctx.cloudId`, hides unconfigured
+  channels from the list, and 404s their setup routes, so a channel that can't
+  deliver is never advertised.
+- **Per-org adapter config (write-only secrets).** Zulip's credentials are
+  admin-entered per org (`cloud_id`), not env config: the descriptor advertises
+  `requestedFields` (shared), the admin UI posts them to
+  `PUT /api/admin/notifications/:channel/config` (`routes/admin.ts`
+  `listChannelConfigs`/`configureChannel`, inside the `requireAdmin` block), and the
+  route forwards to the adapter's optional `configureOrg(orgId, fields, by)` — which
+  live-verifies against the vendor, then encrypts `{site,botEmail,apiKey}` with
+  AES-256-GCM under the `SECRETS_KEY` secret ([`src/notifications/secretbox.ts`](src/notifications/secretbox.ts) —
+  deliberately outside `adapters/` so both adapters and routes may import it) into
+  `zulip_org_config`. The **webhook token is stored only as a SHA-256 hash**: the
+  inbound webhook's hash lookup both authenticates the request and resolves the org,
+  which is then stamped onto `zulip_links.cloud_id` at link time; `deliver()` loads
+  that org's creds (a NULL-org pre-0008 link falls back to the sole config row).
+  Stored values never flow back to any client — the admin list returns only a
+  `configured` boolean.
 
 ## Database
 
@@ -198,7 +215,10 @@ to `../.dev.vars` for `wrangler dev`.
 - **Vars** (`[vars]` in wrangler.toml): `APP_ORIGIN`, `OAUTH_REDIRECT_PATH`,
   `VAPID_SUBJECT`, `BOOTSTRAP_ADMIN_ACCOUNT_ID`.
 - **Secrets** (`wrangler secret put`, locally in `.dev.vars`): `JIRA_CLIENT_ID`,
-  `JIRA_CLIENT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`.
+  `JIRA_CLIENT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `EMAIL_API_KEY`,
+  and `SECRETS_KEY` (base64 of 32 random bytes — the AES-256-GCM master key for
+  per-org adapter secrets stored in D1; Zulip credentials are admin-entered in the
+  app, not env config).
 - `isDevEnv` keys off `APP_ORIGIN` starting with `http://localhost` to gate
   dev-only routes.
 
@@ -223,11 +243,18 @@ SQL against better-sqlite3.
   `org-members.test.ts` (org boundary), `settings.test.ts` (daily-goal validation;
   re-login never clobbers a saved goal).
 - `zulip-adapter.test.ts` / `zulip-webhook.test.ts` — Zulip deliver wire shape,
-  status/unlink/setup, and the inbound webhook (token, `direct_message` guard, rate
-  limit, atomic single-use TTL'd code redemption).
+  per-org deliver routing (incl. the NULL-org sole-config fallback),
+  status/unlink/setup, and the inbound webhook (token-hash → org resolution,
+  `direct_message` guard, rate limit, atomic single-use TTL'd code redemption).
+- `zulip-config.test.ts` — `configureZulipOrg`: validation, live credential verify,
+  encrypt-at-rest persistence, upsert, cross-org duplicate-token guard.
+- `secretbox.test.ts` — seal/open roundtrip, tamper/wrong-key rejection, sha256Hex.
+- `admin-notifications.test.ts` — admin channel-config list (write-only) + configure
+  route (ok / adapter error as 400 / 404).
 - `email-adapter.test.ts` — email deliver + link store.
-- `notifications-routes.test.ts` — list/begin/complete/status/unlink route wiring, plus
-  the `POST /test` self-serve delivery check (delivered / not_linked / no-channels).
+- `notifications-routes.test.ts` — list/begin/complete/status/unlink route wiring
+  (incl. per-org hiding of an unconfigured zulip), plus the `POST /test` self-serve
+  delivery check (delivered / not_linked / no-channels).
 - `escalate.test.ts` — deliver-once, idempotent re-run, no-channel mark, stale-never,
   fresh-not-yet.
 

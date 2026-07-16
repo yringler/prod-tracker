@@ -12,6 +12,9 @@ const CODE_LENGTH = 6;
 export interface ZulipLink {
   zulipUserId: string;
   fullName: string | null;
+  /** Org the link was made under (from the webhook token that redeemed the code).
+   *  NULL = pre-0008 link; deliver falls back to the sole org config. */
+  cloudId: string | null;
 }
 
 function nowIso(): string {
@@ -25,29 +28,95 @@ export async function saveLink(
   accountId: string,
   zulipUserId: string,
   fullName: string | null,
+  cloudId: string,
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO zulip_links (account_id, zulip_user_id, full_name, linked_at) VALUES (?, ?, ?, ?)
+    `INSERT INTO zulip_links (account_id, zulip_user_id, full_name, linked_at, cloud_id) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(account_id) DO UPDATE SET
        zulip_user_id = excluded.zulip_user_id,
        full_name     = excluded.full_name,
-       linked_at     = excluded.linked_at`,
+       linked_at     = excluded.linked_at,
+       cloud_id      = excluded.cloud_id`,
   )
-    .bind(accountId, zulipUserId, fullName, nowIso())
+    .bind(accountId, zulipUserId, fullName, nowIso(), cloudId)
     .run();
 }
 
 export async function getLink(env: Env, accountId: string): Promise<ZulipLink | null> {
   const r = await env.DB.prepare(
-    `SELECT zulip_user_id, full_name FROM zulip_links WHERE account_id = ?`,
+    `SELECT zulip_user_id, full_name, cloud_id FROM zulip_links WHERE account_id = ?`,
   )
     .bind(accountId)
-    .first<{ zulip_user_id: string; full_name: string | null }>();
-  return r ? { zulipUserId: r.zulip_user_id, fullName: r.full_name ?? null } : null;
+    .first<{ zulip_user_id: string; full_name: string | null; cloud_id: string | null }>();
+  return r
+    ? { zulipUserId: r.zulip_user_id, fullName: r.full_name ?? null, cloudId: r.cloud_id ?? null }
+    : null;
 }
 
 export async function deleteLink(env: Env, accountId: string): Promise<void> {
   await env.DB.prepare(`DELETE FROM zulip_links WHERE account_id = ?`).bind(accountId).run();
+}
+
+// --- Per-org config (admin-entered, encrypted at rest) -----------------------
+// Raw persistence only: crypto/validation live in org-config.ts. `secretsEnc` is
+// an opaque sealed blob here; `webhookTokenHash` is the sha256-hex inbound lookup
+// key (the plaintext token is never stored).
+
+/** Upsert one org's config. Throws on a webhook-token-hash collision with ANOTHER
+ *  org (unique index) — org-config.ts turns that into a friendly error. */
+export async function saveOrgConfig(
+  env: Env,
+  cloudId: string,
+  secretsEnc: string,
+  webhookTokenHash: string,
+  configuredBy: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO zulip_org_config (cloud_id, secrets_enc, webhook_token_hash, configured_by, configured_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(cloud_id) DO UPDATE SET
+       secrets_enc        = excluded.secrets_enc,
+       webhook_token_hash = excluded.webhook_token_hash,
+       configured_by      = excluded.configured_by,
+       configured_at      = excluded.configured_at`,
+  )
+    .bind(cloudId, secretsEnc, webhookTokenHash, configuredBy, nowIso())
+    .run();
+}
+
+export async function getOrgSecretsEnc(env: Env, cloudId: string): Promise<string | null> {
+  const r = await env.DB.prepare(`SELECT secrets_enc FROM zulip_org_config WHERE cloud_id = ?`)
+    .bind(cloudId)
+    .first<{ secrets_enc: string }>();
+  return r?.secrets_enc ?? null;
+}
+
+export async function hasOrgConfig(env: Env, cloudId: string): Promise<boolean> {
+  return (await getOrgSecretsEnc(env, cloudId)) !== null;
+}
+
+/** Resolve which org an inbound webhook token belongs to. A hit both
+ *  authenticates the request AND names the org. */
+export async function findOrgByTokenHash(env: Env, hash: string): Promise<string | null> {
+  const r = await env.DB.prepare(
+    `SELECT cloud_id FROM zulip_org_config WHERE webhook_token_hash = ?`,
+  )
+    .bind(hash)
+    .first<{ cloud_id: string }>();
+  return r?.cloud_id ?? null;
+}
+
+/** NULL-cloud_id link fallback: the sole config row if EXACTLY one org is
+ *  configured (the pre-0008 single-org deployment), else null. */
+export async function soleOrgConfig(
+  env: Env,
+): Promise<{ cloudId: string; secretsEnc: string } | null> {
+  const { results } = await env.DB.prepare(
+    `SELECT cloud_id, secrets_enc FROM zulip_org_config LIMIT 2`,
+  ).all<{ cloud_id: string; secrets_enc: string }>();
+  const first = results[0];
+  if (!first || results.length !== 1) return null;
+  return { cloudId: first.cloud_id, secretsEnc: first.secrets_enc };
 }
 
 // --- Link codes (bound-at-generation, single-use, TTL'd) --------------------

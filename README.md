@@ -189,22 +189,28 @@ Set the bot's **Endpoint URL** (a.k.a. payload URL) to:
 https://<your-worker-domain>/api/notifications/zulip/webhook
 ```
 
-Then wire four settings — **vars** in `wrangler.toml [vars]`, **secrets** via `wrangler
-secret put` (or `.dev.vars` locally). Note `ZULIP_API_KEY` and `ZULIP_WEBHOOK_TOKEN`
-are **different values** — the single biggest trip-up:
+Then an **admin** enters four values in the app at **Admin → Notification channels**
+(they are *per org* — each Jira site gets its own Zulip config — and stored
+**encrypted** in D1 under the `SECRETS_KEY` worker secret, which must be set first:
+`openssl rand -base64 32 | wrangler secret put SECRETS_KEY`). Note `apiKey` and
+`webhookToken` are **different values** — the single biggest trip-up:
 
-| Key | Kind | Value |
-| --- | --- | --- |
-| `ZULIP_SITE` | var | base URL, **no trailing slash** — `https://yourorg.zulipchat.com` |
-| `ZULIP_BOT_EMAIL` | var | the bot's **email** |
-| `ZULIP_API_KEY` | secret | the bot's **API key** — sends DMs via `POST /api/v1/messages` (HTTP Basic, `x-www-form-urlencoded` — *not* JSON; see `adapters/zulip/deliver.ts`) |
-| `ZULIP_WEBHOOK_TOKEN` | secret | the bot's **outgoing-webhook token** — the `token` Zulip puts in every webhook POST, which the route verifies. **This is NOT the API key**, and it's a distinct per-bot value. |
+| Field | Value |
+| --- | --- |
+| `site` | base URL, **no trailing slash** — `https://yourorg.zulipchat.com` (a trailing slash is stripped on save) |
+| `botEmail` | the bot's **email** |
+| `apiKey` | the bot's **API key** — sends DMs via `POST /api/v1/messages` (HTTP Basic, `x-www-form-urlencoded` — *not* JSON; see `adapters/zulip/deliver.ts`) |
+| `webhookToken` | the bot's **outgoing-webhook token** — the `token` Zulip puts in every webhook POST. The app stores only its SHA-256 hash; an inbound webhook whose token matches is both authenticated *and* routed to your org. **This is NOT the API key**, and it's a distinct per-bot value. |
+
+Saving **live-verifies** the credentials against `GET {site}/api/v1/users/me`, so a
+typo'd key is rejected immediately with Zulip's own error message. The values are
+write-only: the admin UI only ever shows whether the channel is configured, never the
+stored values — re-enter all four to change anything. Rotating `SECRETS_KEY`
+invalidates the stored config (deliveries log-and-fail); admins just re-enter it.
 
 **Finding the outgoing-webhook token** (Zulip doesn't display it on the bot card, and
 it is *not* the API key): on the **Bots** page click **"Download config of all active
-outgoing webhooks"** and read the `token=` line for your bot. If that's unavailable,
-the route logs the token it *received* on a 401 mismatch — so one `wrangler tail` +
-`/link` attempt reveals the exact value to set.
+outgoing webhooks"** and read the `token=` line for your bot.
 
 Then **Settings → Notifications → Connect Zulip**: it mints a code, you DM
 `/link YOURCODE` to the bot, it replies **"Connected ✓"**, and the panel flips to
@@ -230,11 +236,11 @@ Notes that matter:
 #### Testing Zulip delivery
 
 **"Connected ✓" does *not* prove reminders will arrive.** That confirmation is the
-webhook's echoed reply (`adapters/zulip/webhook.ts`) and only exercises
-`ZULIP_WEBHOOK_TOKEN`. The actual send is a *separate* path — `POST
-${ZULIP_SITE}/api/v1/messages` with HTTP Basic `ZULIP_BOT_EMAIL:ZULIP_API_KEY`
-(`adapters/zulip/deliver.ts`) — reached only by the escalation cron. A wrong
-`ZULIP_API_KEY`/`ZULIP_BOT_EMAIL` links fine but fails every reminder.
+webhook's echoed reply (`adapters/zulip/webhook.ts`) and only exercises the webhook
+token. The actual send is a *separate* path — `POST {site}/api/v1/messages` with HTTP
+Basic `botEmail:apiKey` (`adapters/zulip/deliver.ts`) — reached only by the escalation
+cron. (The admin save does live-verify the bot creds against `/users/me`, which
+removes most of this risk — but the test DM below is still the end-to-end proof.)
 
 - **Fire a real test DM to yourself** (works locally *and* in prod — it's the only way
   to verify prod bot creds; it's self-scoped to your own linked channels):

@@ -14,6 +14,7 @@ import { availableChannels } from '../src/notifications/registry';
 import type { NotificationPayload } from '../src/notifications/contract';
 import { log } from '../src/log';
 import { SqliteD1 } from './support/sqlite-d1';
+import { seedZulipOrgConfig, TEST_SECRETS_KEY } from './support/zulip-org';
 
 const CLOUD = 'cloud-1';
 const ALICE = 'acct-alice';
@@ -23,7 +24,7 @@ let db: SqliteD1;
 let dao: Dao;
 let env: Env;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new SqliteD1();
   dao = new Dao(db);
   env = {
@@ -31,12 +32,10 @@ beforeEach(() => {
     APP_ORIGIN: 'https://app.example',
     EMAIL_FROM: 'notify@org.com',
     EMAIL_API_KEY: 'ek',
-    // Zulip vars so its adapter constructs cleanly when the registry builds it.
-    ZULIP_SITE: 'https://org.zulipchat.com',
-    ZULIP_BOT_EMAIL: 'notify-bot@org.zulipchat.com',
-    ZULIP_API_KEY: 'apikey',
-    ZULIP_WEBHOOK_TOKEN: 'tok',
+    SECRETS_KEY: TEST_SECRETS_KEY,
   } as unknown as Env;
+  // Zulip is per-org DB config since 0008; the fall-through test delivers via it.
+  await seedZulipOrgConfig(env, CLOUD);
 });
 
 afterEach(() => {
@@ -124,7 +123,7 @@ describe('email adapter', () => {
     // NOT linked (no email_links row) → not_linked → fall through to a LINKED zulip.
     await dao.registerChannel(ALICE, 'email', 'a****@example.com');
     await dao.registerChannel(ALICE, 'zulip', 'Alice A');
-    await saveZulipLink(env, ALICE, '4242', 'Alice A');
+    await saveZulipLink(env, ALICE, '4242', 'Alice A', CLOUD);
 
     await escalate(env, dao, silent);
 

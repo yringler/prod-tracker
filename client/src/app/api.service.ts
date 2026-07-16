@@ -26,8 +26,10 @@ import type {
   VapidPublicKeyResponse,
 } from '@shared/contracts';
 import type {
+  AdminChannelConfigResponse,
   BeginSetupResponse,
   ChannelListResponse,
+  ConfigureChannelRequest,
   LinkStatus,
   SetupSubmission,
 } from '@shared/notifications';
@@ -112,6 +114,17 @@ export class ApiService {
   }
 
   // --- admin ---
+  // Per-org notification-channel config (write-only secrets: the list returns
+  // only descriptors + a configured flag, never stored values).
+  adminChannelConfigs(): Observable<AdminChannelConfigResponse> {
+    return this.http.get<AdminChannelConfigResponse>('/api/admin/notifications/channels');
+  }
+  configureChannel(channel: string, fields: Record<string, string>): Observable<unknown> {
+    return this.http.put(
+      `/api/admin/notifications/${encodeURIComponent(channel)}/config`,
+      { fields } satisfies ConfigureChannelRequest,
+    );
+  }
   createTeam(body: CreateTeamRequest): Observable<Team> {
     return this.http.post<Team>('/api/admin/teams', body);
   }

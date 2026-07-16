@@ -16,10 +16,11 @@ import { errFields, log } from '../log';
 import type { NotificationPayload, NotifierAdapter } from '../notifications/contract';
 import { availableChannels, resolve } from '../notifications/registry';
 
-/** An adapter is available unless it explicitly reports its secrets are missing.
- *  Undefined `isConfigured` (adapters that don't gate) → treated as configured. */
-function configured(adapter: NotifierAdapter): boolean {
-  return adapter.isConfigured?.() !== false;
+/** An adapter is available unless it explicitly reports it can't deliver for this
+ *  org (env-based adapters ignore the orgId). Undefined `isConfigured` (adapters
+ *  that don't gate) → treated as configured. */
+async function configured(adapter: NotifierAdapter, orgId: string): Promise<boolean> {
+  return (await adapter.isConfigured?.(orgId)) !== false;
 }
 
 /** GET /api/notifications/channels — descriptor + link status for each channel,
@@ -29,8 +30,10 @@ export async function listChannels(ctx: AuthedCtx): Promise<Response> {
   for (const channel of availableChannels()) {
     const adapter = resolve(ctx.env, channel);
     if (!adapter) continue; // config drift: a registered key that failed the guard
-    if (!configured(adapter)) continue; // secrets absent → can't deliver, don't advertise
     try {
+      // Inside the try: a DB-backed isConfigured (e.g. an unmigrated table) must
+      // degrade to a skip, not blank the list.
+      if (!(await configured(adapter, ctx.cloudId))) continue; // can't deliver for this org → don't advertise
       const descriptor = await adapter.describe();
       const status = await adapter.getStatus(ctx.accountId);
       channels.push({ descriptor, status });
@@ -48,7 +51,7 @@ export async function listChannels(ctx: AuthedCtx): Promise<Response> {
 /** POST /api/notifications/:channel/setup — mint live setup instructions. */
 export async function beginChannelSetup(ctx: AuthedCtx, channel: string): Promise<Response> {
   const adapter = resolve(ctx.env, channel);
-  if (!adapter || !configured(adapter)) return error(404, 'unknown channel');
+  if (!adapter || !(await configured(adapter, ctx.cloudId))) return error(404, 'unknown channel');
   const instructions: BeginSetupResponse = await adapter.beginSetup(ctx.accountId);
   return json(instructions);
 }
@@ -63,7 +66,8 @@ export async function completeChannelSetup(
   channel: string,
 ): Promise<Response> {
   const adapter = resolve(ctx.env, channel);
-  if (!adapter || !adapter.submitSetup || !configured(adapter)) return error(404, 'unknown channel');
+  if (!adapter || !adapter.submitSetup || !(await configured(adapter, ctx.cloudId)))
+    return error(404, 'unknown channel');
   const body = await readJson<SetupSubmission>(req);
   const fields = body && typeof body.fields === 'object' && body.fields ? body.fields : {};
   const status = await adapter.submitSetup(ctx.accountId, { fields });
@@ -87,8 +91,8 @@ export async function channelStatus(ctx: AuthedCtx, channel: string): Promise<Re
 /** POST /api/notifications/test — deliver a synthetic reminder to the caller's OWN
  *  linked channels right now, bypassing the escalation window. This is the only way to
  *  verify the outbound send path end-to-end: linking ("Connected ✓") is just the
- *  webhook's echoed reply and never exercises the bot credentials, so a wrong
- *  ZULIP_API_KEY/BOT_EMAIL passes linking but fails every real reminder. Hard-scoped to
+ *  webhook's echoed reply and never exercises the bot credentials, so a bot api key
+ *  that fails sends can still pass linking, then fail every real reminder. Hard-scoped to
  *  ctx.accountId (you can only DM yourself), so it's safe in prod. Reaches channels via
  *  the registry seam only — no adapter import (eslint wall). Returns a per-channel result
  *  so the exact outcome (delivered / not_linked / failed / unknown) is visible in the

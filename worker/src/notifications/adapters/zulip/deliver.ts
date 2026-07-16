@@ -3,19 +3,20 @@
 // `btoa` natively, so this needs zero dependencies. This module never composes the
 // message content — it receives an already-rendered string from render.ts.
 
-import type { Env } from '../../../env';
 import { log } from '../../../log';
+import type { ZulipOrgSecrets } from './org-config';
 
 export type SendResult =
   | { ok: true }
   | { ok: false; retryable: boolean };
 
-/** POST a direct message to `recipient` (a numeric Zulip user id, as a string).
+/** POST a direct message to `recipient` (a numeric Zulip user id, as a string),
+ *  using the org's decrypted credentials (per-org DB config — no env reads here).
  *  Maps transport failures to a retryable flag: 5xx/429 are transient (retryable),
  *  4xx are caller/config errors (not retryable). Network throws propagate to the
  *  adapter, which treats them as retryable. */
 export async function sendZulipDM(
-  env: Env,
+  creds: ZulipOrgSecrets,
   recipient: string,
   content: string,
 ): Promise<SendResult> {
@@ -32,10 +33,10 @@ export async function sendZulipDM(
     content,
   });
 
-  const res = await fetch(`${env.ZULIP_SITE}/api/v1/messages`, {
+  const res = await fetch(`${creds.site}/api/v1/messages`, {
     method: 'POST',
     headers: {
-      Authorization: 'Basic ' + btoa(`${env.ZULIP_BOT_EMAIL}:${env.ZULIP_API_KEY}`),
+      Authorization: 'Basic ' + btoa(`${creds.botEmail}:${creds.apiKey}`),
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body,

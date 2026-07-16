@@ -15,6 +15,7 @@ import {
 import { getLink, saveLink } from '../src/notifications/adapters/zulip/store';
 import type { ChannelListResponse } from '@shared/notifications';
 import { SqliteD1 } from './support/sqlite-d1';
+import { seedZulipOrgConfig, TEST_SECRETS_KEY } from './support/zulip-org';
 
 const CLOUD = 'cloud-1';
 const ALICE = 'acct-alice';
@@ -24,18 +25,17 @@ let db: SqliteD1;
 let dao: Dao;
 let env: Env;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new SqliteD1();
   dao = new Dao(db);
   env = {
     DB: db,
     EMAIL_FROM: 'notify@org.com',
     EMAIL_API_KEY: 'ek',
-    ZULIP_SITE: 'https://org.zulipchat.com',
-    ZULIP_BOT_EMAIL: 'notify-bot@org.zulipchat.com',
-    ZULIP_API_KEY: 'apikey',
-    ZULIP_WEBHOOK_TOKEN: 'tok',
+    SECRETS_KEY: TEST_SECRETS_KEY,
   } as unknown as Env;
+  // Zulip is org-configured (DB rows), not env-configured, since 0008.
+  await seedZulipOrgConfig(env, CLOUD);
 });
 
 function ctxFor(accountId: string): AuthedCtx {
@@ -44,8 +44,8 @@ function ctxFor(accountId: string): AuthedCtx {
 
 describe('notification routes', () => {
   it('lists each channel descriptor + the authed account status only', async () => {
-    await saveLink(env, ALICE, '4242', 'Alice A');
-    await saveLink(env, BOB, '9999', 'Bob B');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await saveLink(env, BOB, '9999', 'Bob B', CLOUD);
 
     const res = await listChannels(ctxFor(ALICE));
     const body = (await res.json()) as ChannelListResponse;
@@ -58,7 +58,7 @@ describe('notification routes', () => {
   });
 
   it('skips a failing adapter instead of blanking the whole list', async () => {
-    await saveLink(env, ALICE, '4242', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
     // Simulate the real-world cause of "no channels": an unmigrated D1 where an
     // adapter's table is missing, so its getStatus throws. The route must degrade
     // to the healthy channels, not 500 the whole list.
@@ -89,6 +89,20 @@ describe('notification routes', () => {
     expect(setup.status).toBe(404);
   });
 
+  it('hides zulip for an org WITHOUT config and 404s its setup (per-org gating)', async () => {
+    const octx: AuthedCtx = { accountId: ALICE, cloudId: 'cloud-other', sid: 'sid', dao, env };
+
+    const res = await listChannels(octx);
+    const names = ((await res.json()) as ChannelListResponse).channels.map(
+      (c) => c.descriptor.channel,
+    );
+    expect(names).toContain('email'); // env-based, org-independent
+    expect(names).not.toContain('zulip'); // no config row for cloud-other → hidden
+
+    const setup = await beginChannelSetup(octx, 'zulip');
+    expect(setup.status).toBe(404);
+  });
+
   it('reports not-linked for an account with no link', async () => {
     const res = await channelStatus(ctxFor(ALICE), 'zulip');
     expect(await res.json()).toEqual({ linked: false });
@@ -107,7 +121,7 @@ describe('notification routes', () => {
   });
 
   it('unlink clears both the adapter link and the user_channels row', async () => {
-    await saveLink(env, ALICE, '4242', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
     await dao.registerChannel(ALICE, 'zulip', 'Alice A');
 
     const res = await unlinkChannel(ctxFor(ALICE), 'zulip');
@@ -130,7 +144,7 @@ describe('POST /api/notifications/test — self-serve delivery check', () => {
     // A registered app-owned channel + the adapter's own link row (both required: the
     // route reads user_channels, the adapter reads its zulip_links address).
     await dao.registerChannel(ALICE, 'zulip', 'Alice A');
-    await saveLink(env, ALICE, '4242', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
 
     const res = await sendTestNotification(ctxFor(ALICE));
     expect(res.status).toBe(200);

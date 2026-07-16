@@ -10,6 +10,7 @@ import { escalate } from '../src/cron/escalate';
 import { saveLink } from '../src/notifications/adapters/zulip/store';
 import { log } from '../src/log';
 import { SqliteD1 } from './support/sqlite-d1';
+import { seedZulipOrgConfig, TEST_SECRETS_KEY } from './support/zulip-org';
 
 const CLOUD = 'cloud-1';
 const ALICE = 'acct-alice';
@@ -20,17 +21,16 @@ let env: Env;
 
 const silent = log.child({ quiet: true }); // structured logger; output is ignored in tests
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new SqliteD1();
   dao = new Dao(db);
   env = {
     DB: db,
     APP_ORIGIN: 'https://app.example',
-    ZULIP_SITE: 'https://org.zulipchat.com',
-    ZULIP_BOT_EMAIL: 'notify-bot@org.zulipchat.com',
-    ZULIP_API_KEY: 'apikey',
-    ZULIP_WEBHOOK_TOKEN: 'tok',
+    SECRETS_KEY: TEST_SECRETS_KEY,
   } as unknown as Env;
+  // Zulip config is per-org DB rows since 0008; deliver resolves the org from the link.
+  await seedZulipOrgConfig(env, CLOUD);
 });
 
 afterEach(() => {
@@ -74,7 +74,7 @@ describe('escalate', () => {
     vi.stubGlobal('fetch', fetchMock);
     const ripe = Date.now() - ESCALATION_DELAY_MS - 60_000;
     await seedPending(ALICE, 'p-ripe', ripe);
-    await saveLink(env, ALICE, '4242', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
     await dao.registerChannel(ALICE, 'zulip', 'Alice A');
 
     await escalate(env, dao, silent);
@@ -102,7 +102,7 @@ describe('escalate', () => {
     vi.stubGlobal('fetch', fetchMock);
     const stale = Date.now() - PENDING_MAX_AGE_MS - 60_000;
     await seedPending(ALICE, 'p-stale', stale);
-    await saveLink(env, ALICE, '4242', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
     await dao.registerChannel(ALICE, 'zulip', 'Alice A');
 
     await escalate(env, dao, silent);
@@ -114,7 +114,7 @@ describe('escalate', () => {
     const fetchMock = okFetch();
     vi.stubGlobal('fetch', fetchMock);
     await seedPending(ALICE, 'p-fresh', Date.now());
-    await saveLink(env, ALICE, '4242', 'Alice A');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
     await dao.registerChannel(ALICE, 'zulip', 'Alice A');
 
     await escalate(env, dao, silent);

@@ -6,27 +6,26 @@ import { Dao } from '../src/db/dao';
 import type { Env } from '../src/env';
 import { makeZulipAdapter } from '../src/notifications/adapters/zulip/adapter';
 import type { InboundContext } from '../src/notifications/contract';
-import { mintCode, recordFailedAttempt } from '../src/notifications/adapters/zulip/store';
+import { getLink, mintCode, recordFailedAttempt } from '../src/notifications/adapters/zulip/store';
 import { SqliteD1 } from './support/sqlite-d1';
+import { seedZulipOrgConfig, TEST_SECRETS_KEY } from './support/zulip-org';
 
 const ALICE = 'acct-alice';
 const TOKEN = 'webhook-secret';
 const SENDER = 4242;
+const CLOUD = 'cloud-1';
 
 let db: SqliteD1;
 let dao: Dao;
 let env: Env;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new SqliteD1();
   dao = new Dao(db);
-  env = {
-    DB: db,
-    ZULIP_SITE: 'https://org.zulipchat.com',
-    ZULIP_BOT_EMAIL: 'notify-bot@org.zulipchat.com',
-    ZULIP_API_KEY: 'apikey',
-    ZULIP_WEBHOOK_TOKEN: TOKEN,
-  } as unknown as Env;
+  env = { DB: db, SECRETS_KEY: TEST_SECRETS_KEY } as unknown as Env;
+  // The webhook token now lives (hashed) in the per-org config row; a matching
+  // inbound token both authenticates AND resolves the org.
+  await seedZulipOrgConfig(env, CLOUD, { webhookToken: TOKEN });
 });
 
 const ctx: InboundContext = {
@@ -65,7 +64,7 @@ async function call(body: WebhookMsg): Promise<Response> {
 }
 
 describe('zulip webhook — token + guard', () => {
-  it('rejects a wrong token and links nothing', async () => {
+  it('rejects a token matching no org config and links nothing', async () => {
     const code = await mintCode(env, ALICE, 60_000);
     const res = await call({ token: 'nope', content: `/link ${code}` });
     expect(res.status).toBe(401);
@@ -104,6 +103,16 @@ describe('zulip webhook — redemption', () => {
     const bodyJson = (await res.json()) as { content?: string };
     expect(bodyJson.content).toContain('Connected');
     expect(await dao.getUserChannels(ALICE)).toEqual([{ channel: 'zulip', label: 'Alice A' }]);
+    // The link is stamped with the org the webhook token resolved to.
+    expect((await getLink(env, ALICE))?.cloudId).toBe(CLOUD);
+  });
+
+  it('stamps the org of the TOKEN that redeemed the code (multi-org routing)', async () => {
+    await seedZulipOrgConfig(env, 'cloud-2', { webhookToken: 'token-two' });
+    const code = await mintCode(env, ALICE, 60_000);
+    const res = await call({ token: 'token-two', content: `/link ${code}` });
+    expect(((await res.json()) as { content?: string }).content).toContain('Connected');
+    expect((await getLink(env, ALICE))?.cloudId).toBe('cloud-2');
   });
 
   it('accepts a lowercase code (normalized to the mint alphabet)', async () => {

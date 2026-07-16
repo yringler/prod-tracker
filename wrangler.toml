@@ -47,15 +47,13 @@ migrations_dir = "migrations"
 
 # Secrets (set via `wrangler secret put`), NOT vars:
 #   JIRA_CLIENT_ID, JIRA_CLIENT_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
-#   ZULIP_API_KEY, ZULIP_WEBHOOK_TOKEN, EMAIL_API_KEY
+#   EMAIL_API_KEY, SECRETS_KEY
+# SECRETS_KEY is base64 of 32 random bytes (`openssl rand -base64 32`) — the
+# AES-256-GCM master key for per-org adapter secrets stored in D1 (e.g. Zulip
+# credentials, entered by an admin at Admin → Notification channels).
 [vars]
 APP_ORIGIN = "https://tracker.yehudardevelopment.com"
 OAUTH_REDIRECT_PATH = "/api/auth/callback"
 VAPID_SUBJECT = "mailto:admin@example.com"
 BOOTSTRAP_ADMIN_ACCOUNT_ID = "557058:fcacbb78-fa49-4419-beee-fe3f90526986"
-# ZULIP_SITE: base URL, NO trailing slash. The Zulip adapter builds request URLs
-# as `${ZULIP_SITE}/api/v1/messages` (worker/src/notifications/adapters/zulip/
-# deliver.ts), so a trailing slash yields a double slash (…org//api/v1/messages).
-ZULIP_SITE = "https://zulip.chabad.org"
-ZULIP_BOT_EMAIL = "trackerout-bot@zulip.chabad.org"
 EMAIL_FROM = "notify@yourorg.com"

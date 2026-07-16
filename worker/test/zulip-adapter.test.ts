@@ -9,22 +9,21 @@ import { makeZulipAdapter } from '../src/notifications/adapters/zulip/adapter';
 import { mintCode, redeemCode, saveLink } from '../src/notifications/adapters/zulip/store';
 import type { NotificationPayload } from '../src/notifications/contract';
 import { SqliteD1 } from './support/sqlite-d1';
+import { seedZulipOrgConfig, TEST_SECRETS_KEY } from './support/zulip-org';
 
 const ALICE = 'acct-alice';
 const ZULIP_UID = '4242';
+const CLOUD = 'cloud-1';
 
 let db: SqliteD1;
 let env: Env;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new SqliteD1();
-  env = {
-    DB: db,
-    ZULIP_SITE: 'https://org.zulipchat.com',
-    ZULIP_BOT_EMAIL: 'notify-bot@org.zulipchat.com',
-    ZULIP_API_KEY: 'apikey',
-    ZULIP_WEBHOOK_TOKEN: 'tok',
-  } as unknown as Env;
+  env = { DB: db, SECRETS_KEY: TEST_SECRETS_KEY } as unknown as Env;
+  // Per-org config (site/botEmail/apiKey encrypted; webhook token hashed) —
+  // replaces the pre-0008 env-based ZULIP_* settings.
+  await seedZulipOrgConfig(env, CLOUD);
 });
 
 afterEach(() => {
@@ -55,7 +54,7 @@ describe('zulip adapter — deliver', () => {
   it('posts a form-encoded private (direct) message with Basic auth after linking', async () => {
     const fetchMock = okFetch();
     vi.stubGlobal('fetch', fetchMock);
-    await saveLink(env, ALICE, ZULIP_UID, 'Alice A');
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice A', CLOUD);
 
     const adapter = makeZulipAdapter(env);
     const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
@@ -84,7 +83,7 @@ describe('zulip adapter — deliver', () => {
       'fetch',
       vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' }) as unknown as Response),
     );
-    await saveLink(env, ALICE, ZULIP_UID, 'Alice');
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', CLOUD);
     const adapter = makeZulipAdapter(env);
     const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: true });
@@ -95,10 +94,80 @@ describe('zulip adapter — deliver', () => {
       'fetch',
       vi.fn(async () => ({ ok: false, status: 400, text: async () => 'bad' }) as unknown as Response),
     );
-    await saveLink(env, ALICE, ZULIP_UID, 'Alice');
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', CLOUD);
     const adapter = makeZulipAdapter(env);
     const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: false });
+  });
+});
+
+describe('zulip adapter — per-org deliver routing', () => {
+  it('routes the send through the LINK org, not any other config', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await seedZulipOrgConfig(env, 'cloud-2', {
+      site: 'https://two.zulipchat.com',
+      botEmail: 'bot2@two.zulipchat.com',
+      apiKey: 'apikey-2',
+      webhookToken: 'tok-2',
+    });
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', 'cloud-2');
+
+    const adapter = makeZulipAdapter(env);
+    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    expect(r).toEqual({ status: 'delivered' });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://two.zulipchat.com/api/v1/messages');
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Basic ' + btoa('bot2@two.zulipchat.com:apikey-2'));
+  });
+
+  it('NULL-org link (pre-0008) + exactly one config: falls back and delivers', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    // Simulate a pre-migration row: cloud_id was backfilled as NULL by ALTER TABLE.
+    await db
+      .prepare(
+        `INSERT INTO zulip_links (account_id, zulip_user_id, full_name, linked_at, cloud_id)
+         VALUES (?, ?, ?, ?, NULL)`,
+      )
+      .bind(ALICE, ZULIP_UID, 'Alice', new Date().toISOString())
+      .run();
+
+    const adapter = makeZulipAdapter(env);
+    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    expect(r).toEqual({ status: 'delivered' });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe('https://org.zulipchat.com/api/v1/messages');
+  });
+
+  it('NULL-org link with TWO configs is ambiguous: failed{retryable:false}, no send', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await seedZulipOrgConfig(env, 'cloud-2', { webhookToken: 'tok-2' });
+    await db
+      .prepare(
+        `INSERT INTO zulip_links (account_id, zulip_user_id, full_name, linked_at, cloud_id)
+         VALUES (?, ?, ?, ?, NULL)`,
+      )
+      .bind(ALICE, ZULIP_UID, 'Alice', new Date().toISOString())
+      .run();
+
+    const adapter = makeZulipAdapter(env);
+    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    expect(r).toEqual({ status: 'failed', retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("link to an org with no config: failed{retryable:false}, no send", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', 'cloud-unconfigured');
+
+    const adapter = makeZulipAdapter(env);
+    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    expect(r).toEqual({ status: 'failed', retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -107,19 +176,17 @@ describe('zulip adapter — status / unlink / setup', () => {
     const adapter = makeZulipAdapter(env);
     expect(await adapter.getStatus(ALICE)).toEqual({ linked: false });
 
-    await saveLink(env, ALICE, ZULIP_UID, 'Alice A');
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice A', CLOUD);
     expect(await adapter.getStatus(ALICE)).toEqual({ linked: true, label: 'Alice A' });
 
     await adapter.unlink(ALICE);
     expect(await adapter.getStatus(ALICE)).toEqual({ linked: false });
   });
 
-  it('isConfigured requires the full site/bot/api/webhook secret set', () => {
-    expect(makeZulipAdapter(env).isConfigured!()).toBe(true);
-    for (const missing of ['ZULIP_SITE', 'ZULIP_BOT_EMAIL', 'ZULIP_API_KEY', 'ZULIP_WEBHOOK_TOKEN']) {
-      const partial = { ...env, [missing]: '' } as unknown as Env;
-      expect(makeZulipAdapter(partial).isConfigured!()).toBe(false);
-    }
+  it('isConfigured is per-org: true for the configured org, false for others', async () => {
+    const adapter = makeZulipAdapter(env);
+    expect(await adapter.isConfigured!(CLOUD)).toBe(true);
+    expect(await adapter.isConfigured!('cloud-other')).toBe(false);
   });
 
   it('beginSetup mints a copyable /link command with an expiry', async () => {

@@ -16,8 +16,10 @@ import {
 import {
   appointAdmin,
   assignMembership,
+  configureChannel,
   createTeam,
   getConfig as adminGetConfig,
+  listChannelConfigs,
   listFields,
   listMemberships,
   listOrgMembers,
@@ -173,6 +175,13 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (p === '/api/admin/config/done-statuses' && m === 'PUT') return setDoneStatuses(req, ctx);
     if (p === '/api/admin/fields' && m === 'GET') return listFields(ctx);
     if (p === '/api/admin/config/fields' && m === 'PUT') return setFields(req, ctx);
+    // Per-org notification-channel config (write-only secrets; the adapter
+    // validates + encrypts). Scoped to the admin's active site (ctx.cloudId).
+    if (p === '/api/admin/notifications/channels' && m === 'GET') return listChannelConfigs(ctx);
+    const chCfgMatch = p.match(/^\/api\/admin\/notifications\/([^/]+)\/config$/);
+    if (chCfgMatch && m === 'PUT') {
+      return configureChannel(req, ctx, decodeURIComponent(chCfgMatch[1]!));
+    }
 
     const memMatch = p.match(/^\/api\/admin\/teams\/([^/]+)\/memberships$/);
     if (memMatch && m === 'GET') return listMemberships(ctx, decodeURIComponent(memMatch[1]!));
