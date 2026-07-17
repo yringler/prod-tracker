@@ -3,6 +3,7 @@ import {
   ESCALATION_DELAY_MS,
   FALLBACK_CLAIM_CEILING,
   PENDING_MAX_AGE_MS,
+  REMINDER_COOLDOWN_MS,
   changelogIdGreater,
   claimCeiling,
   computeRatio,
@@ -10,6 +11,7 @@ import {
   isDoneTransition,
   isStaleTransition,
   isTrackerToday,
+  mayRemind,
   sprintForTimestamp,
   trackerDayKey,
   weekStartOf,
@@ -49,6 +51,37 @@ describe('escalationWindow', () => {
     expect(Date.parse(notBeforeIso)).toBe(now - PENDING_MAX_AGE_MS);
     // A ripe row sits inside [notBefore, dueBefore).
     expect(Date.parse(notBeforeIso)).toBeLessThan(Date.parse(dueBeforeIso));
+  });
+});
+
+describe('mayRemind', () => {
+  const t0 = Date.parse('2026-06-15T12:00:00.000Z');
+
+  it('always reminds when there is no prior reminder', () => {
+    expect(mayRemind('900', null, t0)).toBe(true);
+  });
+
+  it('suppresses a real transition still within the cooldown', () => {
+    const last = { changelogId: '900', atIso: new Date(t0).toISOString() };
+    // Greater id (transitioned) but only 5 min later — cooldown not passed.
+    expect(mayRemind('901', last, t0 + 5 * 60 * 1000)).toBe(false);
+  });
+
+  it('suppresses a same/lower id even after the cooldown', () => {
+    const last = { changelogId: '900', atIso: new Date(t0).toISOString() };
+    const later = t0 + REMINDER_COOLDOWN_MS + 60_000;
+    expect(mayRemind('900', last, later)).toBe(false); // same id
+    expect(mayRemind('899', last, later)).toBe(false); // lower id
+  });
+
+  it('reminds when both transitioned and cooldown passed', () => {
+    const last = { changelogId: '900', atIso: new Date(t0).toISOString() };
+    expect(mayRemind('901', last, t0 + REMINDER_COOLDOWN_MS + 60_000)).toBe(true);
+  });
+
+  it('treats the exact cooldown boundary as passed (>=)', () => {
+    const last = { changelogId: '900', atIso: new Date(t0).toISOString() };
+    expect(mayRemind('901', last, t0 + REMINDER_COOLDOWN_MS)).toBe(true);
   });
 });
 

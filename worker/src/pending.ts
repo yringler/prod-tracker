@@ -8,7 +8,7 @@
 
 import type { PendingRating } from '@shared/contracts';
 import type { StatusTransition } from '@shared/domain';
-import { isStaleTransition } from '@shared/domain';
+import { changelogIdGreater, isStaleTransition } from '@shared/domain';
 import type { EscalationCandidate, PendingRow } from './db/dao';
 
 /**
@@ -57,18 +57,25 @@ export function selectPushTransition(
 }
 
 /**
- * Collapse ripe escalation rows to one per (account, issue) — a flurry escalates
- * once, not once per move (the escalate-path twin of groupPendingByIssue). Rows
- * arrive oldest-first (pendingDueForEscalation ORDER BY created_at), so the first
- * seen per key is the earliest and becomes the representative for the deep link.
- * Callers must still markEscalated the FULL input set (the collapsed siblings),
- * or the un-delivered rows re-escalate next tick.
+ * Collapse ripe escalation rows to one per (cloud, account, issue) — a flurry
+ * escalates once, not once per move (the escalate-path twin of groupPendingByIssue).
+ * Rows arrive oldest-first (pendingDueForEscalation ORDER BY created_at), so the
+ * first seen per key is the earliest and stays the representative for the deep
+ * link — but the representative carries the MAX changelog id across the collapsed
+ * group, so the reminder-dedup (mayRemind) keys on the newest transition of the
+ * flurry, not the oldest. Callers must still markEscalated the FULL input set (the
+ * collapsed siblings), or the un-delivered rows re-escalate next tick.
  */
 export function selectEscalations(due: EscalationCandidate[]): EscalationCandidate[] {
   const byKey = new Map<string, EscalationCandidate>();
   for (const p of due) {
-    const key = `${p.accountId} ${p.issueKey}`;
-    if (!byKey.has(key)) byKey.set(key, p);
+    const key = `${p.cloudId} ${p.accountId} ${p.issueKey}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...p });
+    } else if (changelogIdGreater(p.changelogId, existing.changelogId)) {
+      existing.changelogId = p.changelogId;
+    }
   }
   return [...byKey.values()];
 }

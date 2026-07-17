@@ -12,6 +12,23 @@ no earlier than the first claim in the system. Deferred richer controls:
   history is reachable without dumping every sprint back to 2015.
 - **Range toggle** — rolling last-12-months vs. calendar year.
 
+## Escalation reminder: during-cooldown transition is window-closed, not re-nudged
+
+**FOR HUMAN CONFIRMATION.** In `worker/src/cron/escalate.ts`, a genuinely-newer
+transition that arrives while an issue is still inside its reminder cooldown is
+`escalated_at`-closed on the same tick (it's part of the "full due set" passed to
+`markEscalated`) and does NOT get a delayed re-send. A further reminder fires only
+if a *strictly-newer* transition lands *after* the cooldown. This is deliberate —
+one issue-level nudge per cooldown window, anti-spam — but it diverges from a
+literal reading of the "transitioned AND ≥10 min since last reminder" rule, so it
+needs a human sign-off that the window-closer behavior matches intent.
+
+Alternative, if eventual re-nudge is the desired behavior instead: exclude
+cooldown-suppressed rows from the `markEscalated` set (so they stay pending and
+re-select once the cooldown passes), and flip the corresponding assertion in
+`worker/test/escalate.test.ts` (`escalatedAt('p-b')` in the "cooldown suppresses a
+genuinely-newer transition" test expects non-null today). Not implemented now.
+
 ## Pending "unit" key: cross-site same issue-key collision
 
 The three per-issue collapse paths in `worker/src/pending.ts` disagree with the

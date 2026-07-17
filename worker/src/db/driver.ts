@@ -7,11 +7,26 @@ export interface D1Result<T> {
   results: T[];
 }
 
+/**
+ * The subset of a run()'s result we read: the number of rows written. Real D1
+ * exposes it under `meta.changes`; the better-sqlite3 test backing surfaces a
+ * top-level `changes`. `runChanges` reads whichever is present.
+ */
+export interface D1RunResult {
+  meta?: { changes?: number };
+  changes?: number;
+}
+
+/** Rows affected by a run(), tolerant of D1 (`meta.changes`) vs sqlite (`changes`). */
+export function runChanges(res: D1RunResult): number {
+  return res.meta?.changes ?? res.changes ?? 0;
+}
+
 export interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
   first<T = Record<string, unknown>>(colName?: string): Promise<T | null>;
   all<T = Record<string, unknown>>(): Promise<D1Result<T>>;
-  run(): Promise<unknown>;
+  run(): Promise<D1RunResult>;
 }
 
 export interface D1Like {

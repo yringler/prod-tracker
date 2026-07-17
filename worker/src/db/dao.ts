@@ -12,11 +12,13 @@
 
 import type {
   ClaimedVsDone,
+  LastReminder,
   Role,
   SprintWindow,
 } from '@shared/domain';
 import { computeRatio } from '@shared/domain';
 import type { D1Like } from './driver';
+import { runChanges } from './driver';
 
 const now = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
@@ -54,8 +56,10 @@ export interface UserChannel {
 
 export interface EscalationCandidate {
   pendingId: string;
+  cloudId: string;
   accountId: string;
   issueKey: string;
+  changelogId: string;
   title: string;
   url: string;
 }
@@ -708,25 +712,82 @@ export class Dao {
   ): Promise<EscalationCandidate[]> {
     const { results } = await this.db
       .prepare(
-        `SELECT pending_id, account_id, issue_key, title, url FROM pending_ratings
+        `SELECT pending_id, cloud_id, account_id, issue_key, changelog_id, title, url FROM pending_ratings
          WHERE escalated_at IS NULL AND created_at <= ? AND created_at > ?
          ORDER BY created_at`,
       )
       .bind(dueBeforeIso, notBeforeIso)
       .all<{
         pending_id: string;
+        cloud_id: string;
         account_id: string;
         issue_key: string;
+        changelog_id: string;
         title: string;
         url: string;
       }>();
     return results.map((r) => ({
       pendingId: r.pending_id,
+      cloudId: r.cloud_id,
       accountId: r.account_id,
       issueKey: r.issue_key,
+      changelogId: r.changelog_id,
       title: r.title,
       url: r.url,
     }));
+  }
+
+  /**
+   * The last fallback reminder recorded for an issue, or null if none.
+   *
+   * CRON-ONLY reminder-state reader for `cron/escalate.ts`; do not wire it into an
+   * HTTP route. It returns reminder metadata (changelogId, atIso) — NOT per-account
+   * rating data — so this is a wiring guard, not a privacy-invariant method (lighter
+   * than the accountsForReport surveillance concern).
+   */
+  async getLastReminder(
+    cloudId: string,
+    accountId: string,
+    issueKey: string,
+  ): Promise<LastReminder | null> {
+    const r = await this.db
+      .prepare(
+        `SELECT last_reminded_changelog_id AS c, last_reminded_at AS a FROM issue_reminders
+         WHERE cloud_id = ? AND account_id = ? AND issue_key = ?`,
+      )
+      .bind(cloudId, accountId, issueKey)
+      .first<{ c: string; a: string }>();
+    return r ? { changelogId: r.c, atIso: r.a } : null;
+  }
+
+  /**
+   * Claim-before-send CAS: record a reminder for an issue iff the stored
+   * last_reminded_at still equals `prevAtIso` (the value the caller read via
+   * getLastReminder — null when there was no prior row). A single-statement
+   * INSERT ... ON CONFLICT DO UPDATE ... WHERE guarantees exactly one winner when
+   * two ticks race; `IS` makes the no-prior (null) case work symmetrically.
+   * Returns true iff this caller won the claim.
+   */
+  async claimReminder(
+    cloudId: string,
+    accountId: string,
+    issueKey: string,
+    changelogId: string,
+    prevAtIso: string | null,
+    atIso: string,
+  ): Promise<boolean> {
+    const res = await this.db
+      .prepare(
+        `INSERT INTO issue_reminders (cloud_id, account_id, issue_key, last_reminded_changelog_id, last_reminded_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(cloud_id, account_id, issue_key) DO UPDATE SET
+           last_reminded_changelog_id = excluded.last_reminded_changelog_id,
+           last_reminded_at           = excluded.last_reminded_at
+         WHERE issue_reminders.last_reminded_at IS ?`,
+      )
+      .bind(cloudId, accountId, issueKey, changelogId, atIso, prevAtIso)
+      .run();
+    return runChanges(res) > 0;
   }
 
   /** Mark rows escalated (at most once). Batched like markReported(). */
@@ -887,6 +948,7 @@ export class Dao {
       this.db.prepare(`UPDATE admins SET appointed_by = NULL WHERE appointed_by = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM team_memberships  WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM pending_ratings   WHERE account_id = ?`).bind(accountId),
+      this.db.prepare(`DELETE FROM issue_reminders   WHERE account_id = ?`).bind(accountId),
       this.db.prepare(`DELETE FROM push_subscriptions WHERE account_id = ?`).bind(accountId),
       // Adapter-owned zulip_*/email_links rows are erased separately, via the
       // registry unlink seam (routes/notifications), not from here.

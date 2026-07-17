@@ -234,3 +234,19 @@ CREATE TABLE IF NOT EXISTS email_links (
   email       TEXT NOT NULL,        -- the delivery address (opaque to the app)
   verified_at TEXT NOT NULL         -- ISO UTC; when the address was confirmed
 );
+
+-- keep in sync with migrations/0009_issue_reminders.sql
+-- Per-issue fallback-reminder ledger: the escalation cron's claim-before-send
+-- serialization point AND issue-level dedup. One row per (cloud_id, account_id,
+-- issue_key) records the last reminder sent (changelog id + instant); the CAS on
+-- claimReminder guarantees one concurrent winner, and mayRemind reads it to gate
+-- re-sends. Distinct from pending_ratings.escalated_at (per-row window-closer).
+-- Added 0009.
+CREATE TABLE IF NOT EXISTS issue_reminders (
+  cloud_id                   TEXT NOT NULL,
+  account_id                 TEXT NOT NULL,
+  issue_key                  TEXT NOT NULL,
+  last_reminded_changelog_id TEXT NOT NULL,
+  last_reminded_at           TEXT NOT NULL,   -- ISO UTC
+  PRIMARY KEY (cloud_id, account_id, issue_key)
+);

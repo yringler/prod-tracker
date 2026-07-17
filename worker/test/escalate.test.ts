@@ -162,4 +162,114 @@ describe('escalate', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(await escalatedAt('p-fresh')).toBeNull();
   });
+
+  // --- reminder cooldown + transition gating (issue_reminders) ---------------
+
+  it('cooldown suppresses a genuinely-newer transition on the same issue', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const base = Date.now();
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    // First reminder goes out.
+    await seedPending(ALICE, 'p-a', base - ESCALATION_DELAY_MS - 60_000, 'ABC-1', '900');
+    await escalate(env, dao, silent, base);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // A new transition (greater id) arrives and is ripe, but only 5 min later.
+    await seedPending(ALICE, 'p-b', base - ESCALATION_DELAY_MS, 'ABC-1', '901');
+    await escalate(env, dao, silent, base + 5 * 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // still cooling down → no re-send
+    expect(await escalatedAt('p-b')).not.toBeNull(); // but window-closed regardless
+  });
+
+  it('re-sends once the cooldown passes and a newer transition exists', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const base = Date.now();
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    await seedPending(ALICE, 'p-a', base - ESCALATION_DELAY_MS - 60_000, 'ABC-1', '900');
+    await escalate(env, dao, silent, base);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await seedPending(ALICE, 'p-b', base - ESCALATION_DELAY_MS, 'ABC-1', '901');
+    await escalate(env, dao, silent, base + 11 * 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // transitioned AND cooldown passed
+  });
+
+  it('does not re-send after cooldown when there is no newer transition', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const base = Date.now();
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    await seedPending(ALICE, 'p-a', base - ESCALATION_DELAY_MS - 60_000, 'ABC-1', '900');
+    await escalate(env, dao, silent, base);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Same changelog id → not a new transition, even though cooldown has passed.
+    await seedPending(ALICE, 'p-b', base - ESCALATION_DELAY_MS, 'ABC-1', '900');
+    await escalate(env, dao, silent, base + 11 * 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await escalatedAt('p-b')).not.toBeNull();
+  });
+
+  it('a throwing getUserChannels leaves no claim, skips markEscalated, and retries cleanly', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const ripe = Date.now() - ESCALATION_DELAY_MS - 60_000;
+    await seedPending(ALICE, 'p-ripe', ripe);
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    // First tick: the channel read throws before the claim is written.
+    const spy = vi
+      .spyOn(dao, 'getUserChannels')
+      .mockRejectedValueOnce(new Error('transient channel-read failure'));
+    await expect(escalate(env, dao, silent)).rejects.toThrow('transient channel-read failure');
+
+    // No leaked claim row, and the window is NOT closed (markEscalated never ran).
+    const rows = await db.prepare(`SELECT * FROM issue_reminders`).all();
+    expect(rows.results).toHaveLength(0);
+    expect(await escalatedAt('p-ripe')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Second tick (spy restored to real impl): clean retry delivers exactly once.
+    spy.mockRestore();
+    await escalate(env, dao, silent);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await escalatedAt('p-ripe')).not.toBeNull();
+  });
+
+  it('two overlapping escalate() ticks reminder the same issue exactly once', async () => {
+    // Deferred fetch: both ticks reach the claim-before-send CAS before either
+    // delivers; only the winner fetches. Mirrors two crons racing on one issue.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetchMock = vi.fn(async () => {
+      await gate;
+      return { ok: true, status: 200, text: async () => '' } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const base = Date.now();
+    await seedPending(ALICE, 'p-ripe', base - ESCALATION_DELAY_MS - 60_000, 'ABC-1', '900');
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+
+    const run1 = escalate(env, dao, silent, base);
+    const run2 = escalate(env, dao, silent, base);
+    release();
+    await Promise.all([run1, run2]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const rows = await db.prepare(`SELECT * FROM issue_reminders`).all();
+    expect(rows.results).toHaveLength(1);
+  });
 });

@@ -179,6 +179,35 @@ describe('pending grouped by issue', () => {
   });
 });
 
+describe('claimReminder CAS (issue-reminder serialization)', () => {
+  const ACCT = 'u1';
+  const ISSUE = 'X-1';
+
+  it('lets exactly one of two concurrent no-prior claims win (one row)', async () => {
+    const at = '2026-06-22T09:00:00.000Z';
+    const [a, b] = await Promise.all([
+      dao.claimReminder(CLOUD, ACCT, ISSUE, '900', null, at),
+      dao.claimReminder(CLOUD, ACCT, ISSUE, '901', null, at),
+    ]);
+    expect([a, b].filter(Boolean)).toHaveLength(1); // exactly one winner
+    const last = await dao.getLastReminder(CLOUD, ACCT, ISSUE);
+    expect(last).not.toBeNull();
+  });
+
+  it('lets exactly one concurrent CAS win against a pre-seeded row', async () => {
+    const prev = '2026-06-22T09:00:00.000Z';
+    await dao.claimReminder(CLOUD, ACCT, ISSUE, '900', null, prev); // seed the row
+    const next = '2026-06-22T09:11:00.000Z';
+    const [a, b] = await Promise.all([
+      dao.claimReminder(CLOUD, ACCT, ISSUE, '901', prev, next),
+      dao.claimReminder(CLOUD, ACCT, ISSUE, '902', prev, next),
+    ]);
+    expect([a, b].filter(Boolean)).toHaveLength(1); // only the CAS on prev wins
+    // A stale CAS (wrong prev) never wins.
+    expect(await dao.claimReminder(CLOUD, ACCT, ISSUE, '903', prev, next)).toBe(false);
+  });
+});
+
 describe('issue_state cursor', () => {
   it('persists and advances the last-seen changelog id', async () => {
     expect(await dao.getLastSeenChangelogId(CLOUD, 'X-1')).toBeNull();

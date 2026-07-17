@@ -7,6 +7,7 @@ import type {
   D1Like,
   D1PreparedStatement,
   D1Result,
+  D1RunResult,
 } from '../../src/db/driver';
 
 const SCHEMA = readFileSync(
@@ -40,7 +41,7 @@ class Stmt implements D1PreparedStatement {
     return { results: rows };
   }
 
-  async run(): Promise<unknown> {
+  async run(): Promise<D1RunResult> {
     return this.db.prepare(this.sql).run(...(this.params as never[]));
   }
 }

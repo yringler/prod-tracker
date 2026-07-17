@@ -1,7 +1,15 @@
 // Domain primitives shared by client + worker. The only dependency is date-fns
 // (with @date-fns/utc) for date math — see CLAUDE.md.
 import { UTCDate } from '@date-fns/utc';
-import { addHours, addMinutes, format, startOfDay, startOfISOWeek, subHours } from 'date-fns';
+import {
+  addHours,
+  addMinutes,
+  differenceInMilliseconds,
+  format,
+  startOfDay,
+  startOfISOWeek,
+  subHours,
+} from 'date-fns';
 
 export type Role = 'user' | 'admin';
 
@@ -91,6 +99,39 @@ export function changelogIdGreater(a: string, b: string | null): boolean {
     // Non-numeric fallback: lexicographic on equal-length, else length.
     return a.length === b.length ? a > b : a.length > b.length;
   }
+}
+
+/**
+ * Cooldown between fallback-channel reminders for the SAME issue: even after a
+ * genuine new transition, don't re-remind within this window. Deliberately a
+ * SEPARATE constant from ESCALATION_DELAY_MS (which times the first escalation of
+ * a fresh pending) even though both currently happen to be 10 min — they answer
+ * different questions and can diverge.
+ */
+export const REMINDER_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** The last reminder we sent for an issue: its changelog id + when we sent it. */
+export interface LastReminder {
+  changelogId: string;
+  atIso: string;
+}
+
+/**
+ * Whether to send a fallback reminder for an issue now. Suppresses a re-send
+ * unless BOTH hold since the last reminder: the issue transitioned (a strictly
+ * greater changelog id, BigInt-safe) AND the cooldown has elapsed. No prior
+ * reminder → always allowed.
+ */
+export function mayRemind(
+  candidateChangelogId: string,
+  last: LastReminder | null,
+  nowMs: number,
+): boolean {
+  if (last === null) return true;
+  const transitioned = changelogIdGreater(candidateChangelogId, last.changelogId);
+  const cooldownPassed =
+    differenceInMilliseconds(new UTCDate(nowMs), new UTCDate(last.atIso)) >= REMINDER_COOLDOWN_MS;
+  return transitioned && cooldownPassed;
 }
 
 /** Bucket a done-event timestamp into the sprint whose window contains it. */

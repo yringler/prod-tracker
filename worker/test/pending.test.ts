@@ -103,10 +103,14 @@ describe('selectEscalations', () => {
     pendingId: string,
     accountId: string,
     issueKey: string,
+    changelogId = '900',
+    cloudId = 'cloud-1',
   ): EscalationCandidate => ({
     pendingId,
+    cloudId,
     accountId,
     issueKey,
+    changelogId,
     title: `${issueKey} title`,
     url: `https://example.atlassian.net/browse/${issueKey}`,
   });
@@ -114,18 +118,20 @@ describe('selectEscalations', () => {
   it('collapses a flurry to one escalation per (account, issue), keeping the earliest', () => {
     // Oldest-first, as pendingDueForEscalation returns (ORDER BY created_at).
     const due = [
-      cand('p1', 'u1', 'X-1'),
-      cand('p2', 'u1', 'X-1'),
-      cand('p3', 'u1', 'X-1'),
-      cand('p4', 'u1', 'X-2'),
+      cand('p1', 'u1', 'X-1', '900'),
+      cand('p2', 'u1', 'X-1', '901'),
+      cand('p3', 'u1', 'X-1', '902'),
+      cand('p4', 'u1', 'X-2', '903'),
     ];
 
     const out = selectEscalations(due);
 
     expect(out).toHaveLength(2);
-    // Representative = first (earliest) seen for the collapsed issue.
+    // Representative = first (earliest) seen for the collapsed issue...
     expect(out.find((c) => c.issueKey === 'X-1')!.pendingId).toBe('p1');
     expect(out.find((c) => c.issueKey === 'X-2')!.pendingId).toBe('p4');
+    // ...but carrying the MAX changelog id across the collapsed flurry.
+    expect(out.find((c) => c.issueKey === 'X-1')!.changelogId).toBe('902');
   });
 
   it('does not collapse the same issue across different accounts', () => {
