@@ -8,6 +8,25 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false
   },
+  "angularCompilerOptions": {
+    // LOAD-BEARING. Without it Angular runs only *basic* template checking, which
+    // checks top-level binding expressions but NOT expressions inside embedded
+    // views (`@if` / `@for` / `ng-template`). That hole shipped a runtime
+    // `TypeError: ctx.String is not a function` inside `@for` in the risk-cutoffs
+    // editor, blanking every row after the first. This flag turns that entire bug
+    // class (any template expression referencing a JS global or a member the
+    // component class does not have, anywhere) into a BUILD failure — and
+    // `wrangler.toml`'s `[build]` already runs `npm run build:client` before every
+    // dev/deploy, so the gate was wired; only the flag was missing.
+    // `strictTemplates` was measured separately (the plan's step 4) and ADOPTED: it
+    // cost exactly 4 errors repo-wide, all one real defect — a `<wa-input>`'s
+    // `value` is `string | null`, and four handlers declared it `string`. No cast
+    // and no `$any` was needed, so it is kept as defense in depth. It does NOT
+    // replace `fullTemplateTypeCheck` above: that one is what closes the embedded-
+    // view hole, and leaving it explicit keeps the reason documented.
+    "fullTemplateTypeCheck": true,
+    "strictTemplates": true
+  },
   "files": ["src/main.ts"],
   "include": ["src/**/*.ts", "../shared/src/**/*.ts"]
 }
