@@ -320,3 +320,57 @@ describe('claimed trends (date-bucketed)', () => {
     expect(await dao.teamSize(team)).toBe(1);
   });
 });
+
+describe('channel opt-in (user_channels.enabled)', () => {
+  const ALICE = 'acct-alice';
+
+  it('new rows default to enabled, so nobody loses reminders on deploy', async () => {
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    expect(await dao.listChannelPrefs(ALICE)).toEqual([
+      { channel: 'zulip', label: '@alice', enabled: true },
+    ]);
+    expect(await dao.getUserChannels(ALICE)).toEqual([{ channel: 'zulip', label: '@alice' }]);
+  });
+
+  it('registerChannel does NOT resurrect enabled on a disabled row', async () => {
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    await dao.setChannelEnabled(ALICE, 'zulip', false);
+
+    // Re-linking (a new label) must update the label without silently opting the
+    // user back in — that's the whole point of the untouched conflict clause.
+    await dao.registerChannel(ALICE, 'zulip', '@alice-renamed');
+    expect(await dao.listChannelPrefs(ALICE)).toEqual([
+      { channel: 'zulip', label: '@alice-renamed', enabled: false },
+    ]);
+    expect(await dao.getUserChannels(ALICE)).toEqual([]);
+  });
+
+  it('setChannelEnabled upserts before any link exists, then keeps the label', async () => {
+    await dao.setChannelEnabled(ALICE, 'email', true);
+    expect(await dao.listChannelPrefs(ALICE)).toEqual([
+      { channel: 'email', label: '', enabled: true },
+    ]);
+
+    await dao.registerChannel(ALICE, 'email', 'a****@x.com');
+    await dao.setChannelEnabled(ALICE, 'email', false);
+    expect(await dao.listChannelPrefs(ALICE)).toEqual([
+      { channel: 'email', label: 'a****@x.com', enabled: false },
+    ]);
+  });
+
+  it('getUserChannels filters disabled rows; listChannelPrefs does not', async () => {
+    await dao.registerChannel(ALICE, 'email', 'a****@x.com');
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    await dao.setChannelEnabled(ALICE, 'email', false);
+
+    expect(await dao.getUserChannels(ALICE)).toEqual([{ channel: 'zulip', label: '@alice' }]);
+    expect((await dao.listChannelPrefs(ALICE)).map((p) => p.channel)).toEqual(['email', 'zulip']);
+  });
+
+  it('unregisterChannel drops the row entirely (opt-in included)', async () => {
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    await dao.setChannelEnabled(ALICE, 'zulip', false);
+    await dao.unregisterChannel(ALICE, 'zulip');
+    expect(await dao.listChannelPrefs(ALICE)).toEqual([]);
+  });
+});

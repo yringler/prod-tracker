@@ -46,7 +46,7 @@ describe('zulip adapter — deliver', () => {
     const fetchMock = okFetch();
     vi.stubGlobal('fetch', fetchMock);
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'not_linked' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -57,7 +57,7 @@ describe('zulip adapter — deliver', () => {
     await saveLink(env, ALICE, ZULIP_UID, 'Alice A', CLOUD);
 
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'delivered' });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -85,7 +85,7 @@ describe('zulip adapter — deliver', () => {
     );
     await saveLink(env, ALICE, ZULIP_UID, 'Alice', CLOUD);
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: true });
   });
 
@@ -96,7 +96,7 @@ describe('zulip adapter — deliver', () => {
     );
     await saveLink(env, ALICE, ZULIP_UID, 'Alice', CLOUD);
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: false });
   });
 });
@@ -114,12 +114,58 @@ describe('zulip adapter — per-org deliver routing', () => {
     await saveLink(env, ALICE, ZULIP_UID, 'Alice', 'cloud-2');
 
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'delivered' });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://two.zulipchat.com/api/v1/messages');
     const headers = init.headers as Record<string, string>;
     expect(headers.Authorization).toBe('Basic ' + btoa('bot2@two.zulipchat.com:apikey-2'));
+  });
+
+  it("req.orgId WINS over the link's own cloud_id", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await seedZulipOrgConfig(env, 'cloud-2', {
+      site: 'https://two.zulipchat.com',
+      botEmail: 'bot2@two.zulipchat.com',
+      apiKey: 'apikey-2',
+      webhookToken: 'tok-2',
+    });
+    // Linked under cloud-2, but the reminder is ABOUT cloud-1 — the caller's org
+    // decides which admin-provisioned bot sends it.
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', 'cloud-2');
+
+    const r = await makeZulipAdapter(env).deliver({
+      userId: ALICE,
+      orgId: CLOUD,
+      payload,
+      idempotencyKey: 'k',
+    });
+    expect(r).toEqual({ status: 'delivered' });
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      'https://org.zulipchat.com/api/v1/messages',
+    );
+  });
+
+  it("refuses to deliver under ANOTHER org's credentials when req.orgId has no config", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await seedZulipOrgConfig(env, 'cloud-2', {
+      site: 'https://two.zulipchat.com',
+      webhookToken: 'tok-2',
+    });
+    await saveLink(env, ALICE, ZULIP_UID, 'Alice', 'cloud-2');
+
+    // The reminder is ABOUT cloud-unconfigured, which has un-provisioned Zulip. Its
+    // content (issue key, title) must NOT leak into org 2's server under org 2's bot.
+    const r = await makeZulipAdapter(env).deliver({
+      userId: ALICE,
+      orgId: 'cloud-unconfigured',
+      payload,
+      idempotencyKey: 'k',
+    });
+    expect(r).toEqual({ status: 'failed', retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('NULL-org link (pre-0008) + exactly one config: falls back and delivers', async () => {
@@ -135,7 +181,7 @@ describe('zulip adapter — per-org deliver routing', () => {
       .run();
 
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'delivered' });
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toBe('https://org.zulipchat.com/api/v1/messages');
@@ -154,7 +200,7 @@ describe('zulip adapter — per-org deliver routing', () => {
       .run();
 
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -165,7 +211,7 @@ describe('zulip adapter — per-org deliver routing', () => {
     await saveLink(env, ALICE, ZULIP_UID, 'Alice', 'cloud-unconfigured');
 
     const adapter = makeZulipAdapter(env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -177,7 +223,7 @@ describe('zulip adapter — per-org deliver routing', () => {
 
     const noKey = { DB: db } as unknown as Env; // SECRETS_KEY missing → can't decrypt
     const adapter = makeZulipAdapter(noKey);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -189,7 +235,7 @@ describe('zulip adapter — per-org deliver routing', () => {
 
     const wrongKey = btoa('ABCDEFGHABCDEFGHABCDEFGHABCDEFGH'); // 32 bytes, valid but wrong
     const adapter = makeZulipAdapter({ DB: db, SECRETS_KEY: wrongKey } as unknown as Env);
-    const r = await adapter.deliver({ userId: ALICE, payload, idempotencyKey: 'k' });
+    const r = await adapter.deliver({ userId: ALICE, orgId: '', payload, idempotencyKey: 'k' });
     expect(r).toEqual({ status: 'failed', retryable: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });

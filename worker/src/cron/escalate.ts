@@ -61,6 +61,9 @@ export async function escalate(
       try {
         const r = await adapter.deliver({
           userId: p.accountId,
+          // The pending row already names the org; hand it to the adapter so it
+          // delivers under THIS org's admin-provisioned credentials.
+          orgId: p.cloudId,
           payload,
           // Dedup now lives in the caller CAS (claimReminder); this key is only a
           // best-effort adapter-side hint. For a collapsed flurry it is the earliest

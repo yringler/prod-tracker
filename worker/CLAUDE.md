@@ -329,19 +329,39 @@ not import `notifications/adapters/**`. The only crossing points are
 webhook.
 - **Data split.** App-owned rows (`user_channels`, self-scoped) live in `dao.ts` and
   are reached by erasure/report (`eraseAccount`, `accountsForReport`). Adapter-owned
-  rows (`zulip_*`, `email_links`) stay out of `dao.ts` entirely, are touched only by
-  the adapter's `store.ts` via `env.DB`, and are wiped through the registry `unlink`
-  seam (`pd-report.ts:eraseAdapterData`) — keep any new adapter's tables reachable
-  from that seam or GDPR erasure will silently miss them.
+  rows (`zulip_*`, `email_links`, `email_org_config`) stay out of `dao.ts` entirely,
+  are touched only by the adapter's `store.ts` via `env.DB`, and are wiped through
+  the registry `unlink` seam (`pd-report.ts:eraseAdapterData`) — keep any new
+  adapter's tables reachable from that seam or GDPR erasure will silently miss them.
+- **Opt-in vs identity (they are orthogonal).** `user_channels.enabled` (added 0013)
+  is the user's *do I want this?*; the adapter's own link row is *who am I here?*.
+  `dao.getUserChannels` filters `AND enabled = 1` and is the **single** enforcement
+  point — it covers `cron/escalate.ts`, the test-notification route, and
+  `risk/notify.ts`'s `deliverToAccount` (hence `risk/alerts.ts`) at once. The
+  settings list must therefore use `dao.listChannelPrefs` (unfiltered, self-scoped)
+  instead. `registerChannel`'s conflict clause deliberately does NOT touch
+  `enabled`, so re-linking can't silently re-enable someone who opted out;
+  `PUT /api/notifications/:channel/enabled` (`routes/notifications.ts`
+  `setChannelEnabled`) is the toggle, and `DELETE /api/notifications/:channel` now
+  means *forget my address*, not *mute*.
 - **Adding a channel.** Implement `NotifierAdapter` under `adapters/<channel>/`,
   register it in `registry.ts`; do **not** add a new `SetupStep` kind or touch
   `cron/escalate.ts` (the email adapter proved the contract by needing neither).
 - **Availability gating.** An adapter reports whether it can deliver **for an org**
-  via the optional `isConfigured(orgId)` (contract.ts; env-based adapters ignore the
-  orgId — email → `EMAIL_API_KEY`+`EMAIL_FROM`; zulip → a `zulip_org_config` row for
-  that org). `routes/notifications.ts` passes `ctx.cloudId`, hides unconfigured
-  channels from the list, and 404s their setup routes, so a channel that can't
-  deliver is never advertised.
+  via the optional `isConfigured(orgId)` (contract.ts). BOTH shipped adapters are
+  now per-org DB config: zulip → a `zulip_org_config` row; email → an
+  `email_org_config` row, **falling back to the legacy `EMAIL_API_KEY`+`EMAIL_FROM`
+  env pair** when the org has none (back-compat; those vars are deprecated).
+  `routes/notifications.ts` passes `ctx.cloudId`, hides unconfigured channels from
+  the list, and 404s their setup routes, so a channel that can't deliver is never
+  advertised.
+- **Delivery is handed an org.** `DeliverRequest.orgId` says which org's
+  provisioning to send under; every call site already knew it (`p.cloudId`,
+  `ctx.cloudId`, `cfg.cloudId`). `req.orgId` is **authoritative and there is no
+  fall-through**: an org with no provisioning simply fails to deliver, because org A
+  un-provisioning must never route an org-A reminder through org B's credentials.
+  Only a link with no org at all (pre-0008 NULL, reachable only when the caller has no
+  org either) falls back to the link row's own `cloud_id` / the sole-config path.
 - **Per-org adapter config (write-only secrets).** Zulip's credentials are
   admin-entered per org (`cloud_id`), not env config: the descriptor advertises
   `requestedFields` (shared), the admin UI posts them to
@@ -355,8 +375,15 @@ webhook.
   inbound webhook's hash lookup both authenticates the request and resolves the org,
   which is then stamped onto `zulip_links.cloud_id` at link time; `deliver()` loads
   that org's creds (a NULL-org pre-0008 link falls back to the sole config row).
-  Stored values never flow back to any client — the admin list returns only a
-  `configured` boolean.
+  The same shape now covers **email**: `configureEmailOrg` live-verifies the key
+  against the transport, seals `{apiKey,fromAddress}` into `email_org_config`, and
+  additionally stores `from_address` **in the clear** — it is the one non-secret
+  provisioning value the admin UI echoes back. Adapters may also implement
+  `unconfigureOrg(orgId)` (`DELETE /api/admin/notifications/:channel/config`) and
+  `orgConfigSummary(orgId)`, whose `summary` is an **explicit per-adapter allow-list
+  of non-secret fields** (zulip → `site`, email → `fromAddress`). Everything else
+  stays write-only: `secrets_enc`, `apiKey` and `webhook_token_hash` never flow back
+  to any client.
 
 ## Database
 
@@ -381,9 +408,11 @@ Bindings/vars/secrets are typed in [`src/env.ts`](src/env.ts) and configured in
 to `../.dev.vars` for `wrangler dev`.
 - **Bindings**: `DB` (D1), `ASSETS` (static SPA).
 - **Vars** (`[vars]` in wrangler.toml): `APP_ORIGIN`, `OAUTH_REDIRECT_PATH`,
-  `VAPID_SUBJECT`, `BOOTSTRAP_ADMIN_ACCOUNT_ID`.
+  `VAPID_SUBJECT`, `BOOTSTRAP_ADMIN_ACCOUNT_ID`, `EMAIL_FROM` (**legacy fallback**;
+  email provisioning moved to Admin → Notification channels in 0013).
 - **Secrets** (`wrangler secret put`, locally in `.dev.vars`): `JIRA_CLIENT_ID`,
-  `JIRA_CLIENT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `EMAIL_API_KEY`,
+  `JIRA_CLIENT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `EMAIL_API_KEY`
+  (**legacy fallback** — prefer Admin → Notification channels, as with `EMAIL_FROM`),
   and `SECRETS_KEY` (base64 of 32 random bytes — the AES-256-GCM master key for
   per-org adapter secrets stored in D1; Zulip credentials are admin-entered in the
   app, not env config).

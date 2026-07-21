@@ -319,8 +319,18 @@ removes most of this risk — but the test DM below is still the end-to-end proo
 
 ### Email channel (optional)
 
-The email adapter delivers via a Resend/MailChannels-style HTTP send API. Set
-`EMAIL_FROM` (var, the `From:` address) and `EMAIL_API_KEY` (secret), then enter a
-destination address under **Settings → Notifications → email**. It's a deliberately
-second implementation — it keeps the adapter abstraction honest without needing a new
-setup-step kind or any change to the escalation loop.
+The email adapter delivers via a Resend/MailChannels-style HTTP send API. Like Zulip,
+it is **admin-provisioned per site**: an admin enters the `From:` address and the
+transport API key under **Admin → Notification channels → email**, and the key is
+live-verified then stored AES-256-GCM-encrypted (`SECRETS_KEY`) in `email_org_config`.
+Users then only flip the channel on under **Settings → Notifications** and supply a
+destination address — never a credential. Either a full-access or a send-only
+("Sending access") Resend key works — the key is verified with a read that a send-only
+key is allowed to refuse.
+
+> **Legacy fallback.** The `EMAIL_FROM` var and `EMAIL_API_KEY` secret still work for
+> any site with no admin-entered row, so existing deployments keep delivering with zero
+> action. They are **deprecated** — prefer Admin → Notification channels.
+
+It's a deliberately second implementation — it keeps the adapter abstraction honest
+without needing a new setup-step kind or any change to the escalation loop.

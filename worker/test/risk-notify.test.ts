@@ -231,6 +231,33 @@ describe('risk notify: recipients', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // one recipient, one DM
   });
 
+  it('skips an admin who has turned the channel off', async () => {
+    const fetchMock = okFetch();
+    await seedUser(ADMIN, { admin: true });
+    await dao.setChannelEnabled(ADMIN, 'zulip', false); // opted out, still linked
+    await putConfig(env, config());
+    await markDegraded(env, CLOUD, 5, 'needs_reauth');
+
+    await runNotice();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers under the ORG's config (deliver receives orgId = cfg.cloudId)", async () => {
+    const fetchMock = okFetch();
+    await seedUser(ADMIN, { admin: true });
+    // The admin's link row points at ANOTHER org; the notice is about CLOUD, so
+    // CLOUD's admin-provisioned bot must be the one that sends it.
+    await seedZulipOrgConfig(env, OTHER, { site: 'https://two.zulipchat.com', webhookToken: 't2' });
+    await saveLink(env, ADMIN, `zulip-${ADMIN}`, ADMIN, OTHER);
+    await putConfig(env, config());
+    await markDegraded(env, CLOUD, 5, 'needs_reauth');
+
+    await runNotice();
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      'https://org.zulipchat.com/api/v1/messages',
+    );
+  });
+
   it('falls back to the bootstrap admin when the org has none', async () => {
     okFetch();
     await seedUser(MEMBER);

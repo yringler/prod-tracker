@@ -4,6 +4,11 @@
 // webhook). That difference is the point — delivery is uniform, setup is not — and it
 // needed NO new SetupStep kind and NO change to escalation.
 //
+// Provisioning is ADMIN-owned per org (email_org_config, added 0013), like Zulip's:
+// the user supplies only an address, never a credential. The legacy
+// EMAIL_API_KEY/EMAIL_FROM env config survives as a fallback inside
+// loadEmailSecrets so existing deployments keep delivering.
+//
 // Boundary: imports only env, contract, and its own siblings — never
 // dao/registry/routes/cron. Persistence goes through store.ts; the app never learns
 // the address (only a masked label, via the route's registerChannel).
@@ -15,14 +20,18 @@ import type {
   SetupSubmission,
 } from '@shared/notifications';
 import type { Env } from '../../../env';
-import type { DeliverRequest, DeliverResult, NotifierAdapter } from '../../contract';
+import { log } from '../../../log';
+import type { ConfigureOrgResult, DeliverRequest, DeliverResult, NotifierAdapter } from '../../contract';
 import { sendEmail } from './deliver';
+import {
+  configureEmailOrg,
+  EMAIL_RE,
+  EMAIL_REQUESTED_FIELDS,
+  emailOrgSummary,
+  loadEmailSecrets,
+} from './org-config';
 import { renderEmail } from './render';
-import { deleteEmail, getEmail, saveEmail } from './store';
-
-// Deliberately loose: we only reject the obviously-not-an-address, since the real
-// verification is deliverability (a production build would confirm via a sent code).
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { deleteEmail, deleteEmailOrgConfig, getEmail, saveEmail } from './store';
 
 /** Mask an address for the opaque display label: "yehuda@x.com" -> "y****@x.com". */
 function maskEmail(email: string): string {
@@ -36,13 +45,40 @@ function maskEmail(email: string): string {
 export function makeEmailAdapter(env: Env): NotifierAdapter {
   return {
     async describe(): Promise<NotifierDescriptor> {
-      return { channel: 'email', displayName: 'Email' };
+      return {
+        channel: 'email',
+        displayName: 'Email',
+        requestedFields: EMAIL_REQUESTED_FIELDS,
+        // The one thing we need from the user is where to send it.
+        requiresUserIdentity: true,
+        identityPrompt: 'an email address',
+      };
     },
 
-    // Ready only when the transport can actually send: an API key to authenticate the
-    // send and a From: address to send it from. Absent either → the app hides Email.
-    isConfigured(): boolean {
-      return Boolean(env.EMAIL_API_KEY && env.EMAIL_FROM);
+    // Ready when THIS org can actually send: an admin-provisioned row (api key +
+    // From: address), or the legacy env pair as a fallback. Absent both → the app
+    // hides Email.
+    async isConfigured(orgId: string): Promise<boolean> {
+      return (await loadEmailSecrets(env, orgId)) !== null;
+    },
+
+    // Admin-entered org config: validate + live-verify + encrypt + persist.
+    configureOrg(
+      orgId: string,
+      fields: Record<string, string>,
+      configuredBy: string,
+    ): Promise<ConfigureOrgResult> {
+      return configureEmailOrg(env, orgId, fields, configuredBy);
+    },
+
+    // Turn the channel off site-wide. Per-user addresses survive; delivery then
+    // falls back to the legacy env pair if one is still set, else fails.
+    unconfigureOrg(orgId: string): Promise<void> {
+      return deleteEmailOrgConfig(env, orgId);
+    },
+
+    orgConfigSummary(orgId: string) {
+      return emailOrgSummary(env, orgId);
     },
 
     async beginSetup(): Promise<SetupInstructions> {
@@ -71,9 +107,17 @@ export function makeEmailAdapter(env: Env): NotifierAdapter {
     async deliver(req: DeliverRequest): Promise<DeliverResult> {
       const email = await getEmail(env, req.userId);
       if (!email) return { status: 'not_linked' };
+      const creds = await loadEmailSecrets(env, req.orgId);
+      if (!creds) {
+        // No transport config for this org: a real misconfiguration, not "user
+        // unlinked" — log it and fail non-retryably so escalation falls through to
+        // the next channel (mirrors zulip/adapter.ts).
+        log.warn('email: no transport config for org', { orgId: req.orgId });
+        return { status: 'failed', retryable: false };
+      }
       const { subject, text } = renderEmail(req.payload);
       try {
-        const r = await sendEmail(env, email, subject, text);
+        const r = await sendEmail(creds, email, subject, text);
         if (r.ok) return { status: 'delivered' };
         return { status: 'failed', retryable: r.retryable };
       } catch {

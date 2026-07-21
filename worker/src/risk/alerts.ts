@@ -447,7 +447,7 @@ export async function processBoardAlerts(
     const payload = composeAlertPayload(env.APP_ORIGIN, board.name, items);
     const idempotencyKey = `risk-alert:${cloudId}:${boardId}:${accountId}:${hash}`;
     try {
-      await deliverToAccount(env, dao, accountId, payload, idempotencyKey, log);
+      await deliverToAccount(env, dao, cloudId, accountId, payload, idempotencyKey, log);
     } catch (e) {
       // The row is already latched (claim-before-send); a delivery failure just
       // costs this nudge, never a duplicate.

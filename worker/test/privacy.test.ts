@@ -175,6 +175,29 @@ describe('notification channels — self-scoped', () => {
       { channel: 'zulip', label: '@alice-renamed' },
     ]);
   });
+
+  it('listChannelPrefs — the unfiltered settings read is self-scoped too', async () => {
+    await dao.registerChannel(ALICE, 'zulip', '@alice');
+    await dao.registerChannel(BOB, 'zulip', '@bob');
+    await dao.setChannelEnabled(ALICE, 'zulip', false);
+
+    // Unlike getUserChannels it returns DISABLED rows — so it must still take the
+    // owner id and SQL-filter on it, like every other per-account read.
+    const prefs = await dao.listChannelPrefs(ALICE);
+    expect(prefs).toEqual([{ channel: 'zulip', label: '@alice', enabled: false }]);
+    expect(JSON.stringify(prefs)).not.toContain('@bob');
+    expect(await dao.listChannelPrefs(BOB)).toEqual([
+      { channel: 'zulip', label: '@bob', enabled: true },
+    ]);
+
+    await dao.eraseAccount(ALICE);
+    expect(await dao.listChannelPrefs(ALICE)).toEqual([]);
+  });
+
+  it('setChannelEnabled writes only the named account', async () => {
+    await dao.setChannelEnabled(ALICE, 'email', true);
+    expect(await dao.listChannelPrefs(BOB)).toEqual([]);
+  });
 });
 
 describe('claimed-trends — same personal/team split', () => {

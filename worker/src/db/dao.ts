@@ -54,6 +54,11 @@ export interface UserChannel {
   label: string;
 }
 
+/** A user_channels row including the opt-in flag — the settings-list view. */
+export interface ChannelPref extends UserChannel {
+  enabled: boolean;
+}
+
 export interface EscalationCandidate {
   pendingId: string;
   cloudId: string;
@@ -672,7 +677,10 @@ export class Dao {
   // account_id, like every other per-account read here.
 
   /** Idempotent upsert on (account_id, channel). Called from the app layer only
-   *  (index.ts webhook wiring / routes), never from an adapter. */
+   *  (index.ts webhook wiring / routes), never from an adapter. New rows get
+   *  `enabled = 1` from the column default; the conflict clause deliberately does
+   *  NOT touch `enabled`, so re-linking an identity can't silently re-enable a
+   *  channel the user opted out of. */
   async registerChannel(accountId: string, channel: string, label: string): Promise<void> {
     await this.db
       .prepare(
@@ -684,6 +692,20 @@ export class Dao {
       .run();
   }
 
+  /** Set the per-user opt-in for one channel. Self-scoped. Upserts, so a user can
+   *  opt IN before any identity exists (the settings UI then opens the identity
+   *  prompt); the placeholder label is replaced by registerChannel on link. */
+  async setChannelEnabled(accountId: string, channel: string, enabled: boolean): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO user_channels (account_id, channel, label, linked_at, enabled)
+         VALUES (?, ?, '', ?, ?)
+         ON CONFLICT(account_id, channel) DO UPDATE SET enabled = excluded.enabled`,
+      )
+      .bind(accountId, channel, now(), enabled ? 1 : 0)
+      .run();
+  }
+
   async unregisterChannel(accountId: string, channel: string): Promise<void> {
     await this.db
       .prepare(`DELETE FROM user_channels WHERE account_id = ? AND channel = ?`)
@@ -691,13 +713,36 @@ export class Dao {
       .run();
   }
 
-  /** Channels this account has linked. Self-scoped. Used by escalation + the list route. */
+  /** Channels this account has linked AND opted into. Self-scoped.
+   *
+   *  `AND enabled = 1` is the single place per-user opt-out is enforced, and it
+   *  covers every delivery path at once: cron/escalate.ts, the test-notification
+   *  route, and risk/notify.ts's deliverToAccount (hence risk/alerts.ts too).
+   *  Anything that wants the UNFILTERED view (the settings list) must use
+   *  listChannelPrefs instead. */
   async getUserChannels(accountId: string): Promise<UserChannel[]> {
     const { results } = await this.db
-      .prepare(`SELECT channel, label FROM user_channels WHERE account_id = ? ORDER BY channel`)
+      .prepare(
+        `SELECT channel, label FROM user_channels
+         WHERE account_id = ? AND enabled = 1 ORDER BY channel`,
+      )
       .bind(accountId)
       .all<{ channel: string; label: string }>();
     return results.map((r) => ({ channel: r.channel, label: r.label }));
+  }
+
+  /** Every channel row for this account INCLUDING disabled ones — the settings
+   *  list's read (delivery must use getUserChannels). Self-scoped: like every
+   *  per-account read here it takes the owner id and filters on it in SQL. */
+  async listChannelPrefs(accountId: string): Promise<ChannelPref[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT channel, label, enabled FROM user_channels
+         WHERE account_id = ? ORDER BY channel`,
+      )
+      .bind(accountId)
+      .all<{ channel: string; label: string; enabled: number }>();
+    return results.map((r) => ({ channel: r.channel, label: r.label, enabled: r.enabled === 1 }));
   }
 
   // --- Escalation state ------------------------------------------------------

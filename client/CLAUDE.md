@@ -31,7 +31,7 @@ Pages — `src/app/pages/` (each a standalone route component):
 - `aggregates.component.ts` — stats: personal-vs-team claimed trends + per-team claimed-vs-done tables/charts.
 - `tools.component.ts` — client-side utilities; currently a copyable LLM standup prompt (`buildStandupPrompt`, pure/exported).
 - `settings.component.ts` — profile row + daily-goal editor (`MAX_DAILY_GOAL`).
-- `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set, custom-field pickers, and per-site notification-channel config (a vendor-agnostic panel driven by each descriptor's `requestedFields`; secret values are write-only). Uses **Signal Forms** (`@angular/forms/signals`) for the static fields (plain signals for the dynamic channel fields) and `ChangeDetectionStrategy.OnPush`.
+- `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set, custom-field pickers, and per-site notification-channel config (a vendor-agnostic panel driven by each descriptor's `requestedFields`; secret values are write-only). The channel panel also renders the server's non-secret `summary` echo + a "Configured <date>" line and a **Remove configuration** button (`DELETE /api/admin/notifications/{ch}/config`), which turns a channel off site-wide. Uses **Signal Forms** (`@angular/forms/signals`) for the static fields (plain signals for the dynamic channel fields) and `ChangeDetectionStrategy.OnPush`.
 - `privacy.component.ts` — public privacy policy (auth-free; keep in sync with actual data practices).
 
 Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` via
@@ -160,6 +160,24 @@ UI / charts — `src/app/ui/` (reusable):
 - `claimed-trends.component.ts` — `<sp-claimed-trends>`, 30-day + 6-month personal-vs-team line charts.
 - `goal-progress.component.ts` — `<sp-goal-progress>`, daily-goal meter + milestones + pace copy + cumulative time-of-day line (`workdayPace` from shared).
 - `avatar.component.ts` — `<sp-avatar>`, round image with initials fallback.
+- `notification-channels.component.ts` — `<sp-notification-channels>`, the settings
+  panel. Since the admin owns provisioning, the user surface is a **toggle per
+  channel** (`<wa-switch>` → `PUT /api/notifications/{ch}/enabled`), not
+  Connect/Disconnect: `enabled` and the identity `status` are orthogonal, so turning a
+  channel on when the reply says the channel still needs an identity opens the existing
+  setup panel automatically, and "Forget my …" (the old Disconnect) only appears when
+  the channel is off but still linked. **The identity prompt is gated on the
+  descriptor's `requiresUserIdentity`** (`needsIdentity()`), not on `status.linked`
+  alone: an adapter that declares `requiresUserIdentity: false` needs nothing from the
+  user, so enabling it reads "On" and opens no setup panel. Absent → treated as `true`
+  (the conservative default; both shipped adapters declare it). A failed toggle resets
+  the **uncontrolled** `<wa-switch>` element's `.checked` directly and shows
+  `actionError` — re-rendering cannot fix it, because the bound expression never
+  changed. The `@switch (step.kind)` setup panel — including
+  its `assertNever` exhaustiveness guard and the sandboxed `embed` — is untouched and
+  must stay that way. `CUSTOM_ELEMENTS_SCHEMA` component: the switch follows the
+  repo's existing `<wa-switch>` usage (`[checked]` property binding, `(change)` with a
+  template ref rather than a `$event.target` cast in the template).
 
 Services — `src/app/` (all `@Injectable({ providedIn: 'root' })`):
 - `api.service.ts` — typed client for every `/api/*` endpoint; returns RxJS `Observable`s.

@@ -228,3 +228,43 @@ contract. Four things it deliberately did not build:
   `<wa-input>`'s `value` is `string | null`, and four handlers declared it
   `string`), all fixable by widening the parameter type — no cast, no `$any`. It is
   on. Recorded here because the plan asked for the measurement either way.
+
+## Notification channels: polish deferred from the 0013 admin-provisioning review
+
+Reviewed and consciously postponed after the admin-provisioned channels change.
+None affects correctness of delivery or provisioning.
+
+- **`requestedFields` ships to every authenticated user.** `routes/notifications.ts`
+  `listChannels` returns the adapter's whole descriptor, so a non-admin sees the
+  admin field NAMES (`apiKey`, `webhookToken`). No value ever leaks — those are
+  write-only and the admin list is `requireAdmin`-gated. Stripping them means
+  maintaining a second, narrower descriptor shape on the user route; not worth it
+  for a name an attacker can read off this repo. Revisit if a descriptor ever
+  gains a field that is genuinely sensitive.
+- **"Remove configuration" has no confirmation.** One misclick drops the org's
+  encrypted credentials and the admin must re-enter an API key they may no longer
+  have. Deferred for consistency: no other destructive control on the admin page
+  (revoke admin, membership edits) confirms either. If added, do it for all of
+  them at once with one `<wa-dialog>` pattern, not ad hoc here.
+- **Admin echo is raw.** `summaryLines` renders adapter keys verbatim
+  ("fromAddress: notify@org.com") and `configuredHint` renders `configuredBy` as a
+  raw Atlassian accountId. The page already loads `orgMembers()`, so resolving the
+  id to a display name is cheap when someone cares; a per-key label map would have
+  to live somewhere vendor-neutral.
+- **`email_org_config.configured_by` / `zulip_org_config.configured_by` are not
+  reached by the erasure seam.** They hold an ADMIN's accountId, and
+  `cron/pd-report.ts` erases per-user adapter rows through the registry `unlink`
+  seam only. This is the pre-existing zulip pattern; 0013 doubles it. Closing it
+  means an org-config-aware erasure hook (nulling `configured_by` for an erased
+  admin) — worth doing when a second org-scoped audit column appears.
+- **Toggle-before-link leaves a `label = ''` placeholder row.** `dao.setChannelEnabled`
+  inserts an empty label so a user can opt in before linking. Deliberate and
+  harmless: the label is never rendered (the settings list takes its label from
+  `adapter.getStatus`, and `getUserChannels`/`sendTestNotification`/`escalate` read
+  only `channel`), and the per-tick `deliver()` → `not_linked` on an abandoned
+  setup is the CORRECT semantics — the user did opt in. Deliberately NOT adding
+  `AND label != ''` to `getUserChannels`: it is the single opt-in enforcement point
+  and a second predicate there is a bigger risk than the wasted call.
+- **No client tests.** The uncontrolled `<wa-switch>` that could not be reverted
+  and the "Forget your Zulip account" copy both shipped green, which is the
+  argued cost of the no-TestBed decision recorded above. Unchanged, noted.

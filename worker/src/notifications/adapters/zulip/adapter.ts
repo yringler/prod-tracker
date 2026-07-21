@@ -17,9 +17,14 @@ import type {
   NotifierAdapter,
 } from '../../contract';
 import { sendZulipDM } from './deliver';
-import { configureZulipOrg, loadOrgSecrets, ZULIP_REQUESTED_FIELDS } from './org-config';
+import {
+  configureZulipOrg,
+  loadOrgSecretsForDelivery,
+  ZULIP_REQUESTED_FIELDS,
+  zulipOrgSummary,
+} from './org-config';
 import { renderZulip } from './render';
-import { getLink, hasOrgConfig, mintCode, deleteLink } from './store';
+import { deleteOrgConfig, getLink, hasOrgConfig, mintCode, deleteLink } from './store';
 import { handleZulipInbound } from './webhook';
 
 /** Link-code TTL: ~15 min, matching the settings-panel copy in the design doc. */
@@ -28,7 +33,16 @@ const CODE_TTL_MS = 15 * 60 * 1000;
 export function makeZulipAdapter(env: Env): NotifierAdapter {
   return {
     async describe(): Promise<NotifierDescriptor> {
-      return { channel: 'zulip', displayName: 'Zulip', requestedFields: ZULIP_REQUESTED_FIELDS };
+      return {
+        channel: 'zulip',
+        displayName: 'Zulip',
+        requestedFields: ZULIP_REQUESTED_FIELDS,
+        // Provisioning is the admin's; the one thing WE need from the user is
+        // which Zulip account they are (captured by the /link DM flow — identity,
+        // never a credential).
+        requiresUserIdentity: true,
+        identityPrompt: 'your Zulip account',
+      };
     },
 
     // Ready only when THIS org has admin-entered config (site/botEmail/apiKey +
@@ -45,6 +59,16 @@ export function makeZulipAdapter(env: Env): NotifierAdapter {
       configuredBy: string,
     ): Promise<ConfigureOrgResult> {
       return configureZulipOrg(env, orgId, fields, configuredBy);
+    },
+
+    // Turn the channel off site-wide. Per-user links survive (deliver then reports
+    // a non-retryable failure), so re-configuring restores everyone at once.
+    unconfigureOrg(orgId: string): Promise<void> {
+      return deleteOrgConfig(env, orgId);
+    },
+
+    orgConfigSummary(orgId: string) {
+      return zulipOrgSummary(env, orgId);
     },
 
     async beginSetup(userId: string): Promise<SetupInstructions> {
@@ -72,7 +96,8 @@ export function makeZulipAdapter(env: Env): NotifierAdapter {
     async deliver(req: DeliverRequest): Promise<DeliverResult> {
       const link = await getLink(env, req.userId);
       if (!link) return { status: 'not_linked' };
-      const creds = await loadOrgSecrets(env, link.cloudId);
+      // orgId (the caller's org) wins; the link's own org is the fallback.
+      const creds = await loadOrgSecretsForDelivery(env, req.orgId, link.cloudId);
       if (!creds) {
         // No config for the link's org (or a NULL-org link with 0/2+ configs): a
         // real misconfiguration, not "user unlinked" — log it and fail

@@ -84,6 +84,33 @@ export async function saveOrgConfig(
     .run();
 }
 
+/** Remove one org's config (the admin turning Zulip off site-wide). Existing
+ *  per-user links survive; deliver then reports a missing-config failure. */
+export async function deleteOrgConfig(env: Env, cloudId: string): Promise<void> {
+  await env.DB.prepare(`DELETE FROM zulip_org_config WHERE cloud_id = ?`).bind(cloudId).run();
+}
+
+/** Non-secret audit metadata for the admin list. `secretsEnc` is returned so
+ *  org-config.ts can decrypt the ONE public field (site) — nothing else from the
+ *  box may cross back to a client. */
+export async function getOrgConfigMeta(
+  env: Env,
+  cloudId: string,
+): Promise<{ secretsEnc: string; configuredBy: string | null; configuredAt: string } | null> {
+  const r = await env.DB.prepare(
+    `SELECT secrets_enc, configured_by, configured_at FROM zulip_org_config WHERE cloud_id = ?`,
+  )
+    .bind(cloudId)
+    .first<{ secrets_enc: string; configured_by: string | null; configured_at: string }>();
+  return r
+    ? {
+        secretsEnc: r.secrets_enc,
+        configuredBy: r.configured_by ?? null,
+        configuredAt: r.configured_at,
+      }
+    : null;
+}
+
 export async function getOrgSecretsEnc(env: Env, cloudId: string): Promise<string | null> {
   const r = await env.DB.prepare(`SELECT secrets_enc FROM zulip_org_config WHERE cloud_id = ?`)
     .bind(cloudId)

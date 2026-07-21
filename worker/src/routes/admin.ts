@@ -23,6 +23,7 @@ import type {
 import { type AuthedCtx, error, json, readJson } from '../http';
 import { JiraClient } from '../jira/client';
 import { listFieldCandidates } from '../jira/fields';
+import { errFields, log } from '../log';
 import { availableChannels, resolve } from '../notifications/registry';
 
 export async function createTeam(req: Request, ctx: AuthedCtx): Promise<Response> {
@@ -148,11 +149,30 @@ export async function listChannelConfigs(ctx: AuthedCtx): Promise<Response> {
   const channels: AdminChannelConfigItem[] = [];
   for (const channel of availableChannels()) {
     const adapter = resolve(ctx.env, channel);
-    if (!adapter?.configureOrg) continue; // env-based channels (email) have no org config
-    const descriptor = await adapter.describe();
-    if (!descriptor.requestedFields?.length) continue;
-    const configured = (await adapter.isConfigured?.(ctx.cloudId)) === true;
-    channels.push({ descriptor, configured });
+    if (!adapter?.configureOrg) continue; // channels with no per-org provisioning
+    try {
+      const descriptor = await adapter.describe();
+      if (!descriptor.requestedFields?.length) continue;
+      const configured = (await adapter.isConfigured?.(ctx.cloudId)) === true;
+      // Non-secret audit echo (when/who/which site). The adapter decides what is
+      // public — `summary` is an explicit allow-list, never the sealed box.
+      const meta = (await adapter.orgConfigSummary?.(ctx.cloudId)) ?? null;
+      const item: AdminChannelConfigItem = { descriptor, configured };
+      if (meta) {
+        // exactOptionalPropertyTypes: omit the key rather than set undefined.
+        item.configuredAt = meta.configuredAt;
+        if (meta.configuredBy) item.configuredBy = meta.configuredBy;
+        item.summary = meta.summary;
+      }
+      channels.push(item);
+    } catch (e) {
+      // Same posture as routes/notifications.ts: one adapter whose table isn't
+      // migrated yet must not blank the whole admin panel.
+      log.warn('listChannelConfigs: adapter unavailable, skipping', {
+        channel,
+        ...errFields(e),
+      });
+    }
   }
   return json({ channels } satisfies AdminChannelConfigResponse);
 }
@@ -171,5 +191,16 @@ export async function configureChannel(
   const fields = body && typeof body.fields === 'object' && body.fields ? body.fields : {};
   const r = await adapter.configureOrg(ctx.cloudId, fields, ctx.accountId);
   if (!r.ok) return error(400, r.error);
+  return json({ ok: true });
+}
+
+/** DELETE /api/admin/notifications/:channel/config — turn a channel off for THIS
+ *  site: drop the org's provisioning. Scoped to ctx.cloudId, so one site's admin
+ *  can never unconfigure another's. Per-user identities are left alone — the
+ *  channel simply stops being advertised until it's configured again. */
+export async function unconfigureChannel(ctx: AuthedCtx, channel: string): Promise<Response> {
+  const adapter = resolve(ctx.env, channel);
+  if (!adapter?.unconfigureOrg) return error(404, 'unknown channel');
+  await adapter.unconfigureOrg(ctx.cloudId);
   return json({ ok: true });
 }

@@ -88,6 +88,35 @@ describe('escalate', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('does not deliver to a DISABLED channel, and falls through to the next enabled one', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const ripe = Date.now() - ESCALATION_DELAY_MS - 60_000;
+    await seedPending(ALICE, 'p-ripe', ripe);
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+    await dao.setChannelEnabled(ALICE, 'zulip', false);
+
+    await escalate(env, dao, silent);
+    // Opted out: no send at all, even though the identity is still linked.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await escalatedAt('p-ripe')).not.toBeNull();
+  });
+
+  it('re-enabling restores delivery without re-linking', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const ripe = Date.now() - ESCALATION_DELAY_MS - 60_000;
+    await saveLink(env, ALICE, '4242', 'Alice A', CLOUD);
+    await dao.registerChannel(ALICE, 'zulip', 'Alice A');
+    await dao.setChannelEnabled(ALICE, 'zulip', false);
+    await dao.setChannelEnabled(ALICE, 'zulip', true);
+    await seedPending(ALICE, 'p-ripe', ripe);
+
+    await escalate(env, dao, silent);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('collapses a flurry to one DM but marks every row escalated', async () => {
     const fetchMock = okFetch();
     vi.stubGlobal('fetch', fetchMock);

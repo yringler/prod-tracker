@@ -27,6 +27,7 @@ import {
   revokeAdmin,
   setDoneStatuses,
   setFields,
+  unconfigureChannel,
 } from './routes/admin';
 import { allAggregates, teamAggregate } from './routes/aggregates';
 import { claimedTrends, clearPending, getPending, myRatings, submitRating } from './routes/ratings';
@@ -39,6 +40,7 @@ import {
   completeChannelSetup,
   listChannels,
   sendTestNotification,
+  setChannelEnabled,
   unlinkChannel,
 } from './routes/notifications';
 import { resolve } from './notifications/registry';
@@ -154,6 +156,13 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   // outbound send path that "Connected ✓" never exercises). Above the :channel regexes
   // so the literal `test` segment can't be swallowed as a channel name.
   if (p === '/api/notifications/test' && m === 'POST') return sendTestNotification(ctx);
+  // The per-user opt-in toggle. Above the `:channel` catch-alls for the same
+  // reason the literal `test` route is: a trailing literal segment must not be
+  // swallowed as a channel name.
+  const enabledMatch = p.match(/^\/api\/notifications\/([^/]+)\/enabled$/);
+  if (enabledMatch && m === 'PUT') {
+    return setChannelEnabled(req, ctx, decodeURIComponent(enabledMatch[1]!));
+  }
   const setupMatch = p.match(/^\/api\/notifications\/([^/]+)\/setup$/);
   if (setupMatch && m === 'POST') return beginChannelSetup(ctx, decodeURIComponent(setupMatch[1]!));
   const completeMatch = p.match(/^\/api\/notifications\/([^/]+)\/complete$/);
@@ -196,6 +205,9 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     const chCfgMatch = p.match(/^\/api\/admin\/notifications\/([^/]+)\/config$/);
     if (chCfgMatch && m === 'PUT') {
       return configureChannel(req, ctx, decodeURIComponent(chCfgMatch[1]!));
+    }
+    if (chCfgMatch && m === 'DELETE') {
+      return unconfigureChannel(ctx, decodeURIComponent(chCfgMatch[1]!));
     }
 
     if (p.startsWith('/api/admin/risk/')) return riskAdminRoutes(req, ctx, p, m);

@@ -24,6 +24,11 @@ export interface NotificationPayload {
 
 export interface DeliverRequest {
   userId: string;
+  /** Which org's PROVISIONING to deliver under. Every call site already knows it
+   *  (the cron has p.cloudId, the routes ctx.cloudId, risk cfg.cloudId), so the
+   *  adapter is handed the org instead of reverse-engineering it from a link row
+   *  or from env. Adapters may still fall back to a link's own org. */
+  orgId: string;
   payload: NotificationPayload;
   idempotencyKey: string;
 }
@@ -62,6 +67,17 @@ export interface NotifierAdapter {
     fields: Record<string, string>,
     configuredBy: string,
   ): Promise<ConfigureOrgResult>;
+  /** Optional: remove this org's provisioning (the admin turning the channel off
+   *  site-wide). Adapters that take no per-org config omit it. */
+  unconfigureOrg?(orgId: string): Promise<void>;
+  /** Optional: NON-SECRET metadata about this org's stored config, for the admin
+   *  list. `summary` is an explicit allow-list the adapter declares — a secret must
+   *  never be put in it. Null when the org has no config. */
+  orgConfigSummary?(orgId: string): Promise<{
+    configuredAt: string;
+    configuredBy: string | null;
+    summary: Record<string, string>;
+  } | null>;
   beginSetup(userId: string): Promise<SetupInstructions>;
   getStatus(userId: string): Promise<LinkStatus>;
   deliver(req: DeliverRequest): Promise<DeliverResult>;

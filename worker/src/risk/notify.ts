@@ -133,6 +133,7 @@ function recoveryPayload(env: Env): NotificationPayload {
 export async function deliverToAccount(
   env: Env,
   dao: Dao,
+  orgId: string,
   accountId: string,
   payload: NotificationPayload,
   idempotencyKey: string,
@@ -146,7 +147,7 @@ export async function deliverToAccount(
       continue;
     }
     try {
-      const r = await adapter.deliver({ userId: accountId, payload, idempotencyKey });
+      const r = await adapter.deliver({ userId: accountId, orgId, payload, idempotencyKey });
       if (r.status === 'delivered') return true; // stop at the first success
       if (r.status === 'not_linked') continue; // try the next channel
       log.warn('risk: notice delivery failed', { channel, retryable: r.retryable });
@@ -161,13 +162,14 @@ export async function deliverToAccount(
 async function deliverToAdmins(
   env: Env,
   dao: Dao,
+  orgId: string,
   admins: string[],
   payload: NotificationPayload,
   idempotencyKey: string,
   log: Logger,
 ): Promise<void> {
   for (const accountId of admins) {
-    await deliverToAccount(env, dao, accountId, payload, idempotencyKey, log);
+    await deliverToAccount(env, dao, orgId, accountId, payload, idempotencyKey, log);
   }
 }
 
@@ -200,6 +202,7 @@ export async function noticeDegradation(
     await deliverToAdmins(
       env,
       dao,
+      cfg.cloudId,
       admins,
       recoveryPayload(env),
       `risk-recovered:${cfg.cloudId}:${prevAtIso}`,
@@ -222,6 +225,7 @@ export async function noticeDegradation(
   await deliverToAdmins(
     env,
     dao,
+    cfg.cloudId,
     admins,
     degradedPayload(env, reason, cfg.boards.length),
     `risk-degraded:${cfg.cloudId}:${reason}:${atIso}`,

@@ -10,7 +10,11 @@ export interface Env {
   OAUTH_REDIRECT_PATH: string;
   VAPID_SUBJECT: string;
   BOOTSTRAP_ADMIN_ACCOUNT_ID: string;
-  EMAIL_FROM: string; // From: address for escalation emails, e.g. notify@yourorg.com
+  // LEGACY FALLBACK (deprecated): the From: address for escalation emails. Email is
+  // admin-provisioned per org since 0013 (Admin → Notification channels →
+  // email_org_config); this var is only used for orgs with no row, so existing
+  // deployments keep delivering. Prefer the admin UI.
+  EMAIL_FROM: string;
 
   // secrets
   JIRA_CLIENT_ID: string;
@@ -18,10 +22,12 @@ export interface Env {
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
   // base64(32 random bytes) — AES-256-GCM master key for per-org adapter secrets
-  // stored in D1 (notifications/secretbox.ts). Zulip credentials are admin-entered
-  // per org (Admin → Notification channels), not env config.
+  // stored in D1 (notifications/secretbox.ts). BOTH channels' credentials are
+  // admin-entered per org (Admin → Notification channels), not env config.
   SECRETS_KEY: string;
-  EMAIL_API_KEY: string; // transport API key (Resend/MailChannels-style) for sends
+  // LEGACY FALLBACK (deprecated), paired with EMAIL_FROM above: the transport API key
+  // (Resend/MailChannels-style). Prefer Admin → Notification channels.
+  EMAIL_API_KEY: string;
 }
 
 // Requested at consent (the /authorize URL). See README "Atlassian app setup"

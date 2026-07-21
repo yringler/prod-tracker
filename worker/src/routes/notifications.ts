@@ -9,6 +9,8 @@ import type {
   ChannelListItem,
   ChannelListResponse,
   LinkStatus,
+  SetChannelEnabledRequest,
+  SetChannelEnabledResponse,
   SetupSubmission,
 } from '@shared/notifications';
 import { type AuthedCtx, error, json, readJson } from '../http';
@@ -39,10 +41,23 @@ async function configured(
   }
 }
 
-/** GET /api/notifications/channels — descriptor + link status for each channel,
- *  for the authed account only. */
+/** GET /api/notifications/channels — descriptor + link status + opt-in for each
+ *  channel the ORG has provisioned, for the authed account only. `status` (do I
+ *  have an identity here?) and `enabled` (do I want it?) are orthogonal. */
 export async function listChannels(ctx: AuthedCtx): Promise<Response> {
   const channels: ChannelListItem[] = [];
+  // One self-scoped read for the whole list; a channel with no row has never been
+  // opted into, so it defaults to off. Wrapped for the same reason as the
+  // per-adapter try below: an unmigrated `enabled` column must degrade to "nothing
+  // opted in", not 500 the settings panel.
+  let prefs = new Map<string, boolean>();
+  try {
+    prefs = new Map(
+      (await ctx.dao.listChannelPrefs(ctx.accountId)).map((p) => [p.channel, p.enabled]),
+    );
+  } catch (e) {
+    log.warn('listChannels: channel prefs unavailable, defaulting to off', errFields(e));
+  }
   for (const channel of availableChannels()) {
     const adapter = resolve(ctx.env, channel);
     if (!adapter) continue; // config drift: a registered key that failed the guard
@@ -52,7 +67,7 @@ export async function listChannels(ctx: AuthedCtx): Promise<Response> {
       if (!(await configured(adapter, channel, ctx.cloudId))) continue; // can't deliver for this org → don't advertise
       const descriptor = await adapter.describe();
       const status = await adapter.getStatus(ctx.accountId);
-      channels.push({ descriptor, status });
+      channels.push({ descriptor, status, enabled: prefs.get(channel) ?? false });
     } catch (e) {
       // One misconfigured adapter (e.g. an unmigrated table so getStatus throws)
       // must NOT blank the whole list — skip it and log so it's visible in
@@ -96,6 +111,30 @@ export async function completeChannelSetup(
   return json(status);
 }
 
+/** PUT /api/notifications/:channel/enabled — the per-user opt-in toggle. This is
+ *  the whole user-side surface now: provisioning belongs to the admin, so a user
+ *  only chooses WHETHER to be reminded here, never HOW to send. Gated on the org
+ *  having provisioned the channel (you can't opt into a channel your site doesn't
+ *  have). The reply carries the identity status so the client learns in ONE
+ *  round-trip whether turning it on still needs an address/handle. */
+export async function setChannelEnabled(
+  req: Request,
+  ctx: AuthedCtx,
+  channel: string,
+): Promise<Response> {
+  const adapter = resolve(ctx.env, channel);
+  if (!adapter || !(await configured(adapter, channel, ctx.cloudId)))
+    return error(404, 'unknown channel');
+  const body = await readJson<SetChannelEnabledRequest>(req);
+  if (typeof body?.enabled !== 'boolean') return error(400, 'enabled (boolean) required');
+  await ctx.dao.setChannelEnabled(ctx.accountId, channel, body.enabled);
+  const res: SetChannelEnabledResponse = {
+    enabled: body.enabled,
+    status: await adapter.getStatus(ctx.accountId),
+  };
+  return json(res);
+}
+
 /** GET /api/notifications/:channel/status — poll target for the setup UI. */
 export async function channelStatus(ctx: AuthedCtx, channel: string): Promise<Response> {
   const adapter = resolve(ctx.env, channel);
@@ -131,6 +170,7 @@ export async function sendTestNotification(ctx: AuthedCtx): Promise<Response> {
     try {
       const r = await adapter.deliver({
         userId: ctx.accountId,
+        orgId: ctx.cloudId,
         payload,
         idempotencyKey: `test:${ctx.accountId}:${Date.now()}`,
       });
@@ -147,9 +187,11 @@ export async function sendTestNotification(ctx: AuthedCtx): Promise<Response> {
   return json({ ok: true, channels: results });
 }
 
-/** DELETE /api/notifications/:channel — unlink. The route orchestrates BOTH halves:
- *  the adapter clears its own vendor-address row, and the app clears user_channels
- *  (the adapter can't touch app-owned tables). */
+/** DELETE /api/notifications/:channel — FORGET MY IDENTITY (not "mute": that's the
+ *  /enabled toggle). The route orchestrates BOTH halves: the adapter clears its own
+ *  vendor-address row, and the app clears user_channels (the adapter can't touch
+ *  app-owned tables) — which drops the `enabled` flag with it, so a later re-link
+ *  starts from the column default. */
 export async function unlinkChannel(ctx: AuthedCtx, channel: string): Promise<Response> {
   const adapter = resolve(ctx.env, channel);
   if (!adapter) return error(404, 'unknown channel');

@@ -37,6 +37,14 @@ export interface NotifierDescriptor {
    *  per name — no client-side validation, no vendor knowledge. Absent → the
    *  channel has no per-org config. */
   requestedFields?: string[];
+  /** Beyond the on/off toggle, does this channel need ONE thing from the user (an
+   *  address, a handle) before it can deliver? Drives the settings UI's choice
+   *  between a plain switch and switch-plus-setup. Provisioning is the admin's;
+   *  this is identity only. */
+  requiresUserIdentity?: boolean;
+  /** Short, human, vendor-neutral name for that one thing ("an email address",
+   *  "your Zulip account") so the CLIENT stays free of vendor knowledge. */
+  identityPrompt?: string;
 }
 
 /** Link state for a user+channel; `label` is an opaque display string. */
@@ -48,7 +56,12 @@ export type LinkStatus =
 
 export interface ChannelListItem {
   descriptor: NotifierDescriptor;
+  /** Whether the user has an IDENTITY on this channel (an address/handle). */
   status: LinkStatus;
+  /** Whether the user has OPTED IN. Orthogonal to `status`: you can be off while
+   *  still linked (muted, address remembered) or on while not yet linked (the
+   *  settings UI then opens the identity prompt). */
+  enabled: boolean;
 }
 export interface ChannelListResponse {
   channels: ChannelListItem[];
@@ -62,6 +75,17 @@ export interface SetupSubmission {
   fields: Record<string, string>;
 }
 
+/** PUT /api/notifications/:channel/enabled — the per-user opt-in toggle. */
+export interface SetChannelEnabledRequest {
+  enabled: boolean;
+}
+/** The reply carries the identity status too, so one round-trip tells the client
+ *  whether turning the channel ON still needs an identity prompt. */
+export interface SetChannelEnabledResponse {
+  enabled: boolean;
+  status: LinkStatus;
+}
+
 // ---- Wire shapes (client <-> worker /api/admin/notifications/*) ----
 
 /** One channel's per-org config surface, for the admin UI. `configured` is for the
@@ -69,6 +93,15 @@ export interface SetupSubmission {
 export interface AdminChannelConfigItem {
   descriptor: NotifierDescriptor;
   configured: boolean;
+  /** ISO UTC of the last successful configure (audit echo). */
+  configuredAt?: string;
+  /** Admin account id that configured it (audit echo). */
+  configuredBy?: string;
+  /** Non-secret echo of the stored config, e.g. `{ site: 'https://org.zulipchat.com' }`
+   *  or `{ fromAddress: 'notify@org.com' }`. OPT-IN PER ADAPTER: an adapter must
+   *  explicitly declare a value public to put it here. The write-only invariant is
+   *  unchanged for everything else — secrets never appear in this map. */
+  summary?: Record<string, string>;
 }
 export interface AdminChannelConfigResponse {
   channels: AdminChannelConfigItem[];

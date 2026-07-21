@@ -160,6 +160,10 @@ CREATE TABLE IF NOT EXISTS user_channels (
   channel     TEXT NOT NULL,          -- runtime enum: 'zulip', 'email', ...
   label       TEXT NOT NULL,          -- opaque display string ("Connected as @yehuda")
   linked_at   TEXT NOT NULL,          -- ISO UTC
+  -- Per-user opt-in, orthogonal to the identity: 0 mutes the channel without
+  -- forgetting the address. Enforced in dao.getUserChannels (AND enabled = 1).
+  -- added 0013; keep in sync with migrations/0013_channel_optin_and_email_org.sql
+  enabled     INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (account_id, channel)
 );
 CREATE INDEX IF NOT EXISTS idx_user_channels_account ON user_channels(account_id);
@@ -233,6 +237,19 @@ CREATE TABLE IF NOT EXISTS email_links (
   account_id  TEXT PRIMARY KEY,     -- our Atlassian account id
   email       TEXT NOT NULL,        -- the delivery address (opaque to the app)
   verified_at TEXT NOT NULL         -- ISO UTC; when the address was confirmed
+);
+-- Per-org Email transport config, admin-entered (the email twin of
+-- zulip_org_config). secrets_enc is AES-256-GCM (SECRETS_KEY) over JSON
+-- {apiKey,fromAddress}; from_address is duplicated in the clear ON PURPOSE — it is
+-- the one non-secret provisioning value and the admin UI echoes it back without
+-- opening the box. Adapter-owned (email/store.ts via env.DB, never dao.ts).
+-- Added 0013; keep in sync with migrations/0013_channel_optin_and_email_org.sql.
+CREATE TABLE IF NOT EXISTS email_org_config (
+  cloud_id      TEXT PRIMARY KEY,   -- the org ("site") this config belongs to
+  secrets_enc   TEXT NOT NULL,      -- base64(iv||ciphertext) of {apiKey,fromAddress}
+  from_address  TEXT NOT NULL,      -- NON-secret, echoed back to the admin UI
+  configured_by TEXT,               -- admin account_id (audit)
+  configured_at TEXT NOT NULL       -- ISO UTC
 );
 
 -- keep in sync with migrations/0009_issue_reminders.sql

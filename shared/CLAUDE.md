@@ -28,6 +28,19 @@ Small on purpose — a handful of source files under `src/`, one test under `tes
   (+ `ApiIssue`, the feature-neutral "which field was wrong" shape that `ApiError.issues`
   carries — `RiskConfigIssue` narrows it; contracts.ts deliberately imports no feature types).
 
+- **`src/notifications.ts`** — the vendor-NEUTRAL notification vocabulary + wire shapes,
+  imported by both the worker's adapters and the settings/admin UI. `SetupStep` (the
+  exhaustive setup-step vocabulary the client renders with a `@switch`; deliberately no
+  `html` kind) and `SetupInstructions`; `NotifierDescriptor` (`requestedFields` = the
+  ADMIN's per-org config field names, write-only; `requiresUserIdentity` +
+  `identityPrompt` = the ONE thing the channel needs from the USER, phrased so the client
+  stays vendor-free); `LinkStatus`; and the wire shapes — `ChannelListItem`, whose
+  `status` (do I have an identity?) and `enabled` (do I want it?) are **orthogonal**,
+  `SetChannelEnabledRequest`/`Response` (the per-user opt-in toggle), `SetupSubmission`,
+  and the admin `AdminChannelConfigItem` (`configured` + the audit echo
+  `configuredAt`/`configuredBy` + `summary`, an **adapter-declared allow-list of
+  non-secret values only** — secrets never appear there) / `ConfigureChannelRequest`.
+
 - **`src/domain.ts`** — pure domain constants + functions (only dependency is `date-fns` /
   `@date-fns/utc`). Key exports:
   - `Role`, `StatusCategoryKey`, `StatusTransition` — shared type primitives.

@@ -14,7 +14,7 @@ and points rather than duplicating them.
   table, so each file runs **once, in order**.
 - Config lives in [`../wrangler.toml`](../wrangler.toml): the `[[d1_databases]]`
   binding (`DB`, database `storypoint-tracker`) sets `migrations_dir = "migrations"`.
-- Current files: `0001_initial_schema.sql` … `0011_risk_degraded_notice.sql`
+- Current files: `0001_initial_schema.sql` … `0013_channel_optin_and_email_org.sql`
   (zero-padded, one per change — see the folder listing).
 
 ## Current schema (what the migrations establish)
@@ -36,9 +36,10 @@ All timestamps are ISO-8601 **TEXT (UTC)**; points/money are `REAL`. One line pe
 - **`config`** — per-`cloud_id` Jira field ids + `done_status_names` (JSON) + `site_url`.
 - **`sessions`** — server session rows.
 - **`pd_report_state`** — GDPR report-accounts cadence (`last_reported_at`, gates the ≥7-day cycle).
-- **`user_channels`** — app-owned notification channel registry per account (channel enum + opaque label; added 0005).
+- **`user_channels`** — app-owned notification channel registry per account (channel enum + opaque label; added 0005). `enabled` (added 0013, `NOT NULL DEFAULT 1` so no existing user silently loses reminders) is the per-user opt-in, orthogonal to the adapter's identity row: `dao.getUserChannels` filters `AND enabled = 1` and is the single enforcement point for every delivery path.
 - **`zulip_links`** / **`zulip_link_codes`** / **`zulip_link_attempts`** — Zulip adapter-owned link rows, single-use TTL'd codes, and rate-limit attempts (added 0006; `zulip_links.cloud_id` — the link's org — added 0008).
 - **`email_links`** — email adapter-owned delivery addresses (added 0007).
+- **`email_org_config`** — per-org (cloud_id) admin-entered email transport config, the twin of `zulip_org_config`: AES-256-GCM `secrets_enc` over `{apiKey,fromAddress}` under the `SECRETS_KEY` worker secret, plus `from_address` **duplicated in the clear on purpose** (the one non-secret provisioning value, echoed back to the admin UI). Added 0013; the legacy `EMAIL_API_KEY`/`EMAIL_FROM` env pair remains a fallback for orgs with no row.
 - **`risk_board_config`** / **`risk_snapshots`** / **`risk_board_state`** — Sprint Risk Board, feature-owned (added 0010): per-org admin config (board ids, cutoff/composite/schedule JSON, optional custom-field ids, the refresher account — nothing secret, so no encryption), one overwrite-only snapshot blob per board, and the demand-driven refresh state (last viewed/refreshed, consecutive failures, `degraded_reason`). `risk_board_config.degraded_notified_at` / `degraded_notified_reason` (added 0011) are the per-ORG "we already told the admins" stamp for a degraded episode, written only by the claim-before-send CAS in `store.ts` (`claimDegradedNotice` / `clearDegradedNotice`) and deliberately absent from `putConfig`'s upsert so an admin re-save can't wipe an open episode. Touched ONLY by [`../worker/src/risk/store.ts`](../worker/src/risk/store.ts) via `env.DB`, never by `dao.ts`; they hold Jira data, not effort ratings, so the privacy invariant is unaffected.
 - **`zulip_org_config`** — per-org (cloud_id) admin-entered Zulip credentials: AES-256-GCM `secrets_enc` under the `SECRETS_KEY` worker secret + `webhook_token_hash` (sha256; unique — routes inbound webhooks to the org). Added 0008.
 

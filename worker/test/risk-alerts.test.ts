@@ -383,6 +383,36 @@ describe('processBoardAlerts: firing', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('does not nudge an assignee who has turned the channel off', async () => {
+    const fetchMock = okFetch();
+    await seedUser(ASSIGNEE);
+    await dao.setChannelEnabled(ASSIGNEE, 'zulip', false); // opted out, still linked
+    const t = mkTicket({ key: 'AL-1' });
+
+    await run([t], at(0));
+    await run([t], at(FIRE_AFTER_RISK_WORK_HOURS + 1));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers under the ORG's config (deliver receives orgId = cfg.cloudId)", async () => {
+    const fetchMock = okFetch();
+    await seedUser(ASSIGNEE);
+    // The assignee's link points at another org; the board belongs to CLOUD, so
+    // CLOUD's admin-provisioned bot is the one that sends.
+    await seedZulipOrgConfig(env, 'cloud-2', {
+      site: 'https://two.zulipchat.com',
+      webhookToken: 'tok-2',
+    });
+    await saveLink(env, ASSIGNEE, `zulip-${ASSIGNEE}`, ASSIGNEE, 'cloud-2');
+    const t = mkTicket({ key: 'AL-1' });
+
+    await run([t], at(0));
+    await run([t], at(FIRE_AFTER_RISK_WORK_HOURS + 1));
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      'https://org.zulipchat.com/api/v1/messages',
+    );
+  });
+
   it('aggregates two tickets for the same assignee into one message', async () => {
     const fetchMock = okFetch();
     await seedUser(ASSIGNEE);

@@ -31,6 +31,8 @@ import type {
   ChannelListResponse,
   ConfigureChannelRequest,
   LinkStatus,
+  SetChannelEnabledRequest,
+  SetChannelEnabledResponse,
   SetupSubmission,
 } from '@shared/notifications';
 import type {
@@ -122,6 +124,15 @@ export class ApiService {
   channelStatus(channel: string): Observable<LinkStatus> {
     return this.http.get<LinkStatus>(`/api/notifications/${encodeURIComponent(channel)}/status`);
   }
+  /** The per-user opt-in toggle (users choose WHETHER, admins choose HOW). The
+   *  reply's `status` says whether turning it on still needs an identity. */
+  setChannelEnabled(channel: string, enabled: boolean): Observable<SetChannelEnabledResponse> {
+    return this.http.put<SetChannelEnabledResponse>(
+      `/api/notifications/${encodeURIComponent(channel)}/enabled`,
+      { enabled } satisfies SetChannelEnabledRequest,
+    );
+  }
+  /** Forget my address/handle for this channel (distinct from muting it). */
   unlinkChannel(channel: string): Observable<unknown> {
     return this.http.delete(`/api/notifications/${encodeURIComponent(channel)}`);
   }
@@ -137,6 +148,10 @@ export class ApiService {
       `/api/admin/notifications/${encodeURIComponent(channel)}/config`,
       { fields } satisfies ConfigureChannelRequest,
     );
+  }
+  /** Remove this site's provisioning for a channel (turns it off org-wide). */
+  unconfigureChannel(channel: string): Observable<unknown> {
+    return this.http.delete(`/api/admin/notifications/${encodeURIComponent(channel)}/config`);
   }
   createTeam(body: CreateTeamRequest): Observable<Team> {
     return this.http.post<Team>('/api/admin/teams', body);

@@ -7,7 +7,7 @@ import type { Env } from '../../../env';
 import { errFields, log } from '../../../log';
 import type { ConfigureOrgResult } from '../../contract';
 import { open, seal, sha256Hex } from '../../secretbox';
-import { getOrgSecretsEnc, saveOrgConfig, soleOrgConfig } from './store';
+import { getOrgConfigMeta, getOrgSecretsEnc, saveOrgConfig, soleOrgConfig } from './store';
 
 /** What deliver/webhook need to talk to a Zulip org. Encrypted at rest as one
  *  JSON blob in zulip_org_config.secrets_enc. */
@@ -121,4 +121,53 @@ export async function loadOrgSecrets(
     log.warn('zulip: could not decrypt org config (rotated SECRETS_KEY?)', errFields(e));
     return null;
   }
+}
+
+/** Resolve delivery credentials for a send. The DeliverRequest's `orgId` DECIDES,
+ *  with no fall-through: the caller always knows which org it is delivering for, and
+ *  an org that has no config simply cannot deliver. The link row's own `cloud_id` is
+ *  consulted only when there is no `orgId` at all (a pre-0008 caller), which is also
+ *  where the NULL/sole-config path inside loadOrgSecrets lives. */
+export async function loadOrgSecretsForDelivery(
+  env: Env,
+  orgId: string | null,
+  linkCloudId: string | null,
+): Promise<ZulipOrgSecrets | null> {
+  // The org the reminder is ABOUT decides the credentials, FULL STOP. There is
+  // deliberately no fall-through to the link row's own org: org A un-provisioning
+  // Zulip must not cause an org-A reminder (title and issue key included) to be
+  // sent through org B's server under org B's admin's bot. Email refuses the same
+  // way (email/adapter.ts). The link-row path below is only for a link with no org
+  // at all (pre-0008), which is only reachable when the caller has no org either.
+  if (orgId) return loadOrgSecrets(env, orgId);
+  return loadOrgSecrets(env, linkCloudId);
+}
+
+/** NON-SECRET metadata for the admin list. `site` is the ONE field of the sealed
+ *  box that is safe to echo back (it's the public URL the admin typed in); the bot
+ *  email and api key stay inside and must never be added here. */
+export async function zulipOrgSummary(
+  env: Env,
+  orgId: string,
+): Promise<{
+  configuredAt: string;
+  configuredBy: string | null;
+  summary: Record<string, string>;
+} | null> {
+  const meta = await getOrgConfigMeta(env, orgId);
+  if (!meta) return null;
+  let site = '';
+  if (env.SECRETS_KEY) {
+    try {
+      site = (JSON.parse(await open(env.SECRETS_KEY, meta.secretsEnc)) as ZulipOrgSecrets).site;
+    } catch (e) {
+      // A rotated SECRETS_KEY must degrade to "no site shown", not a 500.
+      log.warn('zulip: could not decrypt org config for summary', errFields(e));
+    }
+  }
+  return {
+    configuredAt: meta.configuredAt,
+    configuredBy: meta.configuredBy,
+    summary: site ? { site } : {},
+  };
 }

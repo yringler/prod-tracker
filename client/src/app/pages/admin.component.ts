@@ -180,18 +180,27 @@ import { AuthService } from '../auth.service';
     <div class="panel">
       <h3>Notification channels</h3>
       <p class="muted" style="font-size:12px">
-        Per-site channel credentials, stored encrypted server-side. Values are
-        write-only — saving verifies them live with the vendor; to change anything,
-        re-enter all fields.
+        These credentials are shared by everyone on this site — users only choose
+        whether to receive notifications, never how to send them. Stored encrypted
+        server-side and write-only: saving verifies them live with the vendor; to
+        change anything, re-enter all fields.
       </p>
       @for (c of adminChannels(); track c.descriptor.channel) {
         <div style="margin-top:10px">
           <div class="row">
             <strong>{{ c.descriptor.displayName }}</strong>
             <wa-tag size="small" [attr.variant]="c.configured ? 'success' : 'neutral'">
-              {{ c.configured ? 'Configured' : 'Not configured' }}
+              {{ configuredLabel(c) }}
             </wa-tag>
           </div>
+          <!-- Non-secret echo only: the server sends "summary" as an adapter-declared
+               allow-list (site / fromAddress), never anything from the sealed box. -->
+          @for (line of summaryLines(c); track line) {
+            <div class="muted" style="font-size:12px">{{ line }}</div>
+          }
+          @if (configuredHint(c); as hint) {
+            <div class="muted" style="font-size:12px">{{ hint }}</div>
+          }
           <!-- Vendor-agnostic: the server's requestedFields drive the inputs. -->
           @for (f of c.descriptor.requestedFields ?? []; track f) {
             <div class="row" style="margin-top:8px">
@@ -214,6 +223,16 @@ import { AuthService } from '../auth.service';
             >
               Save
             </wa-button>
+            @if (c.configuredAt) {
+              <wa-button
+                appearance="outlined"
+                variant="danger"
+                [disabled]="busyChannel() === c.descriptor.channel"
+                (click)="removeChannelConfig(c)"
+              >
+                Remove configuration
+              </wa-button>
+            }
           </div>
           @if (channelMsg()[c.descriptor.channel]; as msg) {
             <wa-callout [attr.variant]="msg.ok ? 'success' : 'danger'" style="margin-top:8px">
@@ -309,6 +328,58 @@ export class AdminComponent implements OnInit {
    *  non-secret config (site, botEmail) legible. Names come from the descriptor. */
   protected isSecretField(field: string): boolean {
     return /key|token|secret|password/i.test(field);
+  }
+
+  /** The adapter-declared non-secret echo, as "key: value" lines. */
+  protected summaryLines(c: AdminChannelConfigItem): string[] {
+    const summary = c.summary ?? {};
+    return Object.keys(summary).map((k) => `${k}: ${summary[k]}`);
+  }
+
+  /** Three states, not two: an org row (removable), the deployment-wide legacy
+   *  env fallback (deliverable but NOT ours to remove — there is no row), and
+   *  nothing. */
+  protected configuredLabel(c: AdminChannelConfigItem): string {
+    if (!c.configured) return 'Not configured';
+    return c.configuredAt ? 'Configured' : 'Provisioned by the operator';
+  }
+
+  /** "Configured <date>" — formatted here rather than with a DatePipe, which this
+   *  component doesn't import. */
+  protected configuredHint(c: AdminChannelConfigItem): string | null {
+    if (!c.configuredAt) {
+      return c.configured
+        ? 'Delivering with the deployment-wide legacy env config. Save fields here to provision this site; there is nothing site-specific to remove.'
+        : null;
+    }
+    const d = new Date(c.configuredAt);
+    if (Number.isNaN(d.getTime())) return null;
+    const by = c.configuredBy ? ` by ${c.configuredBy}` : '';
+    return `Configured ${d.toLocaleDateString()}${by}`;
+  }
+
+  removeChannelConfig(c: AdminChannelConfigItem): void {
+    const channel = c.descriptor.channel;
+    this.busyChannel.set(channel);
+    this.api.unconfigureChannel(channel).subscribe({
+      next: () => {
+        this.busyChannel.set(null);
+        this.channelMsg.update((m) => ({
+          ...m,
+          [channel]: { ok: true, text: 'Configuration removed — this channel is now off for the site.' },
+        }));
+        // Write-only secrets: clear the inputs rather than leaving them on screen.
+        this.channelFields.update((m) => ({ ...m, [channel]: {} }));
+        this.refreshChannelConfigs();
+      },
+      error: (e) => {
+        this.busyChannel.set(null);
+        this.channelMsg.update((m) => ({
+          ...m,
+          [channel]: { ok: false, text: e?.error?.error ?? 'Remove failed' },
+        }));
+      },
+    });
   }
 
   setChannelField(channel: string, field: string, ev: Event): void {

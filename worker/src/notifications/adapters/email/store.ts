@@ -27,3 +27,65 @@ export async function getEmail(env: Env, accountId: string): Promise<string | nu
 export async function deleteEmail(env: Env, accountId: string): Promise<void> {
   await env.DB.prepare(`DELETE FROM email_links WHERE account_id = ?`).bind(accountId).run();
 }
+
+// --- Per-org transport config (admin-entered, encrypted at rest) --------------
+// The email twin of zulip/store.ts's org-config block: raw persistence only —
+// crypto/validation/live-verify live in org-config.ts. `secretsEnc` is an opaque
+// sealed blob here; `fromAddress` is duplicated in the clear because it is the one
+// NON-secret provisioning value the admin UI echoes back.
+
+export interface EmailOrgConfigRow {
+  secretsEnc: string;
+  fromAddress: string;
+  configuredBy: string | null;
+  configuredAt: string;
+}
+
+export async function saveEmailOrgConfig(
+  env: Env,
+  cloudId: string,
+  secretsEnc: string,
+  fromAddress: string,
+  configuredBy: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO email_org_config (cloud_id, secrets_enc, from_address, configured_by, configured_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(cloud_id) DO UPDATE SET
+       secrets_enc   = excluded.secrets_enc,
+       from_address  = excluded.from_address,
+       configured_by = excluded.configured_by,
+       configured_at = excluded.configured_at`,
+  )
+    .bind(cloudId, secretsEnc, fromAddress, configuredBy, nowIso())
+    .run();
+}
+
+export async function getEmailOrgConfig(
+  env: Env,
+  cloudId: string,
+): Promise<EmailOrgConfigRow | null> {
+  const r = await env.DB.prepare(
+    `SELECT secrets_enc, from_address, configured_by, configured_at
+       FROM email_org_config WHERE cloud_id = ?`,
+  )
+    .bind(cloudId)
+    .first<{
+      secrets_enc: string;
+      from_address: string;
+      configured_by: string | null;
+      configured_at: string;
+    }>();
+  return r
+    ? {
+        secretsEnc: r.secrets_enc,
+        fromAddress: r.from_address,
+        configuredBy: r.configured_by ?? null,
+        configuredAt: r.configured_at,
+      }
+    : null;
+}
+
+export async function deleteEmailOrgConfig(env: Env, cloudId: string): Promise<void> {
+  await env.DB.prepare(`DELETE FROM email_org_config WHERE cloud_id = ?`).bind(cloudId).run();
+}

@@ -33,8 +33,7 @@ interface OpenSetup {
   template: `
     <h3 style="margin-top:0">Notifications</h3>
     <p class="muted">
-      When you don't act on a browser reminder, we can nudge you again through one of
-      these channels. Connect the ones you want.
+      Your site admin has set these up. Turn on the ones you want reminders through.
     </p>
 
     @if (loading()) {
@@ -48,25 +47,35 @@ interface OpenSetup {
       @for (item of channels(); track item.descriptor.channel) {
         <div class="row" style="gap:8px; align-items:center; margin-bottom:8px">
           <strong>{{ item.descriptor.displayName }}</strong>
-          @if (item.status.linked) {
-            <wa-tag size="small" variant="success" appearance="outlined">
-              Connected as {{ item.status.label }}
-            </wa-tag>
-            <wa-button
-              size="small"
-              appearance="outlined"
-              (click)="disconnect(item.descriptor.channel)"
-              >Disconnect</wa-button
-            >
+          <wa-switch
+            #sw
+            size="small"
+            [checked]="item.enabled"
+            (change)="toggle(item, sw)"
+            [attr.title]="'Receive reminders through ' + item.descriptor.displayName"
+          ></wa-switch>
+          @if (item.enabled) {
+            @if (item.status.linked) {
+              <wa-tag size="small" variant="success" appearance="outlined">
+                Connected as {{ item.status.label }}
+              </wa-tag>
+            } @else if (needsIdentity(item)) {
+              <wa-tag size="small" variant="neutral" appearance="outlined">
+                Needs {{ item.descriptor.identityPrompt ?? 'setup' }}
+              </wa-tag>
+            } @else {
+              <wa-tag size="small" variant="success" appearance="outlined">On</wa-tag>
+            }
           } @else {
-            <wa-tag size="small" variant="neutral" appearance="outlined">Not connected</wa-tag>
-            <wa-button
-              size="small"
-              variant="brand"
-              [disabled]="setup()?.channel === item.descriptor.channel"
-              (click)="connect(item.descriptor.channel)"
-              >Connect</wa-button
-            >
+            <wa-tag size="small" variant="neutral" appearance="outlined">Off</wa-tag>
+            @if (item.status.linked) {
+              <wa-button
+                size="small"
+                appearance="plain"
+                (click)="disconnect(item.descriptor.channel)"
+                >Forget my {{ item.descriptor.displayName }} details</wa-button
+              >
+            }
           }
         </div>
 
@@ -133,7 +142,13 @@ interface OpenSetup {
           }
         }
       } @empty {
-        <p class="muted">No notification channels are available.</p>
+        <p class="muted">
+          No notification channels have been set up for your site yet. Ask an admin.
+        </p>
+      }
+
+      @if (actionError(); as e) {
+        <wa-callout variant="danger" size="small" style="margin-top:8px">{{ e }}</wa-callout>
       }
     }
   `,
@@ -147,6 +162,9 @@ export class NotificationChannelsComponent {
   loading = signal(true);
   error = signal(false);
   setup = signal<OpenSetup | null>(null);
+  /** Non-fatal, per-action error (a failed toggle / failed setup open). The
+   *  `error` signal above is for the LIST load and replaces the whole panel. */
+  actionError = signal('');
 
   private poll: Subscription | null = null;
 
@@ -164,6 +182,7 @@ export class NotificationChannelsComponent {
     this.api.notificationChannels().subscribe({
       next: (res) => {
         this.channels.set(res.channels);
+        this.actionError.set('');
         this.loading.set(false);
       },
       error: () => {
@@ -173,11 +192,51 @@ export class NotificationChannelsComponent {
     });
   }
 
+  /** The whole user-side surface: opt in / out. Provisioning is the admin's, so
+   *  turning a channel ON may still need ONE thing from the user (an address, a
+   *  handle) — the reply says so, and we open the existing setup panel right away
+   *  instead of making them find a second button. `el` is the <wa-switch> template
+   *  ref (the repo's `#inp` idiom): reading `.checked` off it avoids a
+   *  `$event.target` cast in the template, which strictTemplates would require. */
+  toggle(item: ChannelListItem, el: { checked: boolean }): void {
+    const channel = item.descriptor.channel;
+    const enabled = el.checked;
+    this.api.setChannelEnabled(channel, enabled).subscribe({
+      next: (res) => {
+        this.actionError.set('');
+        this.channels.update((list) =>
+          list.map((c) =>
+            c.descriptor.channel === channel
+              ? { ...c, enabled: res.enabled, status: res.status }
+              : c,
+          ),
+        );
+        if (res.enabled && this.needsIdentity({ ...item, status: res.status }))
+          this.connect(channel);
+        else this.cancelSetup();
+      },
+      // `<wa-switch>` is uncontrolled: the DOM property is already flipped, and the
+      // bound expression (item.enabled) has NOT changed, so re-rendering will not
+      // write it back. Reset the element directly, then re-read the server.
+      error: () => {
+        el.checked = item.enabled;
+        this.actionError.set(`Couldn't change ${item.descriptor.displayName} — try again.`);
+        this.refresh();
+      },
+    });
+  }
+
   connect(channel: string): void {
     this.api.beginChannelSetup(channel).subscribe({
       next: (instructions) => {
         this.setup.set({ channel, instructions });
         this.startPolling(channel);
+      },
+      error: () => {
+        const name =
+          this.channels().find((c) => c.descriptor.channel === channel)?.descriptor
+            .displayName ?? channel;
+        this.actionError.set(`Couldn't start setup for ${name} — try again.`);
       },
     });
   }
@@ -228,6 +287,13 @@ export class NotificationChannelsComponent {
   private stopPolling(): void {
     this.poll?.unsubscribe();
     this.poll = null;
+  }
+
+  /** Does this channel still need ONE thing from the user (an address, a handle)
+   *  before it can deliver? Absent → yes (the conservative default, and what both
+   *  shipped adapters declare); an explicit `false` means enabling is sufficient. */
+  needsIdentity(item: ChannelListItem): boolean {
+    return item.descriptor.requiresUserIdentity !== false && !item.status.linked;
   }
 
   expiryHint(expiresAt: number | undefined): string | null {
