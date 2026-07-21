@@ -103,6 +103,61 @@ export function columnOptions(
  *  with the group header's badge so the two can't drift. */
 export const UNKNOWN_COLUMN_NOTE = 'not on any configured board';
 
+/**
+ * The Fields panel's custom-field picker.
+ *
+ * The leading `''` option is the POINT: "don't use this signal" has to be a thing
+ * you can CHOOSE, not just the absence of a choice. Without it the bound `''` is a
+ * value the select doesn't offer (contract rule 1), so the control reads as though
+ * the first discovered candidate were configured when nothing is.
+ *
+ * The note on a synthesized value says "not among the discovered candidates" and
+ * not "no such field": this list is a NAME-REGEX subset of the site's fields
+ * (`listRiskFieldCandidates`), so a stored id missing from it is entirely possibly
+ * a real field that simply doesn't match the regex.
+ */
+export function fieldOptions(
+  candidates: readonly { id: string; name: string }[],
+  value: string,
+): SelectOption[] {
+  const out: SelectOption[] = [
+    { value: '', label: 'None', note: 'this signal is not collected' },
+    ...candidates.map((c) => ({ value: c.id, label: c.name })),
+  ];
+  return ensureValuePresent(out, value, 'not among the discovered candidates');
+}
+
+/**
+ * The In Progress status picker. `''` = follow the built-in default, whose name is
+ * shown inline so "blank" never reads as "no clock".
+ *
+ * Grouped by Jira's own status category, `indeterminate` first — that is Jira's
+ * definition of "in progress", and it is the only group that can be RIGHT here.
+ * The rest are still offered (omitting them would make a deliberate, working
+ * choice unselectable) but sink below a heading that says what they are.
+ */
+export function statusOptions(
+  statuses: readonly { name: string; category: string }[],
+  opts: { value: string; defaultStatus: string },
+): SelectOption[] {
+  // Partitioned HERE rather than trusting the server's order: the flat render list
+  // emits a group heading whenever `group` changes, so an interleaved list would
+  // print "In progress" three times.
+  const inProgress = statuses.filter((s) => s.category === 'indeterminate');
+  const rest = statuses.filter((s) => s.category !== 'indeterminate');
+  const out: SelectOption[] = [
+    { value: '', label: `Default — ${opts.defaultStatus}` },
+    ...inProgress.map((s) => ({ value: s.name, label: s.name, group: 'In progress' })),
+    ...rest.map((s) => ({ value: s.name, label: s.name, group: 'Other statuses' })),
+  ];
+  // Same discipline as columnOptions: only claim the status is unknown when we
+  // actually hold the site's status list to contradict it.
+  return ensureValuePresent(out, opts.value, statuses.length ? UNKNOWN_STATUS_NOTE : null);
+}
+
+/** The one wording for "we have the site's statuses, and this isn't one". */
+export const UNKNOWN_STATUS_NOTE = 'not a status on this site';
+
 /** The Size picker: "any size", then every bucket as the point RANGE it captures. */
 export function sizeOptions(): SelectOption[] {
   return [

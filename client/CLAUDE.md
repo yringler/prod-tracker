@@ -40,8 +40,10 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   stripe, degraded banner, polls while the first snapshot is being built).
 - `risk-detail.component.ts` — `wa-dialog` rundown with each ticket's own resolved
   thresholds and per-column time bars.
-- `risk-admin.component.ts` — per-site config: boards, refresher account, optional
-  field pickers, the two structured editors below, and the work-schedule JSON box
+- `risk-admin.component.ts` — per-site config: boards, refresher account, the
+  optional field pickers + the In Progress status picker (all `<sp-option-select>`,
+  fed by `GET /api/admin/risk/fields`; the status one used to be a free-text box
+  because nothing served the site's status list), the two structured editors below, and the work-schedule JSON box
   (a visual schedule editor is deferred). Owns save + the message banner, and
   renders the server's per-rule `issues` on a 400.
 - `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold editor that
@@ -104,8 +106,14 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   (`parseSizeValue` returns `undefined` for a non-bucket; `Number(null) === 0` was
   the original bug).
 - `select-options.ts` — pure, Angular-free `SelectOption[]` builders
-  (`columnOptions`/`sizeOptions`/`ensureValuePresent`/`hasDoneColumnRule`/
-  `boardColumnsKnown`). Unit tested in `client/test/select-options.test.ts`.
+  (`columnOptions`/`sizeOptions`/`fieldOptions`/`statusOptions`/`ensureValuePresent`/
+  `hasDoneColumnRule`/`boardColumnsKnown`). Unit tested in
+  `client/test/select-options.test.ts`.
+  **"None"/"Default" is an OPTION, never the absence of one.** `fieldOptions` leads
+  with a real `''` option and `statusOptions` with `Default — <shipped default>`,
+  because a bound `''` with no `''` option is exactly the value WA filters away —
+  which is why the Fields panel's raw `<wa-select>`s used to read as though the
+  first discovered candidate were configured when nothing was.
   **An option's `note` is a CLAIM, and is only made when we can support it.**
   `ensureValuePresent` must always make the bound value selectable (rule 1), but its
   note is optional: `columnOptions` attaches "not on any configured board" only when

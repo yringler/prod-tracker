@@ -17,7 +17,6 @@ import type {
   RiskCompositeConfig,
   RiskCutoffs,
   RiskFieldCandidatesResponse,
-  RiskFieldOption,
   RiskWorkSchedule,
 } from '@shared/risk';
 import { scheduleDaysSummary, workHoursPerWeek } from '@shared/risk-cutoffs';
@@ -27,6 +26,8 @@ import { RiskCompositeEditorComponent } from './composite-editor.component';
 import { RiskCutoffsEditorComponent } from './cutoffs-editor.component';
 import { targetChecked, targetValue } from './dom-events';
 import { RiskImpactPreviewComponent } from './impact-preview.component';
+import { OptionSelectComponent } from './option-select.component';
+import { fieldOptions, statusOptions, type SelectOption } from './select-options';
 
 type FieldKey = 'flagged' | 'rejections' | 'implementor' | 'codeReviewer';
 
@@ -54,6 +55,7 @@ const FIELD_LABELS: Record<FieldKey, string> = {
     RiskCompositeEditorComponent,
     RiskCutoffsEditorComponent,
     RiskImpactPreviewComponent,
+    OptionSelectComponent,
   ],
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -115,33 +117,38 @@ const FIELD_LABELS: Record<FieldKey, string> = {
         <h3>Fields</h3>
         <p class="muted" style="font-size:12px">
           All optional, and all discovered from your Jira instance — ids are never
-          hardcoded. Leave one blank and the board simply drops that signal.
+          hardcoded. Pick <em>None</em> and the board simply drops that signal —
+          which is also what every row starts at.
         </p>
         @for (k of fieldKeys; track k) {
           <div class="row" style="margin-top:8px; align-items:center">
             <label style="min-width:180px">{{ label(k) }}</label>
-            <wa-select
-              with-clear
-              style="flex:1"
-              placeholder="none"
-              [value]="fields()[k] ?? ''"
-              (change)="setField(k, $event)"
-            >
-              @for (o of options(k); track o.id) {
-                <wa-option [value]="o.id">{{ o.name }}</wa-option>
-              }
-            </wa-select>
+            <span style="flex:1">
+              <sp-option-select
+                [value]="fields()[k] ?? ''"
+                [options]="fieldOptions(k)"
+                [ariaLabel]="label(k)"
+                (valueChange)="setField(k, $event)"
+              ></sp-option-select>
+            </span>
           </div>
         }
         <div class="row" style="margin-top:8px; align-items:center">
           <label style="min-width:180px">In Progress status</label>
-          <wa-input
-            style="flex:1"
-            [attr.placeholder]="defaultInProgress()"
-            [value]="inProgressStatus()"
-            (input)="inProgressStatus.set(value($event))"
-          ></wa-input>
+          <span style="flex:1">
+            <sp-option-select
+              [value]="inProgressStatus()"
+              [options]="statusOptions()"
+              ariaLabel="In Progress status"
+              (valueChange)="inProgressStatus.set($event)"
+            ></sp-option-select>
+          </span>
         </div>
+        <p class="muted" style="font-size:12px; margin-top:8px">
+          The clocks start when a ticket first enters the In Progress status
+          (<strong>{{ effectiveInProgress() }}</strong> right now). Statuses Jira
+          categorises as in-progress are listed first.
+        </p>
       </div>
 
       @if (defaultCutoffs(); as defs) {
@@ -374,9 +381,34 @@ export class RiskAdminComponent implements OnInit {
   label(k: FieldKey): string {
     return FIELD_LABELS[k];
   }
-  options(k: FieldKey): RiskFieldOption[] {
-    return this.fieldCandidates()?.[k] ?? [];
+  /** Both pickers go through `<sp-option-select>` — the single owner of the Web
+   *  Awesome select contract — so "none"/"default" is an OPTION you can pick, not
+   *  the absence of one. Bound `''` with no `''` option is exactly the case WA
+   *  filters away, which is why these rows used to read as if the first discovered
+   *  candidate were configured when nothing was.
+   *
+   *  COMPUTED, not a method: `[options]` is a signal input, and a fresh array on
+   *  every change-detection pass would re-render the option list under the open
+   *  select. */
+  private fieldOptionsByKey = computed<Record<FieldKey, SelectOption[]>>(() => {
+    const cands = this.fieldCandidates();
+    const cur = this.fields();
+    const out = {} as Record<FieldKey, SelectOption[]>;
+    for (const k of this.fieldKeys) out[k] = fieldOptions(cands?.[k] ?? [], cur[k] ?? '');
+    return out;
+  });
+  fieldOptions(k: FieldKey): SelectOption[] {
+    return this.fieldOptionsByKey()[k];
   }
+  statusOptions = computed<SelectOption[]>(() =>
+    statusOptions(this.fieldCandidates()?.statuses ?? [], {
+      value: this.inProgressStatus(),
+      defaultStatus: this.defaultInProgress(),
+    }),
+  );
+  /** What the clocks will actually key off after a save — the picked status, or the
+   *  built-in default when the box is left on "Default". */
+  effectiveInProgress = computed(() => this.inProgressStatus() || this.defaultInProgress());
   isPicked(boardId: number): boolean {
     return this.picked().some((b) => b.boardId === boardId);
   }
@@ -391,8 +423,9 @@ export class RiskAdminComponent implements OnInit {
     if (on) this.loadCandidates(b.boardId); // probe #1 on the board just picked
   }
 
-  setField(k: FieldKey, e: Event): void {
-    const v = this.value(e);
+  /** `''` is the "None" OPTION, and it stores as NULL — the same "blank = the
+   *  board simply drops that signal" contract the panel's caption promises. */
+  setField(k: FieldKey, v: string): void {
     this.fields.update((f) => ({ ...f, [k]: v || null }));
   }
 

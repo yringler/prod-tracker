@@ -24,6 +24,7 @@ import type {
   RiskCompositeConfig,
   RiskCutoffs,
   RiskFieldCandidatesResponse,
+  RiskStatusOption,
   RiskFieldIds,
   RiskMetricId,
   RiskPreviewBoard,
@@ -47,7 +48,7 @@ import {
 } from './logic/defaults';
 import { isDoneColumn } from './logic/health';
 import { PREVIEW_SAMPLE_LIMIT, addCounts, previewSnapshot } from './logic/preview';
-import { fetchBoardMaps, listRiskFieldCandidates } from './jira';
+import { fetchBoardMaps, listRiskFieldCandidates, listStatusCandidates } from './jira';
 import { refreshOrg } from './refresh';
 import {
   deleteBoardState,
@@ -427,13 +428,29 @@ function withDoneColumn(columns: string[]): { columns: string[]; doneColumn: str
   return { columns, doneColumn: last !== undefined && isDoneColumn(last, columns) ? last : null };
 }
 
+/**
+ * The Fields panel's whole vocabulary: the custom-field candidates AND the site's
+ * status names, both read live with the ADMIN'S own token (this is the one admin
+ * endpoint that has to hit Jira — a field/status list is not in any snapshot).
+ *
+ * The status read degrades to `[]` rather than failing the endpoint: the field
+ * pickers are still useful without it, and the client keeps the stored status
+ * selectable regardless (`statusOptions` → `ensureValuePresent`).
+ */
 async function listRiskFields(ctx: AuthedCtx): Promise<Response> {
   const token = await ctx.dao.getToken(ctx.accountId);
   if (!token) return error(409, 'no Jira grant for this admin', 'NO_GRANT');
   const client = new JiraClient(ctx.env, ctx.dao, token, ctx.cloudId);
-  const candidates = await listRiskFieldCandidates(client);
-  const cfg = await getConfig(ctx.env, ctx.cloudId);
-  const body: RiskFieldCandidatesResponse = { ...candidates, current: cfg?.fields ?? {} };
+  const [candidates, statuses, cfg] = await Promise.all([
+    listRiskFieldCandidates(client),
+    listStatusCandidates(client).catch(() => [] as RiskStatusOption[]),
+    getConfig(ctx.env, ctx.cloudId),
+  ]);
+  const body: RiskFieldCandidatesResponse = {
+    ...candidates,
+    statuses,
+    current: cfg?.fields ?? {},
+  };
   return json(body);
 }
 

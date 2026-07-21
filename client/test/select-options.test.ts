@@ -17,8 +17,11 @@ import {
   boardColumnsKnown,
   columnOptions,
   ensureValuePresent,
+  fieldOptions,
   hasDoneColumnRule,
   sizeOptions,
+  statusOptions,
+  UNKNOWN_STATUS_NOTE,
   type BoardColumns,
 } from '../src/app/risk/select-options';
 import { toEditorModel } from '@shared/risk-cutoffs';
@@ -143,5 +146,76 @@ describe('hasDoneColumnRule', () => {
 
   it('is false otherwise', () => {
     expect(hasDoneColumnRule(rows(['In Progress', null]), boards)).toBe(false);
+  });
+});
+
+// The Fields panel's two pickers. Both exist because a bound `''` with no `''`
+// OPTION is the exact case WA filters away: the control then reads as though the
+// first discovered candidate were configured when nothing is. "None" and
+// "Default" have to be things you can PICK.
+describe('fieldOptions', () => {
+  const cands = [
+    { id: 'customfield_1', name: 'Flagged' },
+    { id: 'customfield_2', name: 'Flag reason' },
+  ];
+
+  it("leads with a real, selectable 'None' option", () => {
+    const out = fieldOptions(cands, '');
+    expect(out[0]?.value).toBe('');
+    expect(out.some((o) => o.value === '' )).toBe(true);
+    expect(out[1]).toEqual({ value: 'customfield_1', label: 'Flagged' });
+  });
+
+  it('keeps a stored id selectable even when the regex no longer surfaces it', () => {
+    const out = fieldOptions(cands, 'customfield_99');
+    const opt = out.find((o) => o.value === 'customfield_99');
+    expect(opt).toBeDefined();
+    // Not "no such field" — this list is a name-regex SUBSET of the site's fields.
+    expect(opt?.note).toBe('not among the discovered candidates');
+  });
+});
+
+describe('statusOptions', () => {
+  const statuses = [
+    { name: 'To Do', category: 'new' },
+    { name: 'In Progress', category: 'indeterminate' },
+    { name: 'In Review', category: 'indeterminate' },
+    { name: 'Done', category: 'done' },
+  ];
+
+  it("leads with '' naming the default it inherits, then in-progress statuses", () => {
+    const out = statusOptions(statuses, { value: '', defaultStatus: 'In Progress' });
+    expect(out[0]).toEqual({ value: '', label: 'Default — In Progress' });
+    expect(out.slice(1, 3).map((o) => o.value)).toEqual(['In Progress', 'In Review']);
+    expect(out[1]?.group).toBe('In progress');
+  });
+
+  it('sinks the other categories below one heading rather than omitting them', () => {
+    // Omitting them would make a deliberate, working choice unselectable — and the
+    // flat render list prints a heading per GROUP CHANGE, so they must be contiguous.
+    const out = statusOptions(statuses, { value: '', defaultStatus: 'In Progress' });
+    const others = out.filter((o) => o.group === 'Other statuses').map((o) => o.value);
+    expect(others).toEqual(['To Do', 'Done']);
+    expect(out.map((o) => o.group)).toEqual([
+      undefined,
+      'In progress',
+      'In progress',
+      'Other statuses',
+      'Other statuses',
+    ]);
+  });
+
+  it('offers a stored status the site no longer has, and says so', () => {
+    const out = statusOptions(statuses, { value: 'Coding', defaultStatus: 'In Progress' });
+    expect(out.find((o) => o.value === 'Coding')?.note).toBe(UNKNOWN_STATUS_NOTE);
+  });
+
+  // Same annotation discipline as columnOptions: with no status list we are in no
+  // position to claim the status doesn't exist.
+  it('claims nothing when the status read failed', () => {
+    const out = statusOptions([], { value: 'Coding', defaultStatus: 'In Progress' });
+    const opt = out.find((o) => o.value === 'Coding');
+    expect(opt).toBeDefined();
+    expect(opt?.note).toBeUndefined();
   });
 });
