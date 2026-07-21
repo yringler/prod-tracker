@@ -171,7 +171,7 @@ Other `src/` files:
 - `webawesome.ts` — central Web Awesome registry (side-effect imports; see below).
 - `sw-push.js` — plain-JS Web Push service worker (NOT in the Angular bundle; shipped as an asset). Shows the "rate this" notification and routes clicks to `/tracker?pending=…`.
 - `manifest.webmanifest` — PWA manifest (standalone display).
-- `index.html` — host page (`<sp-root>`), `<link rel="manifest">`, and an inline boot script that applies the saved/OS theme class before first paint (kept in sync with `ThemeService`).
+- `index.html` — host page (`<sp-root>`), `<base href="/">`, `<link rel="manifest">`, and an inline boot script that applies the saved/OS theme class before first paint (kept in sync with `ThemeService`). **The `<base href="/">` is load-bearing:** the CLI emits relative bundle URLs, so without it a direct load of any route deeper than one segment (`/risk/admin`, or even `/risk/` with a trailing slash) resolves `main-*.js` against the route path, hits the Worker's SPA fallback, gets `index.html` back, and the ES module fails its MIME check — a blank page with a green build, reachable only by in-app navigation. Pinned by `client/test/index-html.test.ts`.
 - `styles.css` — global styles: per-theme brand palette CSS vars (`--accent`/`--claimed`/`--done`/…) and a Web Awesome token bridge mapping `--wa-color-*` onto them.
 
 ## Conventions & patterns

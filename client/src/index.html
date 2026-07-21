@@ -2,6 +2,11 @@
 <html lang="en" class="wa-brand-blue">
   <head>
     <meta charset="utf-8" />
+    <!-- Load-bearing: without it the built bundles are referenced relatively, so a
+         direct load of a nested route (e.g. /risk/admin) resolves main-*.js against
+         /risk/, hits the Worker's SPA fallback, gets index.html back, and the module
+         dies on its MIME check — a silent blank page. Pinned by client/test. -->
+    <base href="/" />
     <title>Story-point Tracker</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="manifest" href="manifest.webmanifest" />
