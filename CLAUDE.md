@@ -25,7 +25,7 @@ Each area has its own `CLAUDE.md` — read it before editing there.
 | `shared/` | TS types + pure domain logic imported by both sides; depends on **neither** client nor worker (eslint-enforced). | `shared/CLAUDE.md` |
 | `worker/` | Cloudflare Worker backend — hand-rolled `route()` dispatcher in `src/index.ts` (no Hono), plus `routes/`, `jira/`, `cron/`, `db/`. Privacy enforced in `db/dao.ts`. | `worker/CLAUDE.md` |
 | `client/` | Angular SPA (standalone components, signals); built into the Worker's static assets. | `client/CLAUDE.md` |
-| `worker/src/risk/` | Sprint Risk Board — a self-contained, deletable feature (own `risk_*` tables, own cron job, own routes, lazy `client/src/app/risk/` UI). | `worker/CLAUDE.md` |
+| `worker/src/risk/` | Sprint Risk Board — a self-contained, deletable feature (own `risk_*` tables, own cron job, own routes, lazy `client/src/app/risk/` UI). IT MUST BE EASY TO DELETE. | `worker/CLAUDE.md` |
 | `migrations/` | Versioned, idempotent D1 SQL migrations. | `migrations/CLAUDE.md` |
 | `scripts/` | One-off SQL maintenance scripts (run via `wrangler d1 execute`). | — |
 
