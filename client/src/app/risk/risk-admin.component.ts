@@ -3,20 +3,29 @@ import {
   ChangeDetectionStrategy,
   Component,
   OnInit,
+  computed,
   inject,
   signal,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import type { OrgMember } from '@shared/contracts';
+import type { ApiError, OrgMember } from '@shared/contracts';
 import type {
   PutRiskConfigRequest,
   RiskBoardCandidate,
   RiskBoardRef,
+  RiskColumnsResponse,
+  RiskCompositeConfig,
+  RiskCutoffs,
   RiskFieldCandidatesResponse,
   RiskFieldOption,
+  RiskWorkSchedule,
 } from '@shared/risk';
+import { scheduleDaysSummary, workHoursPerWeek } from '@shared/risk-cutoffs';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
+import { RiskCompositeEditorComponent } from './composite-editor.component';
+import { RiskCutoffsEditorComponent } from './cutoffs-editor.component';
+import { RiskImpactPreviewComponent } from './impact-preview.component';
 
 type FieldKey = 'flagged' | 'rejections' | 'implementor' | 'codeReviewer';
 
@@ -29,13 +38,22 @@ const FIELD_LABELS: Record<FieldKey, string> = {
 
 // Per-site risk-board configuration. Nothing here is secret (board ids, cutoff
 // tables, an account id), so unlike the notification-channel panel the stored
-// values are read back and shown. v1 edits the cutoff/composite/schedule tables as
-// raw JSON with server-side validation; friendlier editors can come later without
-// touching the API.
+// values are read back and shown.
+//
+// This component owns boards / refresher / fields / save; the cutoff table itself
+// is <sp-risk-cutoffs> (cutoffs-editor.component.ts), which replaced the raw-JSON
+// textarea. Composite weights and the work schedule are still JSON here — the
+// composite weights are <sp-risk-composite>. The work schedule is still JSON — a
+// visual 7-day + timezone editor is deferred (see DEFERRED.md).
 @Component({
   selector: 'sp-risk-admin',
   standalone: true,
-  imports: [RouterLink],
+  imports: [
+    RouterLink,
+    RiskCompositeEditorComponent,
+    RiskCutoffsEditorComponent,
+    RiskImpactPreviewComponent,
+  ],
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -125,33 +143,33 @@ const FIELD_LABELS: Record<FieldKey, string> = {
         </div>
       </div>
 
+      @if (defaultCutoffs(); as defs) {
+        <sp-risk-cutoffs
+          [cutoffs]="cutoffs()"
+          [defaults]="defs"
+          [schedule]="effectiveSchedule()"
+          [scheduleIsCustom]="scheduleIsCustom()"
+          [columns]="columnsInfo()"
+          (cutoffsChange)="cutoffs.set($event)"
+        ></sp-risk-cutoffs>
+      }
+
+      @if (defaultComposite(); as dc) {
+        <sp-risk-composite
+          [composite]="composite()"
+          [defaults]="dc"
+          [schedule]="effectiveSchedule()"
+          (compositeChange)="composite.set($event)"
+        ></sp-risk-composite>
+      }
+
       <div class="panel">
-        <h3>Thresholds &amp; clock</h3>
+        <h3>Work schedule</h3>
         <p class="muted" style="font-size:12px">
-          Blank = use the built-in defaults (and clearing a box resets to them). Only
-          what you type here is stored, so the shipped defaults keep improving under
-          you. The server validates the shape (and the timezone) before saving.
+          Blank = the built-in schedule (and clearing the box resets to it). The
+          server validates the shape and the timezone before saving. Currently:
+          <strong>{{ scheduleSummary() }}</strong>.
         </p>
-        <wa-details summary="Risk cutoffs (JSON)">
-          <wa-textarea
-            rows="8"
-            placeholder="blank = built-in defaults"
-            [value]="cutoffsJson()"
-            (input)="cutoffsJson.set(value($event))"
-          ></wa-textarea>
-          <p class="muted" style="font-size:12px">Built-in defaults, for reference:</p>
-          <pre class="ref">{{ defaultCutoffsJson() }}</pre>
-        </wa-details>
-        <wa-details summary="Composite weights (JSON)">
-          <wa-textarea
-            rows="5"
-            placeholder="blank = built-in defaults"
-            [value]="compositeJson()"
-            (input)="compositeJson.set(value($event))"
-          ></wa-textarea>
-          <p class="muted" style="font-size:12px">Built-in defaults, for reference:</p>
-          <pre class="ref">{{ defaultCompositeJson() }}</pre>
-        </wa-details>
         <wa-details summary="Work schedule (JSON)">
           <wa-textarea
             rows="6"
@@ -163,6 +181,15 @@ const FIELD_LABELS: Record<FieldKey, string> = {
           <pre class="ref">{{ defaultScheduleJson() }}</pre>
         </wa-details>
       </div>
+
+      <!-- Last thing before Save, deliberately: it answers "what will this do?"
+           for the two editors AND the schedule box above it. -->
+      <sp-risk-impact
+        [cutoffs]="cutoffs()"
+        [composite]="composite()"
+        [schedule]="effectiveSchedule()"
+        [reloadKey]="savedAt()"
+      ></sp-risk-impact>
 
       <div class="row" style="gap:8px">
         <wa-button variant="brand" [loading]="saving()" (click)="save()">Save</wa-button>
@@ -198,6 +225,9 @@ export class RiskAdminComponent implements OnInit {
 
   loading = signal(true);
   saving = signal(false);
+  /** Bumped on a successful save so the impact preview re-runs against the config
+   *  the server now holds (its "before" is the stored snapshot, not the form). */
+  savedAt = signal(0);
   message = signal<{ ok: boolean; text: string } | null>(null);
   probeError = signal<string | null>(null);
 
@@ -214,14 +244,34 @@ export class RiskAdminComponent implements OnInit {
     codeReviewer: null,
   });
   inProgressStatus = signal('');
-  cutoffsJson = signal('');
-  compositeJson = signal('');
   scheduleJson = signal('');
-  // Read-only reference copies of the shipped defaults (never written back).
-  defaultCutoffsJson = signal('');
-  defaultCompositeJson = signal('');
+  // The cutoff table is a structured model now, not text: null = follow the shipped
+  // defaults (stored NULL), which is what <sp-risk-cutoffs> emits when its switch
+  // is on. `defaultCutoffs` is the read-only reference the editor renders then.
+  cutoffs = signal<RiskCutoffs | null>(null);
+  defaultCutoffs = signal<RiskCutoffs | null>(null);
+  composite = signal<RiskCompositeConfig | null>(null);
+  defaultComposite = signal<RiskCompositeConfig | null>(null);
+  defaultSchedule = signal<RiskWorkSchedule | null>(null);
+  columnsInfo = signal<RiskColumnsResponse | null>(null);
+  // Read-only reference copy of the shipped default (never written back).
   defaultScheduleJson = signal('');
   defaultInProgress = signal('In Progress');
+
+  /** The schedule the metrics are actually measured on, so the editor's units
+   *  caption is derived from real data. Reads the (live) JSON box first, so
+   *  editing the schedule immediately changes what "24 hours" means. */
+  effectiveSchedule = computed<RiskWorkSchedule>(() => {
+    const typed = safeParse<RiskWorkSchedule>(this.scheduleJson());
+    return typed ?? this.defaultSchedule() ?? FALLBACK_SCHEDULE;
+  });
+  scheduleIsCustom = computed(() => safeParse<RiskWorkSchedule>(this.scheduleJson()) !== null);
+  /** "40 work hours/week (Mon–Thu 9–18, Fri 9–13, America/New_York)" — the derived
+   *  summary the plan asks for wherever hours are entered. */
+  scheduleSummary = computed(() => {
+    const s = this.effectiveSchedule();
+    return `${workHoursPerWeek(s)} work hours/week (${scheduleDaysSummary(s)}, ${s.timeZone})`;
+  });
 
   ngOnInit(): void {
     this.api.adminRiskConfig().subscribe({
@@ -240,11 +290,12 @@ export class RiskAdminComponent implements OnInit {
         // would freeze a copy of them into the DB on the next Save, so the org would
         // never pick up later improvements to logic/defaults.ts — blank means
         // "NULL = use the built-in defaults", and clearing a box resets to them.
-        this.cutoffsJson.set(r.config.cutoffs ? pretty(r.config.cutoffs) : '');
-        this.compositeJson.set(r.config.composite ? pretty(r.config.composite) : '');
+        this.cutoffs.set(r.config.cutoffs);
+        this.defaultCutoffs.set(r.defaults.cutoffs);
+        this.composite.set(r.config.composite);
+        this.defaultComposite.set(r.defaults.composite);
+        this.defaultSchedule.set(r.defaults.schedule);
         this.scheduleJson.set(r.config.schedule ? pretty(r.config.schedule) : '');
-        this.defaultCutoffsJson.set(pretty(r.defaults.cutoffs));
-        this.defaultCompositeJson.set(pretty(r.defaults.composite));
         this.defaultScheduleJson.set(pretty(r.defaults.schedule));
         this.loading.set(false);
       },
@@ -252,6 +303,10 @@ export class RiskAdminComponent implements OnInit {
     });
     this.loadCandidates();
     this.api.orgMembers().subscribe({ next: (r) => this.members.set(r.members) });
+    // Board columns for the cutoff editor's Scope picker. Served from the stored
+    // snapshots, so this normally costs no Jira calls; a failure just leaves the
+    // picker without suggestions.
+    this.api.adminRiskColumns().subscribe({ next: (r) => this.columnsInfo.set(r) });
     this.api.adminRiskFields().subscribe({ next: (r) => this.fieldCandidates.set(r) });
   }
 
@@ -298,8 +353,8 @@ export class RiskAdminComponent implements OnInit {
     try {
       body = {
         boards: this.picked(),
-        cutoffs: parseOrNull(this.cutoffsJson()),
-        composite: parseOrNull(this.compositeJson()),
+        cutoffs: this.cutoffs(),
+        composite: this.composite(),
         schedule: parseOrNull(this.scheduleJson()),
         fields: this.fields(),
         inProgressStatus: this.inProgressStatus().trim() || null,
@@ -313,18 +368,43 @@ export class RiskAdminComponent implements OnInit {
     this.api.putRiskConfig(body).subscribe({
       next: () => {
         this.saving.set(false);
+        this.savedAt.update((n) => n + 1);
         this.message.set({ ok: true, text: 'Saved. The next refresh picks this up.' });
       },
-      error: (e: { error?: { error?: string } }) => {
+      error: (e: { error?: ApiError }) => {
         this.saving.set(false);
-        this.message.set({ ok: false, text: e.error?.error ?? 'Could not save.' });
+        // The cutoff validator returns per-rule issues; show them rather than the
+        // generic "invalid cutoffs".
+        const issues = e.error?.issues ?? [];
+        this.message.set({
+          ok: false,
+          text: issues.length
+            ? issues.map((i) => i.message).join(' · ')
+            : (e.error?.error ?? 'Could not save.'),
+        });
       },
     });
   }
 }
 
+/** Last-resort schedule if neither the org nor the server's defaults have loaded
+ *  yet — only ever used for the units caption while the page is still fetching. */
+const FALLBACK_SCHEDULE: RiskWorkSchedule = {
+  timeZone: 'UTC',
+  days: { Mon: [9, 17], Tue: [9, 17], Wed: [9, 17], Thu: [9, 17], Fri: [9, 17], Sat: null, Sun: null },
+};
+
 function pretty(v: unknown): string {
   return JSON.stringify(v, null, 2);
+}
+
+/** Non-throwing variant of parseOrNull, for the derived (display-only) reads. */
+function safeParse<T>(raw: string): T | null {
+  try {
+    return parseOrNull<T>(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** Blank textarea = "use the code defaults" (stored as NULL). Throws on bad JSON,

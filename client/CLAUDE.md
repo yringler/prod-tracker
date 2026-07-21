@@ -40,11 +40,39 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   stripe, degraded banner, polls while the first snapshot is being built).
 - `risk-detail.component.ts` — `wa-dialog` rundown with each ticket's own resolved
   thresholds and per-column time bars.
-- `risk-admin.component.ts` — per-site config (boards, refresher account, optional
-  field pickers, JSON cutoff/composite/schedule editors).
+- `risk-admin.component.ts` — per-site config: boards, refresher account, optional
+  field pickers, the two structured editors below, and the work-schedule JSON box
+  (a visual schedule editor is deferred). Owns save + the message banner, and
+  renders the server's per-rule `issues` on a 400.
+- `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold table that
+  replaced the raw-JSON textarea. A tab per metric, a per-row Scope/Size/Warn/Risk
+  row, a pinned undeletable "Everything else" fallback row, a work-hours↔work-days
+  toggle (hours are always what's stored), a "Test a ticket" preview, and an
+  Advanced JSON import/export. `input()` for `cutoffs`/`defaults`/`schedule`/
+  `columns`; `output()` emits `RiskCutoffs | null` (**null = inherit**, stored NULL).
+- `composite-editor.component.ts` — `<sp-risk-composite>`, the power-mean `p` as a
+  labeled slider plus the five weights, where `0` renders as an explicit
+  **Excluded** badge (weight ≤ 0 drops the metric entirely; an *absent* weight
+  defaults to 1 — not the same thing).
+- `impact-preview.component.ts` — `<sp-risk-impact>`, the anti-footgun that answers
+  "what would these settings do?": per saved board, "12 at risk / 9 warning / 40
+  healthy" with a signed delta per tier, a Now/After composition bar, and a sample
+  of the tickets that change tier. It debounces (500 ms) a `POST
+  /api/admin/risk/preview` — a server-side re-score of the STORED snapshots, so no
+  scoring happens here and it costs no Jira calls. It renders the server's
+  `scheduleStale` caveat verbatim (the preview covers thresholds and weights, never
+  a schedule edit) and reports a board with no snapshot instead of hiding it. Tier
+  hues are the board's own `--risk`/`--warn`/`--done`; those are status colors, too
+  close in light mode to carry meaning by hue, so every tile and verdict pairs the
+  color with an icon and a word.
 - `format.ts` — pure display helpers (`fmtWorkHM`, firing-metric pills, band variants).
-  **No risk math happens client-side** — the snapshot carries every value, band and
-  threshold (see `worker/src/risk/`).
+  `HOURS_PER_WORKDAY` now re-exports `WORK_HOURS_PER_DAY` from `@shared/risk-cutoffs`.
+  **No SCORING of ticket data happens client-side** — the snapshot carries every
+  value, band and threshold (see `worker/src/risk/`). The narrowed rule, since the
+  cutoffs editor landed: *config-editing math is shared* — the editor imports
+  `resolveCutoff`/`validateCutoffs`/`toEditorModel` from `@shared/risk-cutoffs` and
+  runs the **server's own** functions, precisely so its "which rule wins" preview
+  cannot drift from the scorer. Read-path components still recompute nothing.
 
 UI / charts — `src/app/ui/` (reusable):
 - `chart.component.ts` — `<sp-chart>`, thin Chart.js wrapper owning the canvas/lifecycle; registers only the line-chart pieces (no `TimeScale`). Updates in place on config swap (avoids replaying the entry animation).
