@@ -9,8 +9,16 @@ export function json(data: unknown, init?: ResponseInit): Response {
   });
 }
 
-export function error(status: number, message: string, code?: string): Response {
-  const body: ApiError = code ? { error: message, code } : { error: message };
+/** `extra` carries the optional structured half of `ApiError` (today: `issues`, the
+ *  per-rule cutoff findings) so a 400 can say WHICH field was wrong without every
+ *  handler hand-rolling a body. Existing 2-and-3-arg callers are unaffected. */
+export function error(
+  status: number,
+  message: string,
+  code?: string,
+  extra?: Omit<ApiError, 'error' | 'code'>,
+): Response {
+  const body: ApiError = { error: message, ...(code ? { code } : {}), ...(extra ?? {}) };
   return json(body, { status });
 }
 

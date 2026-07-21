@@ -19,15 +19,21 @@ import type {
   RiskBoardResponse,
   RiskBoardSummary,
   RiskBoardsResponse,
+  RiskBoardColumns,
+  RiskColumnsResponse,
   RiskCompositeConfig,
-  RiskCutoffRule,
   RiskCutoffs,
   RiskFieldCandidatesResponse,
   RiskFieldIds,
   RiskMetricId,
+  RiskPreviewBoard,
+  RiskPreviewRequest,
+  RiskPreviewResponse,
+  RiskTierCounts,
   RiskWeekday,
   RiskWorkSchedule,
 } from '@shared/risk';
+import { validateCutoffs } from '@shared/risk-cutoffs';
 import { type AuthedCtx, error, json, readJson } from '../http';
 import { JiraClient } from '../jira/client';
 import { listBoards } from '../jira/search';
@@ -39,6 +45,8 @@ import {
   DEFAULT_IN_PROGRESS_STATUS,
   DEFAULT_SCHEDULE,
 } from './logic/defaults';
+import { isDoneColumn } from './logic/health';
+import { PREVIEW_SAMPLE_LIMIT, addCounts, previewSnapshot } from './logic/preview';
 import { fetchBoardMaps, listRiskFieldCandidates } from './jira';
 import { refreshOrg } from './refresh';
 import {
@@ -46,6 +54,8 @@ import {
   getConfig,
   getSnapshot,
   getState,
+  listSnapshotColumns,
+  listSnapshots,
   markViewed,
   putConfig,
 } from './store';
@@ -134,6 +144,8 @@ export async function riskAdminRoutes(
   if (path === '/api/admin/risk/config' && method === 'GET') return getRiskConfig(ctx);
   if (path === '/api/admin/risk/config' && method === 'PUT') return putRiskConfig(req, ctx);
   if (path === '/api/admin/risk/boards' && method === 'GET') return listBoardCandidates(req, ctx);
+  if (path === '/api/admin/risk/columns' && method === 'GET') return listRiskColumns(ctx);
+  if (path === '/api/admin/risk/preview' && method === 'POST') return previewRiskConfig(req, ctx);
   if (path === '/api/admin/risk/fields' && method === 'GET') return listRiskFields(ctx);
   return error(404, 'not found');
 }
@@ -193,14 +205,11 @@ async function putRiskConfig(req: Request, ctx: AuthedCtx): Promise<Response> {
   }
 
   const cutoffs = body.cutoffs ?? null;
-  if (cutoffs && !validCutoffs(cutoffs)) return error(400, 'invalid cutoffs');
   const composite = body.composite ?? null;
-  if (composite && !validComposite(composite)) return error(400, 'invalid composite config');
   const schedule = body.schedule ?? null;
-  if (schedule) {
-    const bad = scheduleError(schedule);
-    if (bad) return error(400, bad);
-  }
+  const bad = candidateConfigError(cutoffs, composite, schedule);
+  if (bad) return bad;
+
   const fields = body.fields ?? {};
   if (!validFields(fields)) return error(400, 'invalid field ids');
 
@@ -265,6 +274,159 @@ async function listBoardCandidates(req: Request, ctx: AuthedCtx): Promise<Respon
   return json({ boards, probeError } satisfies RiskBoardCandidatesResponse);
 }
 
+/**
+ * The column vocabulary the cutoffs editor's Scope picker is built from, per
+ * configured board.
+ *
+ * Resolution order is STORED SNAPSHOT FIRST — that costs zero Jira calls, matching
+ * the read-path invariant, and it is also the truth the scorer used. Only a board
+ * that is configured but has never been refreshed falls back to a live
+ * board-configuration probe with the ADMIN'S own token (the same call
+ * `?probe=` already makes on the board picker), and a failure there degrades that
+ * board to `source:'unavailable'` instead of failing the endpoint.
+ */
+async function listRiskColumns(ctx: AuthedCtx): Promise<Response> {
+  const cfg = await getConfig(ctx.env, ctx.cloudId);
+  const stored = new Map(
+    (await listSnapshotColumns(ctx.env, ctx.cloudId)).map((s) => [s.boardId, s.columns]),
+  );
+
+  const boards: RiskBoardColumns[] = [];
+  let probeError: string | null = null;
+  let client: JiraClient | null = null;
+
+  for (const b of cfg?.boards ?? []) {
+    const fromSnapshot = stored.get(b.boardId);
+    if (fromSnapshot?.length) {
+      boards.push({ ...b, ...withDoneColumn(fromSnapshot), source: 'snapshot' });
+      continue;
+    }
+    // Never refreshed (or a corrupt snapshot): one live probe, lazily authed.
+    try {
+      if (!client) {
+        const token = await ctx.dao.getToken(ctx.accountId);
+        if (!token) throw new Error('no Jira grant for this admin');
+        client = new JiraClient(ctx.env, ctx.dao, token, ctx.cloudId);
+      }
+      const maps = await fetchBoardMaps(client, b.boardId);
+      boards.push({ ...b, ...withDoneColumn(maps.columnNames), source: 'live' });
+    } catch (e) {
+      probeError ??= e instanceof Error ? e.message : 'board configuration probe failed';
+      boards.push({ ...b, columns: [], doneColumn: null, source: 'unavailable' });
+    }
+  }
+
+  const appCfg = await ctx.dao.getConfig(ctx.cloudId);
+  const body: RiskColumnsResponse = {
+    boards,
+    pointsFieldConfigured: appCfg.storyPointsFieldId != null,
+    probeError,
+  };
+  return json(body);
+}
+
+/**
+ * The impact preview: "with these thresholds, 12 risk / 9 warn / 40 ok (was
+ * 6 / 8 / 47)" — per board, BEFORE the admin saves.
+ *
+ * Costs zero Jira calls: `RiskTicket` already carries every raw input
+ * `evaluateTicket` needs, so the stored snapshots are re-scored in place with the
+ * cron's own scorer (see logic/preview.ts for why that identity is the feature).
+ *
+ * Three deliberate behaviours:
+ *  - The candidate config goes through the SAME validation as `PUT`, so an invalid
+ *    config 400s with the same structured `issues` instead of previewing garbage.
+ *  - A board configured but never refreshed is reported as `no-snapshot` and left
+ *    out of the totals — not an error.
+ *  - A candidate SCHEDULE change is flagged (`scheduleStale`), never simulated: the
+ *    stored clock values were measured on the snapshot's own work clock, and only a
+ *    real refresh can recompute them.
+ */
+async function previewRiskConfig(req: Request, ctx: AuthedCtx): Promise<Response> {
+  const body = await readJson<RiskPreviewRequest>(req);
+  if (!body || typeof body !== 'object') return error(400, 'a preview body is required');
+
+  const cutoffs = body.cutoffs ?? null;
+  const composite = body.composite ?? null;
+  const schedule = body.schedule ?? null;
+  const bad = candidateConfigError(cutoffs, composite, schedule);
+  if (bad) return bad;
+
+  // null on the wire = "inherit the shipped default", exactly as PUT stores it —
+  // and note resolveCutoff(null) is the HARD FLOOR, not the defaults, so this
+  // substitution has to happen here.
+  const candidate = {
+    cutoffs: cutoffs ?? DEFAULT_CUTOFFS,
+    composite: composite ?? DEFAULT_COMPOSITE,
+    schedule: schedule ?? DEFAULT_SCHEDULE,
+  };
+
+  const cfg = await getConfig(ctx.env, ctx.cloudId);
+  const stored = new Map(
+    (await listSnapshots(ctx.env, ctx.cloudId)).map((s) => [s.boardId, s] as const),
+  );
+
+  const zero: RiskTierCounts = { risk: 0, warn: 0, ok: 0 };
+  const boards: RiskPreviewBoard[] = [];
+  const totals = {
+    before: zero,
+    after: zero,
+    movedToRisk: 0,
+    movedToOk: 0,
+    moved: 0,
+  };
+  let boardsWithoutSnapshot = 0;
+
+  for (const b of cfg?.boards ?? []) {
+    const snap = stored.get(b.boardId)?.snapshot ?? null;
+    if (!snap) {
+      boardsWithoutSnapshot++;
+      boards.push({
+        ...b,
+        status: 'no-snapshot',
+        before: zero,
+        after: zero,
+        movedToRisk: 0,
+        movedToOk: 0,
+        moved: 0,
+        sampleMovers: [],
+        sampleTruncated: false,
+        computedAt: null,
+        scheduleStale: false,
+      });
+      continue;
+    }
+    const diff = previewSnapshot(snap, candidate, PREVIEW_SAMPLE_LIMIT);
+    boards.push({
+      ...b,
+      status: 'previewed',
+      ...diff,
+      computedAt: snap.computedAt ?? stored.get(b.boardId)?.computedAt ?? null,
+    });
+    totals.before = addCounts(totals.before, diff.before);
+    totals.after = addCounts(totals.after, diff.after);
+    totals.movedToRisk += diff.movedToRisk;
+    totals.movedToOk += diff.movedToOk;
+    totals.moved += diff.moved;
+  }
+
+  const out: RiskPreviewResponse = {
+    boards,
+    totals,
+    boardsWithoutSnapshot,
+    scheduleStale: boards.some((b) => b.scheduleStale),
+    sampleLimit: PREVIEW_SAMPLE_LIMIT,
+  };
+  return json(out);
+}
+
+/** The board's LAST column is its Done column — same rule the scorer applies, so
+ *  this imports `isDoneColumn` rather than re-deriving "last element". */
+function withDoneColumn(columns: string[]): { columns: string[]; doneColumn: string | null } {
+  const last = columns[columns.length - 1];
+  return { columns, doneColumn: last !== undefined && isDoneColumn(last, columns) ? last : null };
+}
+
 async function listRiskFields(ctx: AuthedCtx): Promise<Response> {
   const token = await ctx.dao.getToken(ctx.accountId);
   if (!token) return error(409, 'no Jira grant for this admin', 'NO_GRANT');
@@ -280,24 +442,37 @@ async function listRiskFields(ctx: AuthedCtx): Promise<Response> {
 const WEEKDAYS: RiskWeekday[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const METRIC_IDS: RiskMetricId[] = ['rejections', 'blocked', 'idle', 'timeInColumn', 'cycle'];
 
-/** Shape AND bounds. A zero/NaN `risk` would divide every score by zero — the
- *  snapshot then serializes `Infinity` as `null` and the whole board silently
- *  scores as nothing, so reject it here instead. */
-function validRule(r: RiskCutoffRule): boolean {
-  if (!r || typeof r !== 'object') return false;
-  if (r.column !== undefined && typeof r.column !== 'string') return false;
-  if (r.size !== undefined && r.size !== 'none' && typeof r.size !== 'number') return false;
-  if (r.warn !== undefined && !(Number.isFinite(r.warn) && r.warn > 0)) return false;
-  if (r.risk !== undefined && !(Number.isFinite(r.risk) && r.risk > 0)) return false;
-  if (r.warn !== undefined && r.risk !== undefined && r.risk < r.warn) return false;
-  if (r.default !== undefined && typeof r.default !== 'boolean') return false;
-  return true;
-}
+// Cutoff validation now lives in @shared/risk-cutoffs (`validateCutoffs`) — one
+// implementation, run by both the editor and this route, returning structured
+// `RiskConfigIssue`s instead of a boolean. It is strictly stricter than the old
+// `validRule`/`validCutoffs` pair: a half-filled rule, an off-ladder `size` and a
+// duplicated `default` are now errors (see its BACK-COMPAT CAVEAT).
 
-function validCutoffs(c: RiskCutoffs): boolean {
-  return (['idle', 'cycle', 'timeInColumn'] as const).every(
-    (k) => Array.isArray(c[k]) && c[k].every(validRule),
-  );
+/**
+ * The three config blocks a candidate can get wrong, validated once for BOTH the
+ * save and the preview. Sharing it is the point: a config the preview accepts must
+ * be a config the save accepts, or the preview would be showing an admin the
+ * consequences of something they can't store. Returns a ready 400, or null.
+ *
+ * Cutoffs run through `@shared/risk-cutoffs`'s `validateCutoffs` — the same
+ * function the editor runs — minus the board-column context (that would cost Jira
+ * calls). Warnings are advisory and deliberately never block; the client shows them.
+ */
+function candidateConfigError(
+  cutoffs: RiskCutoffs | null,
+  composite: RiskCompositeConfig | null,
+  schedule: RiskWorkSchedule | null,
+): Response | null {
+  if (cutoffs) {
+    const { errors } = validateCutoffs(cutoffs);
+    if (errors.length) return error(400, 'invalid cutoffs', 'INVALID_CUTOFFS', { issues: errors });
+  }
+  if (composite && !validComposite(composite)) return error(400, 'invalid composite config');
+  if (schedule) {
+    const bad = scheduleError(schedule);
+    if (bad) return error(400, bad);
+  }
+  return null;
 }
 
 function validComposite(c: RiskCompositeConfig): boolean {

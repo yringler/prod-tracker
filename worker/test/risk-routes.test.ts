@@ -8,6 +8,8 @@ import type {
   RiskAdminConfigResponse,
   RiskBoardResponse,
   RiskBoardsResponse,
+  RiskColumnsResponse,
+  RiskConfigIssue,
   PutRiskConfigRequest,
 } from '@shared/risk';
 import worker from '../src/index';
@@ -182,6 +184,139 @@ describe('admin config', () => {
     ).toBe(400);
   });
 
+  // The shared validator's findings ride along on the error body so the editor can
+  // point at the offending row instead of just saying "invalid cutoffs".
+  describe('structured cutoff issues', () => {
+    const issuesFor = async (cutoffs: unknown) => {
+      const res = await put({ boards: [], cutoffs });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { code?: string; issues?: RiskConfigIssue[] };
+      expect(body.code).toBe('INVALID_CUTOFFS');
+      return body.issues ?? [];
+    };
+
+    it('names the metric of a missing table', async () => {
+      const issues = await issuesFor({ idle: [] });
+      expect(issues.map((i) => [i.metric, i.code])).toEqual([
+        ['timeInColumn', 'MISSING_METRIC'],
+        ['cycle', 'MISSING_METRIC'],
+      ]);
+    });
+
+    it('addresses a half-filled rule by metric + index + field', async () => {
+      const issues = await issuesFor({
+        idle: [{ default: true, warn: 24, risk: 72 }, { column: 'To Do', warn: 4 }],
+        cycle: [],
+        timeInColumn: [],
+      });
+      expect(issues).toEqual([
+        expect.objectContaining({ metric: 'idle', index: 1, field: 'risk', code: 'INCOMPLETE_RULE' }),
+      ]);
+    });
+
+    it('rejects an off-ladder size and says which bucket it belongs in', async () => {
+      const [issue] = await issuesFor({
+        idle: [],
+        cycle: [{ size: 4, warn: 1, risk: 2 }],
+        timeInColumn: [],
+      });
+      expect(issue).toMatchObject({ metric: 'cycle', index: 0, field: 'size', code: 'NOT_A_BUCKET' });
+      expect(issue?.message).toContain('4–5');
+    });
+
+    it('rejects a duplicated default and a duplicated scope', async () => {
+      const dupDefault = await issuesFor({
+        idle: [{ default: true, warn: 1, risk: 2 }, { default: true, warn: 3, risk: 4 }],
+        cycle: [],
+        timeInColumn: [],
+      });
+      expect(dupDefault.map((i) => i.code)).toContain('DUPLICATE_DEFAULT');
+      const dupScope = await issuesFor({
+        idle: [
+          { column: 'To Do', warn: 1, risk: 2 },
+          { column: 'To Do', warn: 3, risk: 4 },
+        ],
+        cycle: [],
+        timeInColumn: [],
+      });
+      expect(dupScope.map((i) => i.code)).toContain('DUPLICATE_SCOPE');
+    });
+
+    it('lets WARNINGS through — they never block a save', async () => {
+      // No default rule (falls to the hard floor) + an unknown key: both warnings.
+      const res = await put({
+        boards: [],
+        cutoffs: { idle: [{ column: 'To Do', warn: 1, risk: 2, colour: 'red' }], cycle: [], timeInColumn: [] },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('still stores NULL for cutoffs: null and echoes the shipped defaults', async () => {
+      expect((await put({ boards: [], cutoffs: null })).status).toBe(200);
+      const body = (await (await getConfigRes()).json()) as RiskAdminConfigResponse;
+      expect(body.config.cutoffs).toBeNull();
+      expect(body.defaults.cutoffs).toEqual(DEFAULT_CUTOFFS);
+    });
+  });
+
+  describe('GET /api/admin/risk/columns', () => {
+    const columns = async (accountId = ADMIN) =>
+      riskAdminRoutes(
+        new Request('https://app.example/api/admin/risk/columns'),
+        ctxFor(accountId),
+        '/api/admin/risk/columns',
+        'GET',
+      );
+
+    it('prefers the stored snapshot and spends zero Jira calls', async () => {
+      await seedConfig();
+      await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
+      // Any Jira traffic would go through global fetch; make that fatal.
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (() => {
+        throw new Error('no Jira call may happen on this path');
+      }) as typeof fetch;
+      try {
+        const body = (await (await columns()).json()) as RiskColumnsResponse;
+        expect(body.boards).toEqual([
+          {
+            boardId: 5,
+            name: 'Sites',
+            columns: ['To Do', 'Done'],
+            doneColumn: 'Done',
+            source: 'snapshot',
+          },
+        ]);
+        expect(body.pointsFieldConfigured).toBe(false); // no field discovered in this fixture
+        expect(body.probeError).toBeNull();
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
+
+    it('reports the Story Points field once one is resolved', async () => {
+      await seedConfig();
+      await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
+      await dao.setFieldIds(CLOUD, 'customfield_100', 'customfield_101');
+      const body = (await (await columns()).json()) as RiskColumnsResponse;
+      expect(body.pointsFieldConfigured).toBe(true);
+    });
+
+    it('falls back to a live probe for a board that has never refreshed, and degrades on failure', async () => {
+      await seedConfig();
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response('nope', { status: 403 })) as unknown as typeof fetch;
+      try {
+        const body = (await (await columns()).json()) as RiskColumnsResponse;
+        expect(body.boards[0]).toMatchObject({ boardId: 5, columns: [], source: 'unavailable' });
+        expect(body.probeError).toBeTruthy();
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
+  });
+
   it('rejects an unknown timezone before it can break the cron', async () => {
     const res = await put({
       boards: [],
@@ -308,8 +443,10 @@ describe('router wiring (worker entry point)', () => {
 
   it('gates /api/admin/risk/* behind requireAdmin', async () => {
     expect((await fetchAs(DEV, '/api/admin/risk/config')).status).toBe(403);
+    expect((await fetchAs(DEV, '/api/admin/risk/columns')).status).toBe(403);
     await dao.appointAdmin(ADMIN, ADMIN);
     expect((await fetchAs(ADMIN, '/api/admin/risk/config')).status).toBe(200);
+    expect((await fetchAs(ADMIN, '/api/admin/risk/columns')).status).toBe(200);
   });
 
   it('404s the dev-only refresh route outside localhost', async () => {

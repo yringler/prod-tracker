@@ -23,7 +23,8 @@ each tick (each isolated).
   split + `route()` dispatch table) and `scheduled` (cron: `runPoll`, then
   `reportPersonalData`, then `escalate`, then `refreshRiskBoards` — each in its own
   `try/catch` so one can't abort the others).
-- [`src/http.ts`](src/http.ts) — `json`/`error` helpers, cookie parse/set,
+- [`src/http.ts`](src/http.ts) — `json`/`error` helpers (`error()` takes an optional
+  4th `extra` for the structured half of `ApiError`, e.g. `issues`), cookie parse/set,
   `AuthedCtx`, `authenticate()` (sid cookie → session), `requireAdmin()`,
   `readJson()`.
 - [`src/env.ts`](src/env.ts) — the `Env` binding interface + `OAUTH_SCOPE_LIST` /
@@ -62,7 +63,9 @@ each tick (each isolated).
   back with SQLite), `schema.sql` (canonical schema; see Database below).
 - [`src/risk/`](src/risk/) — the **Sprint Risk Board**, a self-contained feature slice:
   `logic/` (pure port of the userscript's work-hours clock, timer reduction, segment
-  builder, cutoff/scoring rules, HEALTH registry + the shipped default tables),
+  builder, cutoff/scoring rules, HEALTH registry + the shipped default tables, and
+  `preview.ts` — the admin impact preview's tier diff, which *calls* the scorer
+  rather than reimplementing it),
   `jira.ts` (board configuration/issues/changelog/dev-status reads over a structural
   client), `refresh.ts` (the 4th isolated cron job — demand-driven eligibility,
   org-fair scheduling under a per-tick subrequest budget, overwrite-only snapshots),
@@ -115,9 +118,58 @@ each tick (each isolated).
     `BOOTSTRAP_ADMIN_ACCOUNT_ID` as the fallback), re-sent on a reason change or
     every `DEGRADED_RENOTIFY_MS`, plus one when it recovers. `dao.ts` gains no
     method for this.
+  - **Cutoff config validation and resolution are SHARED, deliberately.**
+    `logic/scoring.ts` re-exports `resolveCutoff` / `sizeBucket` / `FIB_BUCKETS` /
+    `HARD_FALLBACK` from `@shared/risk-cutoffs` (pure motion — `test/risk-scoring.test.ts`
+    passes unchanged, which is the regression gate for the move), and `routes.ts`
+    validates a `PUT`ed `cutoffs` with that module's `validateCutoffs`. The reason is
+    drift: the admin editor has to answer "which rule wins for this column+size"
+    interactively, so it runs the server's own function rather than a copy. The
+    *scoring* path is unaffected and the client still never scores a ticket — see
+    `shared/CLAUDE.md`. `validateCutoffs` returns structured `RiskConfigIssue`s that
+    ride out on the new optional `ApiError.issues` (via `error()`'s 4th `extra`
+    argument in `http.ts`); **errors block the save, warnings never do**. It is
+    stricter than the old boolean validator: a half-filled rule, an off-ladder `size`
+    and a duplicated `default` are now 400s, so a legacy blob containing one cannot be
+    re-saved unchanged. Reads are unaffected (`store.ts` `parseJson` stays tolerant),
+    and the editor auto-repairs all three on load with a visible callout.
+  - **`GET /api/admin/risk/columns`** (admin tier) serves the editor's column
+    vocabulary: per configured board `{columns, doneColumn, source}` plus
+    `pointsFieldConfigured`. Resolution order is **stored snapshot first**
+    (`store.listSnapshotColumns` — zero Jira calls, matching the read-path invariant);
+    only a board configured but never refreshed falls back to one live `fetchBoardMaps`
+    with the ADMIN'S token, and a failure there degrades that board to
+    `source:'unavailable'` with a `probeError` rather than failing the endpoint.
+    `doneColumn` comes from `logic/health.ts`'s `isDoneColumn`, not a re-derived "last
+    element".
+  - **`POST /api/admin/risk/preview`** (admin tier) is the editor's IMPACT preview:
+    "12 at risk / 9 warning / 40 healthy (was 6 / 8 / 47)", per board, before the
+    save. Body is the candidate `{cutoffs, composite, schedule}` with the same
+    `null = inherit the shipped default` semantics as the `PUT` — which is why the
+    handler substitutes `DEFAULT_CUTOFFS` explicitly: `resolveCutoff(null)` is the
+    HARD FLOOR, not the defaults. Four load-bearing properties:
+    - **Zero Jira calls.** `RiskTicket` carries every field of `HealthInput`, so
+      `store.listSnapshots` + `logic/preview.ts` re-score the STORED snapshots in
+      place. Cheap enough to debounce on typing (the client does, 500 ms).
+    - **No second scorer.** `logic/preview.ts` calls `evaluateTicket`/`tierCounts`
+      verbatim; it exists to diff tiers, not to score. Do not inline scoring there
+      — the preview's whole value is that it cannot drift from the cron.
+    - **Same validation as the save.** Both paths go through
+      `candidateConfigError()` (shared `validateCutoffs` + `validComposite` +
+      `scheduleError`), so a config the preview accepts is a config that stores;
+      an invalid one 400s with the identical structured `issues`.
+    - **The schedule caveat is reported, never simulated.** The stored
+      `idleHours`/`timeInColumnHours`/`cycleHours` were measured on the work clock
+      of the snapshot's OWN schedule; a candidate schedule change can only be
+      recomputed by a real refresh. `previewSnapshot` sets `scheduleStale` (via
+      `sameSchedule`) and the UI says so in words. A board configured but never
+      refreshed reports `status:'no-snapshot'` and is left out of the totals —
+      not an error; `sampleMovers` is capped at `PREVIEW_SAMPLE_LIMIT` with
+      `sampleTruncated` so the cap is never silent.
   - Deleting the feature = `rm -rf` the directory + the risk lines in
     `index.ts`/`schema.sql` + the `riskEraseAccount` call in `cron/pd-report.ts` +
     the `worker/src/risk/**` entry in the `.eslintrc.cjs` registry-seam override +
+    `shared/src/risk.ts` / `shared/src/risk-cutoffs.ts` and their barrel lines +
     a DROP TABLE migration.
 - [`src/push/webpush.ts`](src/push/webpush.ts) — VAPID + RFC 8291 `aes128gcm` web
   push on WebCrypto (no Node `web-push` dependency).
@@ -340,10 +392,23 @@ SQL against better-sqlite3.
 - `risk-workhours.test.ts` / `risk-timers.test.ts` / `risk-segments.test.ts` /
   `risk-scoring.test.ts` — the risk board's pure logic (DST-safe work clock, the
   Done-is-a-pause timers, segment merge, cutoff specificity + composite goldens).
+- `risk-preview.test.ts` — the impact preview: known before/after counts for a known
+  cutoffs change (both directions), the sample cap + `sampleTruncated`, `cutoffs:null`
+  previewing the shipped DEFAULTS (not `HARD_FALLBACK`), the schedule-staleness flag,
+  a no-snapshot board degrading out of the totals, org isolation, the save path's
+  validation errors, the admin guard, and — asserted by making `globalThis.fetch`
+  throw — ZERO Jira calls.
 - `risk-store.test.ts` / `risk-refresh.test.ts` / `risk-routes.test.ts` — risk board
-  persistence, the write path (snapshot golden, idempotency, eligibility, budgeted
-  org-fair scheduling, degraded paths incl. the needs_reauth self-heal), and the
-  read/admin routes.
+  persistence (incl. `listSnapshots` / `listSnapshotColumns` org scoping +
+  corrupt-JSON degradation),
+  the write path (snapshot golden, idempotency, eligibility, budgeted org-fair
+  scheduling, degraded paths incl. the needs_reauth self-heal), and the read/admin
+  routes (incl. the structured `issues` on a 400, and that
+  `GET /api/admin/risk/columns` prefers the stored snapshot with zero Jira calls).
+- `risk-cutoff-editor.test.ts` — the load-bearing equivalence proof for the admin
+  editor's two load-time transforms: over every (column × points) pair the shipped
+  tables can distinguish, `collapseRedundantRules` (64 idle rules -> 7) and the
+  `toEditorModel`/`fromEditorModel` round-trip change **no** resolution.
 - `risk-notify.test.ts` — the degraded/recovery notice: per-org collapse, the
   claim-before-send CAS (idempotent re-run), renotify cadence + reason change,
   recipient scoping (org admins only, bootstrap fallback, unreachable org still

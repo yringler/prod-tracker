@@ -230,6 +230,42 @@ export async function getSnapshot(
   return r ? parseJson<RiskBoardSnapshot | null>(r.snapshot_json, null) : null;
 }
 
+/**
+ * Every stored snapshot for one org, in ONE query — the zero-Jira-call source for
+ * the admin editors (the cutoffs editor's column vocabulary via
+ * `listSnapshotColumns`, and the impact preview's re-scoring corpus). A
+ * corrupt/legacy `snapshot_json` yields `snapshot: null` (parseJson is deliberately
+ * tolerant) rather than throwing the whole endpoint.
+ */
+export async function listSnapshots(
+  env: Env,
+  cloudId: string,
+): Promise<{ boardId: number; snapshot: RiskBoardSnapshot | null; computedAt: string | null }[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT board_id, snapshot_json, computed_at FROM risk_snapshots WHERE cloud_id = ? ORDER BY board_id`,
+  )
+    .bind(cloudId)
+    .all<{ board_id: number; snapshot_json: string; computed_at: string | null }>();
+  return results.map((r) => ({
+    boardId: r.board_id,
+    snapshot: parseJson<RiskBoardSnapshot | null>(r.snapshot_json, null),
+    computedAt: r.computed_at,
+  }));
+}
+
+/** Just the column lists — a projection of `listSnapshots`, kept as its own name
+ *  because that is what the cutoffs editor's Scope picker asks for. */
+export async function listSnapshotColumns(
+  env: Env,
+  cloudId: string,
+): Promise<{ boardId: number; columns: string[]; computedAt: string | null }[]> {
+  return (await listSnapshots(env, cloudId)).map((r) => ({
+    boardId: r.boardId,
+    columns: Array.isArray(r.snapshot?.columns) ? r.snapshot.columns : [],
+    computedAt: r.computedAt,
+  }));
+}
+
 // --- Per-board refresh state --------------------------------------------------
 
 export async function getState(

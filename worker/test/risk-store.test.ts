@@ -14,6 +14,8 @@ import {
   getSnapshot,
   getState,
   listConfigs,
+  listSnapshotColumns,
+  listSnapshots,
   markDegraded,
   markViewed,
   overwriteSnapshot,
@@ -179,6 +181,59 @@ describe('risk store: snapshots', () => {
     await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
     expect(await getSnapshot(env, OTHER, 5)).toBeNull();
     expect(await getSnapshot(env, CLOUD, 6)).toBeNull();
+  });
+
+  // Feeds GET /api/admin/risk/columns — the cutoffs editor's column vocabulary,
+  // read from the snapshot so the admin page costs zero Jira calls.
+  describe('listSnapshotColumns', () => {
+    it('returns one row per board, scoped to the org', async () => {
+      await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
+      await overwriteSnapshot(env, CLOUD, snapshot(9, '2026-07-01T10:01:00.000Z'));
+      await overwriteSnapshot(env, OTHER, snapshot(77, '2026-07-01T10:02:00.000Z'));
+
+      expect(await listSnapshotColumns(env, CLOUD)).toEqual([
+        { boardId: 5, columns: ['To Do', 'Done'], computedAt: '2026-07-01T10:00:00.000Z' },
+        { boardId: 9, columns: ['To Do', 'Done'], computedAt: '2026-07-01T10:01:00.000Z' },
+      ]);
+      expect((await listSnapshotColumns(env, OTHER)).map((r) => r.boardId)).toEqual([77]);
+      expect(await listSnapshotColumns(env, 'cloud-nobody')).toEqual([]);
+    });
+
+    it('degrades a corrupt snapshot_json to no columns instead of throwing', async () => {
+      await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
+      await env.DB.prepare(`UPDATE risk_snapshots SET snapshot_json = '{oops' WHERE board_id = 5`)
+        .bind()
+        .run();
+      expect(await listSnapshotColumns(env, CLOUD)).toEqual([
+        { boardId: 5, columns: [], computedAt: '2026-07-01T10:00:00.000Z' },
+      ]);
+    });
+  });
+
+  // The whole-snapshot read the impact preview re-scores. Same one query, same
+  // tolerance for a corrupt row.
+  describe('listSnapshots', () => {
+    it('returns whole snapshots, scoped to the org', async () => {
+      await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
+      await overwriteSnapshot(env, OTHER, snapshot(77, '2026-07-01T10:02:00.000Z'));
+
+      const mine = await listSnapshots(env, CLOUD);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]?.snapshot?.boardId).toBe(5);
+      expect(mine[0]?.snapshot?.cutoffs).toEqual(DEFAULT_CUTOFFS);
+      expect((await listSnapshots(env, OTHER)).map((r) => r.boardId)).toEqual([77]);
+      expect(await listSnapshots(env, 'cloud-nobody')).toEqual([]);
+    });
+
+    it('degrades a corrupt snapshot_json to null instead of throwing', async () => {
+      await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
+      await env.DB.prepare(`UPDATE risk_snapshots SET snapshot_json = '{oops' WHERE board_id = 5`)
+        .bind()
+        .run();
+      expect(await listSnapshots(env, CLOUD)).toEqual([
+        { boardId: 5, snapshot: null, computedAt: '2026-07-01T10:00:00.000Z' },
+      ]);
+    });
   });
 });
 
