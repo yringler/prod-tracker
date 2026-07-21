@@ -8,6 +8,8 @@
 // Deletable: `rm shared/src/risk.ts` + the re-export line in index.ts (see the
 // risk-board plan's deletion story).
 
+import type { ApiIssue } from './contracts';
+
 /** Band a metric is currently in. `none` = not applicable (done / not started). */
 export type RiskBand = 'ok' | 'warn' | 'risk' | 'none';
 
@@ -31,6 +33,16 @@ export interface RiskCutoffs {
   idle: RiskCutoffRule[];
   cycle: RiskCutoffRule[];
   timeInColumn: RiskCutoffRule[];
+}
+
+/** One validation finding about a cutoff table, addressed to a specific rule so
+ *  the editor can highlight it. Errors block the save (server-side); warnings are
+ *  advisory. See `validateCutoffs` in `risk-cutoffs.ts`. */
+export interface RiskConfigIssue extends ApiIssue {
+  metric?: 'idle' | 'cycle' | 'timeInColumn';
+  /** Index into that metric's rule array. */
+  index?: number;
+  field?: 'column' | 'size' | 'warn' | 'risk' | 'default';
 }
 
 /** Composite = weighted power-mean of the per-metric scores. p=1 → weighted
@@ -239,6 +251,96 @@ export interface RiskBoardCandidatesResponse {
   boards: RiskBoardCandidate[];
   /** Non-null when the board-configuration probe failed (usually OAuth scopes). */
   probeError: string | null;
+}
+
+/** One configured board's column vocabulary, for the cutoffs editor's Scope picker
+ *  and its per-board "that column isn't on every board" warning.
+ *  `source` says where it came from: the STORED snapshot (zero Jira calls — the
+ *  read-path invariant), a live board-configuration probe with the admin's token
+ *  (for a board configured but never refreshed), or nothing at all. */
+export interface RiskBoardColumns extends RiskBoardRef {
+  columns: string[];
+  /** The board's LAST column — treated as Done, and never scored. */
+  doneColumn: string | null;
+  source: 'snapshot' | 'live' | 'unavailable';
+}
+
+export interface RiskColumnsResponse {
+  boards: RiskBoardColumns[];
+  /** False = no Story Points field is resolved for this site, so every ticket
+   *  buckets as 'none' and size-specific cutoff rules can never fire. */
+  pointsFieldConfigured: boolean;
+  /** Non-null when the live fallback probe failed (usually OAuth scopes). */
+  probeError: string | null;
+}
+
+// ---- Impact preview (POST /api/admin/risk/preview) ----
+//
+// "With these thresholds: 12 risk / 9 warn / 40 ok (was 6 / 8 / 47)". The server
+// re-runs the SCORER over each board's STORED snapshot tickets — zero Jira calls,
+// and no drift, because it is the same `evaluateTicket` the cron writes with.
+
+/** Candidate config to score against. `null` on a field means "inherit the shipped
+ *  default" — the same semantics `PUT /api/admin/risk/config` stores as NULL. */
+export interface RiskPreviewRequest {
+  cutoffs: RiskCutoffs | null;
+  composite: RiskCompositeConfig | null;
+  /** Only used to detect staleness (see `scheduleStale`) — the preview cannot
+   *  re-measure the clocks. */
+  schedule?: RiskWorkSchedule | null;
+}
+
+/** A ticket whose tier changes under the candidate config. */
+export interface RiskPreviewMover {
+  key: string;
+  summary: string;
+  from: RiskBand | null;
+  to: RiskBand | null;
+}
+
+export interface RiskPreviewBoard extends RiskBoardRef {
+  /** `no-snapshot` = configured but never refreshed. Nothing to preview; reported
+   *  rather than errored, and left OUT of the totals. */
+  status: 'previewed' | 'no-snapshot';
+  /** Tiers the stored snapshot actually shows on /risk right now. */
+  before: RiskTierCounts;
+  /** Tiers the same tickets would land in under the candidate config. */
+  after: RiskTierCounts;
+  /** Tickets entering the `risk` tier / entering `ok` — the "worse" and "better"
+   *  halves of the move, so a worsening board can be told from an improving one. */
+  movedToRisk: number;
+  movedToOk: number;
+  /** Every ticket whose tier changed at all (>= movedToRisk + movedToOk). */
+  moved: number;
+  /** Up to `sampleLimit` movers, worst move first. */
+  sampleMovers: RiskPreviewMover[];
+  /** True when `moved > sampleMovers.length` — the cap is never silent. */
+  sampleTruncated: boolean;
+  computedAt: string | null;
+  /** The stored clock values were measured under a DIFFERENT work schedule than
+   *  the candidate one, so idle/in-column/cycle will shift at the next refresh
+   *  in a way this preview cannot show. */
+  scheduleStale: boolean;
+}
+
+export interface RiskPreviewTotals {
+  before: RiskTierCounts;
+  after: RiskTierCounts;
+  movedToRisk: number;
+  movedToOk: number;
+  moved: number;
+}
+
+export interface RiskPreviewResponse {
+  boards: RiskPreviewBoard[];
+  /** Summed over the `previewed` boards only. */
+  totals: RiskPreviewTotals;
+  /** Configured boards with no snapshot yet, excluded from `totals`. */
+  boardsWithoutSnapshot: number;
+  /** True if any previewed board is schedule-stale. */
+  scheduleStale: boolean;
+  /** The per-board cap applied to `sampleMovers`. */
+  sampleLimit: number;
 }
 
 export interface RiskFieldOption {

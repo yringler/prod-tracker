@@ -54,6 +54,36 @@ describe('resolveCutoff', () => {
     expect(resolveCutoff(cutoffs, 'timeInColumn', 'To Do', 5)).toEqual(HARD_FALLBACK.timeInColumn);
   });
 
+  // The cutoffs editor advertises both of these facts to admins (a pinned
+  // "Everything else" row showing the effective numbers, and a warning naming the
+  // winner of an equal-specificity tie), so pin the behavior they describe.
+  it('falls to HARD_FALLBACK — not the table’s own numbers — when no default rule exists', () => {
+    const noDefault: RiskCutoffs = {
+      idle: [{ column: 'To Do', warn: 1, risk: 2 }],
+      cycle: [{ size: 5, warn: 19, risk: 32 }],
+      timeInColumn: [],
+    };
+    // A cycle table tuned around 19/32 silently jumps to 160/240 for anything its
+    // size rules don't match.
+    expect(resolveCutoff(noDefault, 'cycle', 'To Do', 13)).toEqual({ warn: 160, risk: 240 });
+    expect(HARD_FALLBACK.cycle).toEqual({ warn: 160, risk: 240 });
+    expect(resolveCutoff(noDefault, 'idle', 'Elsewhere', 5)).toEqual(HARD_FALLBACK.idle);
+  });
+
+  it('resolves an equal-specificity tie by ARRAY ORDER (column-only vs size-only)', () => {
+    const columnFirst: RiskCutoffs = {
+      idle: [],
+      cycle: [
+        { column: 'Code Review', warn: 1, risk: 2 },
+        { size: 5, warn: 9, risk: 19 },
+      ],
+      timeInColumn: [],
+    };
+    const sizeFirst: RiskCutoffs = { ...columnFirst, cycle: [...columnFirst.cycle].reverse() };
+    expect(resolveCutoff(columnFirst, 'cycle', 'Code Review', 5)).toEqual({ warn: 1, risk: 2 });
+    expect(resolveCutoff(sizeFirst, 'cycle', 'Code Review', 5)).toEqual({ warn: 9, risk: 19 });
+  });
+
   it('resolves the shipped default tables', () => {
     expect(resolveCutoff(DEFAULT_CUTOFFS, 'idle', 'In Progress', 3)).toEqual({ warn: 4, risk: 9 });
     expect(resolveCutoff(DEFAULT_CUTOFFS, 'timeInColumn', 'In Progress', 8)).toEqual({

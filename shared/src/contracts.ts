@@ -249,7 +249,18 @@ export interface SetFieldsRequest {
   sprintFieldId: string;
 }
 
+/** One structured, machine-addressable reason an error body was produced.
+ *  Deliberately generic (no feature types in contracts.ts) — features narrow it,
+ *  e.g. `RiskConfigIssue` in `risk.ts` adds metric/index/field coordinates. */
+export interface ApiIssue {
+  code: string;
+  message: string;
+}
+
 export interface ApiError {
   error: string;
   code?: string;
+  /** Present when the handler could say *which* parts of the payload were bad.
+   *  Additive: every existing consumer that reads only `error`/`code` is fine. */
+  issues?: ApiIssue[];
 }

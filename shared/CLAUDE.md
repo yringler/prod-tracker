@@ -24,7 +24,9 @@ Small on purpose — a handful of source files under `src/`, one test under `tes
   fields** — `belowMinSize` privacy flag), `ClaimedTrendsResponse` / `TrendPoint`, admin
   shapes (`Team`, `TeamMembership`, `CreateTeamRequest`, `AssignMembershipRequest`,
   `DoneStatusConfigRequest`, `ConfigResponse`, `FieldCandidatesResponse`, `SetFieldsRequest`),
-  push (`PushSubscriptionRequest`, `VapidPublicKeyResponse`), and the generic `ApiError`.
+  push (`PushSubscriptionRequest`, `VapidPublicKeyResponse`), and the generic `ApiError`
+  (+ `ApiIssue`, the feature-neutral "which field was wrong" shape that `ApiError.issues`
+  carries — `RiskConfigIssue` narrows it; contracts.ts deliberately imports no feature types).
 
 - **`src/domain.ts`** — pure domain constants + functions (only dependency is `date-fns` /
   `@date-fns/utc`). Key exports:
@@ -53,14 +55,43 @@ Small on purpose — a handful of source files under `src/`, one test under `tes
     like `workdayPace` (not the UTCDate rule). Used only by the client's local
     "today/yesterday" & per-day groupings — the UTC trend buckets don't use it.
 
-- **`src/risk.ts`** — WIRE TYPES ONLY for the Sprint Risk Board (`RiskBand`, `RiskMetricId`,
-  `RiskCutoffs`, `RiskWorkSchedule`, `RiskTicket`, `RiskBoardSnapshot`, and the
-  `/api/risk/*` + `/api/admin/risk/*` request/response shapes). The board's pure logic
-  deliberately does **not** live here — it has exactly one consumer, the Worker
-  (`worker/src/risk/logic/`), and the snapshot ships every computed value the client needs.
-  Delete this file (and its barrel line) with the feature.
+- **`src/risk.ts`** — WIRE TYPES for the Sprint Risk Board (`RiskBand`, `RiskMetricId`,
+  `RiskCutoffs`, `RiskWorkSchedule`, `RiskTicket`, `RiskBoardSnapshot`, `RiskConfigIssue`,
+  `RiskColumnsResponse`, the impact-preview shapes (`RiskPreviewRequest` /
+  `RiskPreviewBoard` / `RiskPreviewResponse` — the preview's arithmetic is
+  server-side in `worker/src/risk/logic/preview.ts`; only its wire shape is here),
+  and the `/api/risk/*` + `/api/admin/risk/*` request/response
+  shapes). The board's **scoring** logic still does not live here: it has exactly one
+  consumer, the Worker (`worker/src/risk/logic/`), and the snapshot ships every computed
+  value the client needs. Delete this file (and its barrel line) with the feature.
 
-- **`src/index.ts`** — barrel; re-exports `./domain`, `./contracts`, `./notifications` and `./risk`. Import from
+- **`src/risk-cutoffs.ts`** — the ONE documented exception to "risk logic has a single
+  consumer": the **config-editing** half of the cutoff tables, imported by both the
+  Worker (validation on `PUT /api/admin/risk/config`, and `logic/scoring.ts` re-exports
+  the resolution primitives from here) and the client (`app/risk/cutoffs-editor.component.ts`).
+  The read path is untouched — the client still never scores a ticket. The narrowed rule
+  is: **no scoring of ticket data client-side; config-editing math is shared.** Moving
+  `resolveCutoff` here is what makes the editor's "which rule wins" preview provably
+  identical to the server's.
+  - Resolution: `FIB_BUCKETS`, `sizeBucket`, `resolveCutoff`, `resolveRules`,
+    `HARD_FALLBACK`, `Cutoff`, `CutoffMetricId`.
+  - Vocabulary: `CUTOFF_METRICS` (labels kept identical to the board's `METRIC_LABELS`),
+    `SIZE_BUCKET_LABELS` (buckets rendered as the point RANGES they capture, generated
+    from `FIB_BUCKETS` so they can't drift), `WORK_HOURS_PER_DAY`, `workHoursPerWeek` /
+    `workHoursPerDay` / `scheduleDaysSummary`.
+  - Validation: `validateCutoffs(cutoffs, ctx?)` → `{ errors, warnings }` of
+    `RiskConfigIssue`. **Errors block the save; warnings are advisory.** `ctx` is optional
+    so the worker runs the context-free subset and the client the full set with board
+    columns loaded. It is *stricter* than the boolean validator it replaced — see its
+    BACK-COMPAT CAVEAT comment.
+  - Transforms: `toEditorModel` / `fromEditorModel` (with auto-repair of the three newly
+    rejected cases), `collapseRedundantRules` / `collapseCutoffs`, `equivalentRules`,
+    `ambiguousPairs`, `sortRowsForDisplay`. `collapseRedundantRules` is behavior-preserving
+    **by construction**: it drops a rule only if `equivalentRules` proves the result
+    resolves identically over every (column, bucket) pair — not by pattern-matching.
+  - Delete this file (and its barrel line) with the feature.
+
+- **`src/index.ts`** — barrel; re-exports `./domain`, `./contracts`, `./notifications`, `./risk` and `./risk-cutoffs`. Import from
   `@shared/domain` / `@shared/contracts` (or the barrel) — never deep-import `dist/`.
 
 ## The dependency boundary (load-bearing)
@@ -90,6 +121,12 @@ Shared code must stay **pure and isomorphic** so both runtimes can run it:
 - `test/domain.test.ts` runs under **vitest** (`npm test` from the repo root). It covers the
   domain functions — `weekStartOf`, `changelogIdGreater`, `isDoneTransition`,
   `sprintForTimestamp`, `isStaleTransition`, `computeRatio`, `workdayPace`, `claimCeiling`.
+- `test/risk-cutoffs.test.ts` — one case per validation rule (errors vs warnings), the
+  editor-model round-trip + auto-repairs, `collapseRedundantRules` equivalence and
+  idempotence, `ambiguousPairs`, the bucket labels, and the work-hours derivations.
+  Note it uses **local fixtures**, not `DEFAULT_CUTOFFS`/`DEFAULT_SCHEDULE`: those live in
+  `worker/src/risk/logic/defaults.ts` and shared/ may not import worker/. The assertions
+  over the real shipped tables are in `worker/test/risk-cutoff-editor.test.ts`.
 - Both sides depend on this logic, so **any new pure calc/constant in `domain.ts` should get
   a unit test here.** (Contracts are types-only; they're checked by `npm run typecheck`.)
 

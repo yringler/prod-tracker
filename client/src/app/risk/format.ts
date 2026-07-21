@@ -3,10 +3,13 @@
 // every value, band and threshold already computed (see worker/src/risk/logic).
 
 import type { RiskBand, RiskMetricId, RiskTicket } from '@shared/risk';
+import { WORK_HOURS_PER_DAY } from '@shared/risk-cutoffs';
 
 /** A "day" here is one 8-hour WORK day, matching the work-hours-only clock the
- *  metrics are measured in. Ported from the userscript's fmtWorkHM. */
-export const HOURS_PER_WORKDAY = 8;
+ *  metrics are measured in. Ported from the userscript's fmtWorkHM; the constant
+ *  now lives in @shared/risk-cutoffs so the admin editor's unit toggle and this
+ *  formatter can't disagree about what "1d" means. */
+export const HOURS_PER_WORKDAY = WORK_HOURS_PER_DAY;
 
 export function fmtWorkHM(hours: number | null | undefined): string | null {
   if (hours == null) return null;
