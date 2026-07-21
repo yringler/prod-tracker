@@ -4,6 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dao } from '../src/db/dao';
 import type { Env } from '../src/env';
 import { reportPersonalData } from '../src/cron/pd-report';
+import {
+  getConfig,
+  getSnapshot,
+  getState,
+  overwriteSnapshot,
+  putConfig,
+} from '../src/risk/store';
+import {
+  DEFAULT_COMPOSITE,
+  DEFAULT_CUTOFFS,
+  DEFAULT_SCHEDULE,
+} from '../src/risk/logic/defaults';
 import { SqliteD1 } from './support/sqlite-d1';
 
 const CLOUD = 'cloud-1';
@@ -264,6 +276,47 @@ describe('reportPersonalData', () => {
     expect(
       await db.prepare(`SELECT account_id FROM email_links WHERE account_id = ?`).bind(BOB).first(),
     ).toBeNull();
+  });
+
+  it('erases a closed account from the risk board’s own tables too', async () => {
+    await dao.upsertUser(BOB, 'Bob', CLOUD);
+    await seedFreshToken(OWNER);
+    const env = makeEnv();
+    await putConfig(env, {
+      cloudId: CLOUD,
+      boards: [{ boardId: 5, name: 'Sites' }],
+      cutoffs: null,
+      composite: null,
+      schedule: null,
+      fields: {},
+      inProgressStatus: null,
+      devStatusAvailable: null,
+      refresherAccountId: BOB,
+      configuredBy: BOB,
+    });
+    await overwriteSnapshot(env, CLOUD, {
+      boardId: 5,
+      boardName: 'Sites',
+      columns: ['To Do', 'Done'],
+      tickets: [],
+      tierCounts: { risk: 0, warn: 0, ok: 0 },
+      cutoffs: DEFAULT_CUTOFFS,
+      composite: DEFAULT_COMPOSITE,
+      schedule: DEFAULT_SCHEDULE,
+      computedAt: '2026-07-01T10:00:00.000Z',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => resp({ status: 200, body: { accounts: [{ accountId: BOB, status: 'closed' }] } })),
+    );
+
+    await reportPersonalData(env, dao);
+
+    const cfg = await getConfig(env, CLOUD);
+    expect(cfg?.refresherAccountId).toBeNull();
+    expect(cfg?.configuredBy).toBeNull();
+    expect(await getSnapshot(env, CLOUD, 5)).toBeNull();
+    expect((await getState(env, CLOUD, 5))?.degradedReason).toBe('needs_reauth');
   });
 
   it('refreshes the stored display name on "updated"', async () => {

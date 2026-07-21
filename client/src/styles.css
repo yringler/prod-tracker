@@ -11,6 +11,9 @@
     --claimed: #5b8cff;
     --done: #46d39a;
     --line: #25304f;
+    /* Risk-board tiers (delete with client/src/app/risk). */
+    --warn: #e2a33c;
+    --risk: #e05c5c;
 
     /* Theme-specific surfaces and on-colors consumed by the WA bridge below. */
     --surface-raised: #1b2238;
@@ -27,6 +30,9 @@
     --claimed: #3b6fe0;
     --done: #1faa78;
     --line: #d7deeb;
+    /* Risk-board tiers (delete with client/src/app/risk). */
+    --warn: #b9761a;
+    --risk: #c8372f;
 
     --surface-raised: #ffffff;
     --surface-lowered: #eef1f8;

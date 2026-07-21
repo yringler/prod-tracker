@@ -13,7 +13,7 @@ resolves to the `shared/src/index.ts` barrel.
 
 ## What lives here
 
-Small on purpose — three source files under `src/`, one test under `test/`.
+Small on purpose — a handful of source files under `src/`, one test under `test/`.
 
 - **`src/contracts.ts`** — the API/DTO types for `/api/*`, the single source of truth for
   the client↔worker boundary. Request/response shapes only (no logic). Both sides import
@@ -53,7 +53,14 @@ Small on purpose — three source files under `src/`, one test under `test/`.
     like `workdayPace` (not the UTCDate rule). Used only by the client's local
     "today/yesterday" & per-day groupings — the UTC trend buckets don't use it.
 
-- **`src/index.ts`** — barrel; re-exports `./domain` and `./contracts`. Import from
+- **`src/risk.ts`** — WIRE TYPES ONLY for the Sprint Risk Board (`RiskBand`, `RiskMetricId`,
+  `RiskCutoffs`, `RiskWorkSchedule`, `RiskTicket`, `RiskBoardSnapshot`, and the
+  `/api/risk/*` + `/api/admin/risk/*` request/response shapes). The board's pure logic
+  deliberately does **not** live here — it has exactly one consumer, the Worker
+  (`worker/src/risk/logic/`), and the snapshot ships every computed value the client needs.
+  Delete this file (and its barrel line) with the feature.
+
+- **`src/index.ts`** — barrel; re-exports `./domain`, `./contracts`, `./notifications` and `./risk`. Import from
   `@shared/domain` / `@shared/contracts` (or the barrel) — never deep-import `dist/`.
 
 ## The dependency boundary (load-bearing)

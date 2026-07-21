@@ -13,6 +13,7 @@ import type { Env } from '../env';
 import { JiraClient, ReauthRequiredError } from '../jira/client';
 import { fetchMyself } from '../jira/oauth';
 import { availableChannels, resolve } from '../notifications/registry';
+import { riskEraseAccount } from '../risk/store';
 
 /** Wipe adapter-owned vendor data (zulip_links/email_links) for an erased account.
  *  Those tables live outside dao (the eslint wall keeps adapters vendor-isolated),
@@ -85,6 +86,14 @@ export async function reportPersonalData(env: Env, dao: Dao): Promise<void> {
         if (a.status === 'closed') {
           await dao.eraseAccount(a.accountId);
           await eraseAdapterData(env, a.accountId);
+          // The risk board owns its own tables (risk/store.ts, env.DB — outside
+          // dao), so erasure reaches them through this seam too. Isolated: a risk
+          // failure must not abort the erasure loop.
+          try {
+            await riskEraseAccount(env, a.accountId);
+          } catch (e) {
+            console.error('pd-report: risk erasure failed', e);
+          }
           closed.add(a.accountId);
         } else if (a.status === 'updated') {
           await refreshOne(env, dao, a.accountId);

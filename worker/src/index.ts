@@ -42,6 +42,8 @@ import {
   unlinkChannel,
 } from './routes/notifications';
 import { resolve } from './notifications/registry';
+import { refreshRiskBoards } from './risk/refresh';
+import { riskAdminRoutes, riskRoutes } from './risk/routes';
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -81,6 +83,13 @@ export default {
       await escalate(env, dao, tick);
     } catch (e) {
       tick.error('escalate failed', errFields(e));
+    }
+    // Sprint risk board: recompute the due boards' snapshots. Isolated like the
+    // others — a Jira hiccup here must never abort the poll.
+    try {
+      await refreshRiskBoards(env, dao, tick);
+    } catch (e) {
+      tick.error('risk refresh failed', errFields(e));
     }
     tick.info('tick: done', { ms: Date.now() - startedAt });
   },
@@ -163,6 +172,12 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
 
   if (p === '/api/teams' && m === 'GET') return adminListTeams(ctx);
 
+  // Sprint risk board (feature-owned; see worker/src/risk/). Reads stored
+  // snapshots only — no Jira calls on this path.
+  if (p.startsWith('/api/risk/') || p.startsWith('/api/__dev/risk/')) {
+    return riskRoutes(req, ctx, p, m);
+  }
+
   // --- Admin routes ---
   if (p.startsWith('/api/admin/')) {
     if (!(await requireAdmin(ctx))) return error(403, 'admin required');
@@ -182,6 +197,8 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (chCfgMatch && m === 'PUT') {
       return configureChannel(req, ctx, decodeURIComponent(chCfgMatch[1]!));
     }
+
+    if (p.startsWith('/api/admin/risk/')) return riskAdminRoutes(req, ctx, p, m);
 
     const memMatch = p.match(/^\/api\/admin\/teams\/([^/]+)\/memberships$/);
     if (memMatch && m === 'GET') return listMemberships(ctx, decodeURIComponent(memMatch[1]!));

@@ -14,15 +14,15 @@ Cloudflare Worker (no Hono — a hand-rolled `route()` dispatcher), backed by
 Cloudflare **D1** (SQLite) for storage and a **cron** trigger (`*/3 * * * *`) that
 polls Jira. Entry point: [`src/index.ts`](src/index.ts) — its `fetch` handler
 dispatches HTTP, and its `scheduled` handler runs the poller, the GDPR
-report-accounts job, and the notification-escalation job each tick (each
-isolated).
+report-accounts job, the notification-escalation job, and the risk-board refresh
+each tick (each isolated).
 
 ## Directory map
 
 - [`src/index.ts`](src/index.ts) — the only router. `fetch` (static vs `/api`
   split + `route()` dispatch table) and `scheduled` (cron: `runPoll`, then
-  `reportPersonalData`, then `escalate` — each in its own `try/catch` so one
-  can't abort the others).
+  `reportPersonalData`, then `escalate`, then `refreshRiskBoards` — each in its own
+  `try/catch` so one can't abort the others).
 - [`src/http.ts`](src/http.ts) — `json`/`error` helpers, cookie parse/set,
   `AuthedCtx`, `authenticate()` (sid cookie → session), `requireAdmin()`,
   `readJson()`.
@@ -58,6 +58,36 @@ isolated).
 - [`src/db/`](src/db/) — `dao.ts` (the single data-access layer — **the privacy
   invariant lives here**), `driver.ts` (`D1Like` structural interface tests can
   back with SQLite), `schema.sql` (canonical schema; see Database below).
+- [`src/risk/`](src/risk/) — the **Sprint Risk Board**, a self-contained feature slice:
+  `logic/` (pure port of the userscript's work-hours clock, timer reduction, segment
+  builder, cutoff/scoring rules, HEALTH registry + the shipped default tables),
+  `jira.ts` (board configuration/issues/changelog/dev-status reads over a structural
+  client), `refresh.ts` (the 4th isolated cron job — demand-driven eligibility,
+  org-fair scheduling under a per-tick subrequest budget, overwrite-only snapshots),
+  `store.ts` (**all `risk_*` SQL via `env.DB` — never `dao.ts`**, the adapter-store
+  convention) and `routes.ts` (two dispatchers: the authed read tier and the admin
+  config tier). Wire types live in `@shared/risk`.
+  - **Eligibility has brakes, not just cadence.** A board that can never succeed
+    never gets a `last_refresh_at`, so cadence alone would elect it on every tick
+    forever: `isEligible` also applies exponential backoff on consecutive
+    `failures` (capped at `BACKOFF_CAP_MS`), and retries a `needs_reauth` board
+    only once the org's config `updated_at` moves (an admin re-designating is the
+    only thing that can fix it — `markDegraded` deliberately doesn't count a
+    failure). Ordering falls back to `last_attempt_at` so a failing board doesn't
+    head the queue.
+  - **Jira calls are counted per org** (a counting shim around the org's client)
+    and logged per board / per org / per tick as `jiraCalls`; `BOARD_COST_ESTIMATE`
+    is reconciled against the actual count so an over-spending board defers the
+    rest of the tick. Those numbers are the documented graduation trigger for the
+    Queue deviation (`artifacts/1_changes-from-arch.md` §2/§9) — keep them.
+  - **GDPR:** `risk_*` lives outside `dao.ts`, so erasure reaches it through
+    `store.riskEraseAccount(env, accountId)`, called from
+    [`src/cron/pd-report.ts`](src/cron/pd-report.ts) right after `eraseAdapterData`
+    — same "feature-owned tables must be reachable from the erasure seam" rule the
+    notification adapters follow.
+  - Deleting the feature = `rm -rf` the directory + the risk lines in
+    `index.ts`/`schema.sql` + the `riskEraseAccount` call in `cron/pd-report.ts` +
+    a DROP TABLE migration.
 - [`src/push/webpush.ts`](src/push/webpush.ts) — VAPID + RFC 8291 `aes128gcm` web
   push on WebCrypto (no Node `web-push` dependency).
 - [`src/notifications/`](src/notifications/) — the pluggable notification layer.
@@ -255,6 +285,12 @@ SQL against better-sqlite3.
 - `notifications-routes.test.ts` — list/begin/complete/status/unlink route wiring
   (incl. per-org hiding of an unconfigured zulip), plus the `POST /test` self-serve
   delivery check (delivered / not_linked / no-channels).
+- `risk-workhours.test.ts` / `risk-timers.test.ts` / `risk-segments.test.ts` /
+  `risk-scoring.test.ts` — the risk board's pure logic (DST-safe work clock, the
+  Done-is-a-pause timers, segment merge, cutoff specificity + composite goldens).
+- `risk-store.test.ts` / `risk-refresh.test.ts` / `risk-routes.test.ts` — risk board
+  persistence, the write path (snapshot golden, idempotency, eligibility, budgeted
+  org-fair scheduling, degraded paths), and the read/admin routes.
 - `escalate.test.ts` — deliver-once, idempotent re-run, no-channel mark, stale-never,
   fresh-not-yet.
 

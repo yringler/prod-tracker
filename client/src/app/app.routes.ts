@@ -27,6 +27,11 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/admin.component').then((m) => m.AdminComponent),
   },
   {
+    // Sprint risk board (feature-owned; delete with client/src/app/risk).
+    path: 'risk',
+    loadChildren: () => import('./risk/risk.routes').then((m) => m.RISK_ROUTES),
+  },
+  {
     path: 'privacy',
     loadComponent: () => import('./pages/privacy.component').then((m) => m.PrivacyComponent),
   },

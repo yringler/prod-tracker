@@ -1,0 +1,254 @@
+// Sprint Risk Board — WIRE TYPES ONLY (no logic). The board's pure logic lives in
+// worker/src/risk/logic/*: the snapshot carries every computed value the client
+// needs (values, bands, scores, and each ticket's OWN resolved warn/risk
+// thresholds), so the client never recomputes and the logic has exactly one
+// consumer. Only the shapes that cross the wire belong here — same split as
+// notifications.ts.
+//
+// Deletable: `rm shared/src/risk.ts` + the re-export line in index.ts (see the
+// risk-board plan's deletion story).
+
+/** Band a metric is currently in. `none` = not applicable (done / not started). */
+export type RiskBand = 'ok' | 'warn' | 'risk' | 'none';
+
+/** The five scored metrics, in the order the server evaluates them. */
+export type RiskMetricId = 'rejections' | 'blocked' | 'idle' | 'timeInColumn' | 'cycle';
+
+/** One cutoff rule. Matched most-specific-first (column+size beats column-only
+ *  beats size-only beats the `default` rule), independent of table order. */
+export interface RiskCutoffRule {
+  column?: string;
+  /** Fibonacci story-point bucket, or 'none' for unpointed tickets. */
+  size?: number | 'none';
+  warn?: number;
+  risk?: number;
+  default?: boolean;
+}
+
+/** Per-metric cutoff tables. Only the three time-based metrics are configurable;
+ *  rejections/blocked use fixed constants (see logic/scoring.ts). */
+export interface RiskCutoffs {
+  idle: RiskCutoffRule[];
+  cycle: RiskCutoffRule[];
+  timeInColumn: RiskCutoffRule[];
+}
+
+/** Composite = weighted power-mean of the per-metric scores. p=1 → weighted
+ *  average; higher p lets the worst metric dominate. */
+export interface RiskCompositeConfig {
+  p: number;
+  weights: Partial<Record<RiskMetricId, number>>;
+}
+
+export type RiskWeekday = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+
+/** The work-hours clock every metric is measured in. `[open, close]` are wall-clock
+ *  hours in `timeZone`; null = a non-working day. */
+export interface RiskWorkSchedule {
+  timeZone: string;
+  days: Record<RiskWeekday, [open: number, close: number] | null>;
+}
+
+/** One metric's computed state for one ticket. `warn`/`risk` are the thresholds
+ *  THIS ticket resolved to (column + size sensitive) — present only for the
+ *  metrics that have them, so the detail view needs no client-side math. */
+export interface RiskMetricState {
+  value: number | boolean | null;
+  band: RiskBand;
+  /** value / risk-threshold (1.0 = at the risk line); null = no data. */
+  score: number | null;
+  warn?: number;
+  risk?: number;
+}
+
+/** A column visit in the flow timeline. Done visits are kept as zero-cycle stubs. */
+export interface RiskColumnSeg {
+  column: string;
+  status: string;
+  fromMs: number;
+  toMs: number;
+  /** True if this visit was in a done status/column (a pause, not counted). */
+  doneCat: boolean;
+  hours: number;
+}
+
+export interface RiskAssigneeSeg {
+  assignee: string | null;
+  fromMs: number;
+  toMs: number;
+  hours: number;
+}
+
+export interface RiskFlow {
+  createdAt: string;
+  startedAt: string | null;
+  columnSegs: RiskColumnSeg[];
+  assigneeSegs: RiskAssigneeSeg[];
+  totalHours: number;
+}
+
+/** A pull request linked to the issue via Jira's dev-status data. Present only
+ *  when the per-org dev-status probe succeeded. */
+export interface RiskPr {
+  id: string;
+  title: string;
+  url: string;
+  state: 'merged' | 'declined' | 'active';
+  repo: string;
+  author: string;
+  updated: string | null;
+  source: string | null;
+  target: string | null;
+  approvals: number;
+  reviewers: number;
+}
+
+export interface RiskTicket {
+  key: string;
+  summary: string;
+  type: string;
+  status: string;
+  column: string;
+  assignee: string | null;
+  avatarUrl: string | null;
+  points: number | null;
+  parentKey: string | null;
+  implementor: string | null;
+  codeReviewer: string | null;
+  rejections: number | null;
+  blocked: boolean;
+  blockedByOpen: string[];
+  unassignedInProgress: boolean;
+  done: boolean;
+  started: boolean;
+  idleHours: number | null;
+  timeInColumnHours: number | null;
+  cycleHours: number | null;
+  metrics: Record<RiskMetricId, RiskMetricState>;
+  composite: { score: number | null; band: RiskBand };
+  /** Worst firing band across the metrics + composite; null = nothing firing
+   *  (done column, or every metric still pending). */
+  tier: RiskBand | null;
+  columnTotals: { column: string; hours: number; visits: number }[];
+  flow: RiskFlow;
+  recentUpdaters: string[];
+  prs?: RiskPr[];
+}
+
+/** Tickets by tier. Only tickets with a non-null tier are counted. */
+export interface RiskTierCounts {
+  risk: number;
+  warn: number;
+  ok: number;
+}
+
+/** One board's stored snapshot: computed by the cron write path, served verbatim
+ *  by the read route. The effective config is echoed so the detail view can show
+ *  the thresholds that were in force. */
+export interface RiskBoardSnapshot {
+  boardId: number;
+  boardName: string;
+  columns: string[];
+  /** Sorted by composite score, worst first. */
+  tickets: RiskTicket[];
+  tierCounts: RiskTierCounts;
+  cutoffs: RiskCutoffs;
+  composite: RiskCompositeConfig;
+  schedule: RiskWorkSchedule;
+  computedAt: string;
+}
+
+/** Why a board's refresh is degraded. NULL/absent = healthy. */
+export type RiskDegradedReason = 'needs_reauth' | 'errors';
+
+// ---- Wire shapes (client <-> worker /api/risk/*) ----
+
+export interface RiskBoardRef {
+  boardId: number;
+  name: string;
+}
+
+export interface RiskBoardSummary extends RiskBoardRef {
+  computedAt: string | null;
+  degradedReason: RiskDegradedReason | null;
+  tierCounts: RiskTierCounts | null;
+}
+
+export interface RiskBoardsResponse {
+  boards: RiskBoardSummary[];
+}
+
+export interface RiskBoardResponse {
+  snapshot: RiskBoardSnapshot | null;
+  computedAt: string | null;
+  degradedReason: RiskDegradedReason | null;
+  /** True when no snapshot exists yet — the cron will produce one shortly. */
+  refreshing: boolean;
+}
+
+/** Optional per-org custom-field ids. All discovered/admin-picked — never
+ *  hardcoded (repo invariant). Absent/null = that feature degrades quietly. */
+export interface RiskFieldIds {
+  flagged?: string | null;
+  rejections?: string | null;
+  implementor?: string | null;
+  codeReviewer?: string | null;
+}
+
+export interface RiskAdminConfig {
+  boards: RiskBoardRef[];
+  /** null = the code defaults (echoed separately as `defaults`). */
+  cutoffs: RiskCutoffs | null;
+  composite: RiskCompositeConfig | null;
+  schedule: RiskWorkSchedule | null;
+  fields: RiskFieldIds;
+  inProgressStatus: string | null;
+  refresherAccountId: string | null;
+  /** null = unprobed; false = the dev-status endpoint isn't available (no PRs). */
+  devStatusAvailable: boolean | null;
+  configuredBy: string | null;
+  updatedAt: string | null;
+}
+
+export interface RiskAdminConfigResponse {
+  config: RiskAdminConfig;
+  defaults: {
+    cutoffs: RiskCutoffs;
+    composite: RiskCompositeConfig;
+    schedule: RiskWorkSchedule;
+    inProgressStatus: string;
+  };
+}
+
+export interface PutRiskConfigRequest {
+  boards: RiskBoardRef[];
+  cutoffs?: RiskCutoffs | null;
+  composite?: RiskCompositeConfig | null;
+  schedule?: RiskWorkSchedule | null;
+  fields?: RiskFieldIds | null;
+  inProgressStatus?: string | null;
+  refresherAccountId?: string | null;
+}
+
+/** Live board candidates for the admin picker, with the board-configuration
+ *  probe's verdict for the currently-selected boards. */
+export interface RiskBoardCandidate extends RiskBoardRef {
+  type: string | null;
+}
+export interface RiskBoardCandidatesResponse {
+  boards: RiskBoardCandidate[];
+  /** Non-null when the board-configuration probe failed (usually OAuth scopes). */
+  probeError: string | null;
+}
+
+export interface RiskFieldOption {
+  id: string;
+  name: string;
+}
+export interface RiskFieldCandidatesResponse {
+  flagged: RiskFieldOption[];
+  rejections: RiskFieldOption[];
+  implementor: RiskFieldOption[];
+  codeReviewer: RiskFieldOption[];
+  current: RiskFieldIds;
+}

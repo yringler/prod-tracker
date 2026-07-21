@@ -34,6 +34,18 @@ Pages — `src/app/pages/` (each a standalone route component):
 - `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set, custom-field pickers, and per-site notification-channel config (a vendor-agnostic panel driven by each descriptor's `requestedFields`; secret values are write-only). Uses **Signal Forms** (`@angular/forms/signals`) for the static fields (plain signals for the dynamic channel fields) and `ChangeDetectionStrategy.OnPush`.
 - `privacy.component.ts` — public privacy policy (auth-free; keep in sync with actual data practices).
 
+Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` via
+`risk.routes.ts`; delete the folder + the touchpoints listed in its plan to remove it):
+- `risk-board.component.ts` — the risk-ranked triage list (firing metrics only, tier
+  stripe, degraded banner, polls while the first snapshot is being built).
+- `risk-detail.component.ts` — `wa-dialog` rundown with each ticket's own resolved
+  thresholds and per-column time bars.
+- `risk-admin.component.ts` — per-site config (boards, refresher account, optional
+  field pickers, JSON cutoff/composite/schedule editors).
+- `format.ts` — pure display helpers (`fmtWorkHM`, firing-metric pills, band variants).
+  **No risk math happens client-side** — the snapshot carries every value, band and
+  threshold (see `worker/src/risk/`).
+
 UI / charts — `src/app/ui/` (reusable):
 - `chart.component.ts` — `<sp-chart>`, thin Chart.js wrapper owning the canvas/lifecycle; registers only the line-chart pieces (no `TimeScale`). Updates in place on config swap (avoids replaying the entry animation).
 - `chart-theme.ts` — shared `ChartOptions` builders (`categoryOptions`, `dateLineOptions`, `timeOfDayOptions`) + `themeColors()` reading CSS vars at runtime.

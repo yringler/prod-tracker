@@ -55,6 +55,9 @@ const PUBLIC_ROUTES = ["/privacy"];
                         <a routerLink="/tools" routerLinkActive="active"
                             >Tools</a
                         >
+                        <a routerLink="/risk" routerLinkActive="active"
+                            >Risk</a
+                        >
                         @if (auth.isAdmin()) {
                             <a routerLink="/admin" routerLinkActive="active"
                                 >Admin</a

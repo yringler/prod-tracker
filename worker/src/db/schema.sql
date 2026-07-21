@@ -250,3 +250,40 @@ CREATE TABLE IF NOT EXISTS issue_reminders (
   last_reminded_at           TEXT NOT NULL,   -- ISO UTC
   PRIMARY KEY (cloud_id, account_id, issue_key)
 );
+
+-- keep in sync with migrations/0010_risk_board.sql
+-- Sprint Risk Board (feature-owned). Accessed ONLY by worker/src/risk/store.ts via
+-- env.DB — never by dao.ts (same boundary convention as the zulip_*/email_links
+-- adapter tables above); present here for test/bootstrap parity. The board stores
+-- per-ticket Jira data, not effort ratings, so the privacy invariant is untouched;
+-- org scoping is by cloud_id everywhere. Added 0010.
+CREATE TABLE IF NOT EXISTS risk_board_config (
+  cloud_id             TEXT PRIMARY KEY,
+  boards_json          TEXT NOT NULL DEFAULT '[]',  -- [{boardId:number, name:string}]
+  cutoffs_json         TEXT,    -- RiskCutoffs; NULL = code defaults
+  composite_json       TEXT,    -- {p, weights}; NULL = code defaults
+  work_schedule_json   TEXT,    -- RiskWorkSchedule; NULL = NY default
+  fields_json          TEXT,    -- {flagged?, rejections?, implementor?, codeReviewer?} customfield ids
+  in_progress_status   TEXT,    -- NULL = 'In Progress'
+  dev_status_available INTEGER, -- NULL = unprobed; 0/1 = probe result (gates the PR feature)
+  refresher_account_id TEXT,    -- whose oauth_tokens row the cron refresher uses
+  configured_by        TEXT,    -- admin account_id (audit)
+  updated_at           TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS risk_snapshots (
+  cloud_id      TEXT NOT NULL,
+  board_id      INTEGER NOT NULL,
+  snapshot_json TEXT NOT NULL,   -- RiskBoardSnapshot blob
+  computed_at   TEXT NOT NULL,   -- ISO UTC
+  PRIMARY KEY (cloud_id, board_id)
+);
+CREATE TABLE IF NOT EXISTS risk_board_state (
+  cloud_id        TEXT NOT NULL,
+  board_id        INTEGER NOT NULL,
+  last_viewed_at  TEXT,             -- the demand signal, set by the read route
+  last_refresh_at TEXT,             -- last successful refresh
+  last_attempt_at TEXT,
+  failures        INTEGER NOT NULL DEFAULT 0,   -- consecutive; reset on success
+  degraded_reason TEXT,             -- NULL | 'needs_reauth' | 'errors'
+  PRIMARY KEY (cloud_id, board_id)
+);

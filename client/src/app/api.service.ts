@@ -33,6 +33,14 @@ import type {
   LinkStatus,
   SetupSubmission,
 } from '@shared/notifications';
+import type {
+  PutRiskConfigRequest,
+  RiskAdminConfigResponse,
+  RiskBoardCandidatesResponse,
+  RiskBoardResponse,
+  RiskBoardsResponse,
+  RiskFieldCandidatesResponse,
+} from '@shared/risk';
 
 // Typed client for /api/*. Same-origin — the browser NEVER talks to Jira (no
 // CORS path, no client secret in the bundle); everything goes through the Worker.
@@ -156,5 +164,32 @@ export class ApiService {
   }
   setFields(body: SetFieldsRequest): Observable<unknown> {
     return this.http.put('/api/admin/config/fields', body);
+  }
+
+  // --- risk board (delete with client/src/app/risk) ---
+  riskBoards(): Observable<RiskBoardsResponse> {
+    return this.http.get<RiskBoardsResponse>('/api/risk/boards');
+  }
+  riskBoard(boardId: number): Observable<RiskBoardResponse> {
+    return this.http.get<RiskBoardResponse>(`/api/risk/board/${boardId}`);
+  }
+  // Dev-only: the cron that computes snapshots doesn't tick under `wrangler dev`
+  // (route 404s in prod).
+  refreshRiskDev(): Observable<unknown> {
+    return this.http.post('/api/__dev/risk/refresh', {});
+  }
+  adminRiskConfig(): Observable<RiskAdminConfigResponse> {
+    return this.http.get<RiskAdminConfigResponse>('/api/admin/risk/config');
+  }
+  putRiskConfig(body: PutRiskConfigRequest): Observable<unknown> {
+    return this.http.put('/api/admin/risk/config', body);
+  }
+  /** `probe` also runs the board-configuration scope probe against that board. */
+  adminRiskBoards(probe?: number): Observable<RiskBoardCandidatesResponse> {
+    const q = probe == null ? '' : `?probe=${probe}`;
+    return this.http.get<RiskBoardCandidatesResponse>(`/api/admin/risk/boards${q}`);
+  }
+  adminRiskFields(): Observable<RiskFieldCandidatesResponse> {
+    return this.http.get<RiskFieldCandidatesResponse>('/api/admin/risk/fields');
   }
 }

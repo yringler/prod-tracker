@@ -10,6 +10,19 @@ import { InvalidGrantError, refresh } from './oauth';
 
 const API_BASE = 'https://api.atlassian.com/ex/jira';
 
+/** A non-OK Jira response, carrying the status so callers can branch on it (429
+ *  backoff, 401/403 scope diagnostics) without matching on the message text. The
+ *  message keeps its original shape for existing log lines. */
+export class JiraApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+  ) {
+    super(`jira GET ${path} -> ${status}`);
+    this.name = 'JiraApiError';
+  }
+}
+
 export class ReauthRequiredError extends Error {
   constructor(public accountId: string) {
     super(`account ${accountId} needs re-auth`);
@@ -83,10 +96,10 @@ export class JiraClient {
       const res2 = await fetch(`${API_BASE}/${this.cloudId}${path}`, {
         headers: { Authorization: `Bearer ${at2}`, Accept: 'application/json' },
       });
-      if (!res2.ok) throw new Error(`jira GET ${path} -> ${res2.status}`);
+      if (!res2.ok) throw new JiraApiError(res2.status, path);
       return (await res2.json()) as T;
     }
-    if (!res.ok) throw new Error(`jira GET ${path} -> ${res.status}`);
+    if (!res.ok) throw new JiraApiError(res.status, path);
     return (await res.json()) as T;
   }
 }
