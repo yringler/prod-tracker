@@ -99,6 +99,16 @@ Short pointers — read the referenced code/tests before changing anything nearb
 - **OAuth refresh tokens rotate** — every refresh persists the new token and discards
   the old (`worker/src/jira/client.ts`); the token is stored once per account and
   shared across per-site clients. Don't cache/reuse a stale token.
+- **Scopes are frozen at consent, and scope drift is detected.** Changing
+  `OAUTH_SCOPE_LIST` (`worker/src/env.ts`) does NOT invalidate existing grants —
+  they keep minting tokens with the old scopes, so the new calls 401 with no
+  `invalid_grant` to notice. `worker/src/jira/scopes.ts` diffs the access token's
+  own `scope` claim and the client raises `ScopeDriftError` (a subclass of
+  `ReauthRequiredError`, so every existing dead-grant path handles it) after
+  setting `needs_reauth`. It **fails open** on an unparseable token. Any scope
+  change forces all users through one re-authorize — and the scope must be enabled
+  on the app in the Atlassian developer console, not just listed in code. Jira
+  Software honors no classic scopes: see README "Atlassian app setup".
 - **Done events bucket by changelog timestamp**, into the sprint whose window contains
   that time — not the issue's current sprint.
 - **Schema mirroring:** `worker/src/db/schema.sql` mirrors the full migrated schema and

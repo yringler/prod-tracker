@@ -7,6 +7,8 @@ import type { RiskBoardSnapshot } from '@shared/risk';
 import type { Env } from '../src/env';
 import {
   MAX_CONSECUTIVE_FAILURES,
+  claimDegradedNotice,
+  clearDegradedNotice,
   deleteBoardState,
   getConfig,
   getSnapshot,
@@ -27,6 +29,7 @@ import { SqliteD1 } from './support/sqlite-d1';
 
 const CLOUD = 'cloud-1';
 const OTHER = 'cloud-2';
+const AT = '2026-07-01T09:00:00.000Z';
 
 let db: SqliteD1;
 let env: Env;
@@ -111,6 +114,56 @@ describe('risk store: config', () => {
     expect((await listConfigs(env)).map((c) => c.cloudId)).toEqual([CLOUD, OTHER]);
     expect(await getConfig(env, 'cloud-unknown')).toBeNull();
   });
+
+  it('preserves an open degraded episode across an admin re-save', async () => {
+    await putConfig(env, config());
+    expect(await claimDegradedNotice(env, CLOUD, 'needs_reauth', null, AT)).toBe(true);
+
+    await putConfig(env, config({ inProgressStatus: 'Doing' }));
+
+    const cfg = await getConfig(env, CLOUD);
+    expect(cfg?.inProgressStatus).toBe('Doing'); // the save landed...
+    expect(cfg?.degradedNotifiedAt).toBe(AT); // ...without wiping the episode
+    expect(cfg?.degradedNotifiedReason).toBe('needs_reauth');
+  });
+});
+
+describe('risk store: degraded-notice CAS', () => {
+  const LATER = '2026-07-02T09:00:00.000Z';
+
+  it('claims once and rejects a caller holding a stale stamp', async () => {
+    await putConfig(env, config());
+    // Two ticks race off the same read (prev = null): exactly one wins.
+    expect(await claimDegradedNotice(env, CLOUD, 'needs_reauth', null, AT)).toBe(true);
+    expect(await claimDegradedNotice(env, CLOUD, 'needs_reauth', null, LATER)).toBe(false);
+    expect((await getConfig(env, CLOUD))?.degradedNotifiedAt).toBe(AT);
+
+    // A caller that read the current stamp may re-claim (the renotify cadence).
+    expect(await claimDegradedNotice(env, CLOUD, 'errors', AT, LATER)).toBe(true);
+    const cfg = await getConfig(env, CLOUD);
+    expect(cfg?.degradedNotifiedAt).toBe(LATER);
+    expect(cfg?.degradedNotifiedReason).toBe('errors');
+  });
+
+  it('clears once and rejects a stale clear', async () => {
+    await putConfig(env, config());
+    await claimDegradedNotice(env, CLOUD, 'needs_reauth', null, AT);
+
+    expect(await clearDegradedNotice(env, CLOUD, LATER)).toBe(false); // never stamped LATER
+    expect(await clearDegradedNotice(env, CLOUD, AT)).toBe(true);
+    expect(await clearDegradedNotice(env, CLOUD, AT)).toBe(false); // already closed
+
+    const cfg = await getConfig(env, CLOUD);
+    expect(cfg?.degradedNotifiedAt).toBeNull();
+    expect(cfg?.degradedNotifiedReason).toBeNull();
+  });
+
+  it('is org-scoped', async () => {
+    await putConfig(env, config());
+    await putConfig(env, config({ cloudId: OTHER }));
+    await claimDegradedNotice(env, CLOUD, 'errors', null, AT);
+    expect((await getConfig(env, OTHER))?.degradedNotifiedAt).toBeNull();
+  });
 });
 
 describe('risk store: snapshots', () => {
@@ -173,11 +226,14 @@ describe('risk store: refresh state', () => {
     await putConfig(env, config({ cloudId: OTHER, refresherAccountId: 'acct-someone-else' }));
     await overwriteSnapshot(env, CLOUD, snapshot(5, '2026-07-01T10:00:00.000Z'));
     await overwriteSnapshot(env, OTHER, snapshot(5, '2026-07-01T10:00:00.000Z'));
+    await claimDegradedNotice(env, CLOUD, 'errors', null, AT); // an episode was open
 
     await riskEraseAccount(env, 'acct-refresher');
 
     const erased = await getConfig(env, CLOUD);
     expect(erased?.refresherAccountId).toBeNull();
+    // A fresh episode: whatever was announced before, this cause is new.
+    expect(erased?.degradedNotifiedAt).toBeNull();
     expect(await getSnapshot(env, CLOUD, 5)).toBeNull();
     // The org can no longer refresh, so say so instead of serving stale names.
     expect((await getState(env, CLOUD, 5))?.degradedReason).toBe('needs_reauth');

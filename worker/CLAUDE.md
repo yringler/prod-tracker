@@ -26,8 +26,8 @@ each tick (each isolated).
 - [`src/http.ts`](src/http.ts) — `json`/`error` helpers, cookie parse/set,
   `AuthedCtx`, `authenticate()` (sid cookie → session), `requireAdmin()`,
   `readJson()`.
-- [`src/env.ts`](src/env.ts) — the `Env` binding interface + `OAUTH_SCOPES` (with
-  the granular-scope rationale for the Agile API).
+- [`src/env.ts`](src/env.ts) — the `Env` binding interface + `OAUTH_SCOPE_LIST` /
+  `OAUTH_SCOPES` (with the per-endpoint granular-scope table for the Agile API).
 - [`src/pending.ts`](src/pending.ts) — pure "one JIRA = one rateable unit" policy:
   `groupPendingByIssue` (read transform + freshness) and `selectPushTransition`
   (push dedup). Server-only; unit-tested.
@@ -45,10 +45,12 @@ each tick (each isolated).
   self-scoped test delivery to your own channels to verify the send path; setup submit
   routed to the resolved adapter).
 - [`src/jira/`](src/jira/) — Jira integration: `client.ts` (per-account/-cloud
-  authed client + token rotation), `oauth.ts` (3LO code/refresh, accessible
-  resources, `/myself`), `fields.ts` (Story Points/Sprint field discovery),
-  `changelog.ts` (pure transition parsing, idempotency, ownership), `search.ts`
-  (JQL search + Agile boards/sprints).
+  authed client + token rotation + the scope-drift gate), `oauth.ts` (3LO
+  code/refresh, accessible resources, `/myself`), `scopes.ts` (pure: read the
+  access token's `scope` claim, diff it against `OAUTH_SCOPE_LIST`),
+  `fields.ts` (Story Points/Sprint field discovery), `changelog.ts` (pure
+  transition parsing, idempotency, ownership), `search.ts` (JQL search + Agile
+  boards/sprints).
 - [`src/cron/`](src/cron/) — `poller.ts` (the poll: discover fields, refresh
   sprints, diff transitions, write pending/done, push), `pd-report.ts` (GDPR
   report-accounts + erasure/refresh), and `escalate.ts` (the third isolated
@@ -65,16 +67,35 @@ each tick (each isolated).
   client), `refresh.ts` (the 4th isolated cron job — demand-driven eligibility,
   org-fair scheduling under a per-tick subrequest budget, overwrite-only snapshots),
   `store.ts` (**all `risk_*` SQL via `env.DB` — never `dao.ts`**, the adapter-store
-  convention) and `routes.ts` (two dispatchers: the authed read tier and the admin
-  config tier). Wire types live in `@shared/risk`.
+  convention), `notify.ts` (the slice's ONLY crossing of the notification seam:
+  tells an org's admins when its boards stop/resume updating, via
+  `registry.resolve()` only — never an adapter, never a vendor string; deduped per
+  ORG by a claim-before-send CAS on `risk_board_config.degraded_notified_*`, and
+  eslint-walled in `.eslintrc.cjs` alongside `routes/**` and `cron/**`) and
+  `routes.ts` (two dispatchers: the authed read tier and the admin config tier).
+  Wire types live in `@shared/risk`.
+  - **Scopes the slice needs beyond the poller's.** `fetchBoardMaps` reads
+    `/board/{id}/configuration`, the one Agile call needing
+    `read:board-scope.admin:jira-software` (a **separate** scope from
+    `read:board-scope:jira-software`, not a superset) + `read:project:jira`, and
+    necessary-but-not-sufficient — the refresher account also needs project-admin
+    on the board. `pageBoardIssues` needs `read:issue-details:jira` (+
+    `read:jql:jira` for the sprint-issues path). Do **not** "fix" a 401 here by
+    rewriting the fetch layer onto JQL search: that fallback loses board-column
+    fidelity, which every metric in `logic/` is built on. See README "Atlassian app
+    setup" for the probed 401 map.
   - **Eligibility has brakes, not just cadence.** A board that can never succeed
     never gets a `last_refresh_at`, so cadence alone would elect it on every tick
     forever: `isEligible` also applies exponential backoff on consecutive
     `failures` (capped at `BACKOFF_CAP_MS`), and retries a `needs_reauth` board
-    only once the org's config `updated_at` moves (an admin re-designating is the
-    only thing that can fix it — `markDegraded` deliberately doesn't count a
-    failure). Ordering falls back to `last_attempt_at` so a failing board doesn't
-    head the queue.
+    only once something that could actually fix it has happened: the org's config
+    `updated_at` moves (an admin re-designated), **or** the refresher's grant looks
+    usable again (`refresherUsable(dao, cfg)` — a token exists and `needs_reauth`
+    is clear, which `dao.upsertUser` does on every login, so the commonest recovery
+    self-heals with no human). `markDegraded` deliberately doesn't count a failure,
+    so a re-elected board falls THROUGH to the normal failure backoff rather than
+    short-circuiting. Ordering falls back to `last_attempt_at` so a failing board
+    doesn't head the queue.
   - **Jira calls are counted per org** (a counting shim around the org's client)
     and logged per board / per org / per tick as `jiraCalls`; `BOARD_COST_ESTIMATE`
     is reconciled against the actual count so an over-spending board defers the
@@ -85,8 +106,18 @@ each tick (each isolated).
     [`src/cron/pd-report.ts`](src/cron/pd-report.ts) right after `eraseAdapterData`
     — same "feature-owned tables must be reachable from the erasure seam" rule the
     notification adapters follow.
+  - **Degradation is announced, not just badged.** `refreshRiskBoards` runs
+    `notify.noticeDegradation` over its CONFIG loop — above the "nothing planned"
+    early return — precisely because the orgs that most need announcing
+    (`needs_reauth`, or a refresher erased by GDPR) are the ones that are never
+    *eligible*, so anything hung off `refreshOrg` would never fire. One message per
+    episode per org to `admins ∩ listOrgMembers(cloudId)` (capped, with
+    `BOOTSTRAP_ADMIN_ACCOUNT_ID` as the fallback), re-sent on a reason change or
+    every `DEGRADED_RENOTIFY_MS`, plus one when it recovers. `dao.ts` gains no
+    method for this.
   - Deleting the feature = `rm -rf` the directory + the risk lines in
     `index.ts`/`schema.sql` + the `riskEraseAccount` call in `cron/pd-report.ts` +
+    the `worker/src/risk/**` entry in the `.eslintrc.cjs` registry-seam override +
     a DROP TABLE migration.
 - [`src/push/webpush.ts`](src/push/webpush.ts) — VAPID + RFC 8291 `aes128gcm` web
   push on WebCrypto (no Node `web-push` dependency).
@@ -172,6 +203,27 @@ re-reads the row in case a sibling client (same account, another site) already
 rotated it. On `invalid_grant` it sets `needs_reauth` and throws
 `ReauthRequiredError` (the poller then skips that grant's sites). One grant per
 account (keyed by `account_id`), shared across all reachable sites.
+
+### Scope drift is detected, not assumed
+[`src/jira/scopes.ts`](src/jira/scopes.ts) + the `assertScopes` gate in
+[`src/jira/client.ts`](src/jira/client.ts); tested in
+[`test/scopes.test.ts`](test/scopes.test.ts). **Adding a scope to
+`OAUTH_SCOPE_LIST` does not invalidate existing grants** — old refresh tokens keep
+minting access tokens carrying the OLD scope set, so there is no `invalid_grant`
+and the newly-scoped calls just 401 forever. So `client.accessToken()` — the single
+choke point every bearer passes through — decodes the access token's `scope` claim
+(Atlassian's tokens are JWTs) and, when a required scope is absent, sets
+`needs_reauth` and throws **`ScopeDriftError`, a SUBCLASS of
+`ReauthRequiredError`**. That subclassing is the whole design: the poller's
+per-account skip, `pd-report`'s bearer loop, and `risk/refresh.ts`'
+`markDegraded(..., 'needs_reauth')` (and the admin notice hanging off it in
+`risk/notify.ts`) all handle it unchanged — **do not add a parallel notification
+path**. Two rules when touching this: it **fails open** on any token it can't parse
+(never lock out a working user), and the verdict is **memoized per token string**
+so the DB write happens once per token, not once per Jira call. Changing
+`OAUTH_SCOPE_LIST` therefore forces every existing user through one re-authorize —
+say so in the release notes, and tick the scope on the app in the Atlassian
+developer console first (listing it in code only changes the consent URL).
 
 ### Admin guardrails
 [`src/routes/admin.ts`](src/routes/admin.ts) `revokeAdmin`; tested in
@@ -290,9 +342,18 @@ SQL against better-sqlite3.
   Done-is-a-pause timers, segment merge, cutoff specificity + composite goldens).
 - `risk-store.test.ts` / `risk-refresh.test.ts` / `risk-routes.test.ts` — risk board
   persistence, the write path (snapshot golden, idempotency, eligibility, budgeted
-  org-fair scheduling, degraded paths), and the read/admin routes.
+  org-fair scheduling, degraded paths incl. the needs_reauth self-heal), and the
+  read/admin routes.
+- `risk-notify.test.ts` — the degraded/recovery notice: per-org collapse, the
+  claim-before-send CAS (idempotent re-run), renotify cadence + reason change,
+  recipient scoping (org admins only, bootstrap fallback, unreachable org still
+  claimed), and the erased-refresher tick that no eligibility path would reach.
 - `escalate.test.ts` — deliver-once, idempotent re-run, no-channel mark, stale-never,
   fresh-not-yet.
+- `scopes.test.ts` — scope drift: the required-scope list, JWT `scope`-claim
+  parsing (string/array/opaque/malformed), the missing-scope diff for a pre-fix
+  grant, and the client gate (flags `needs_reauth` before spending a subrequest,
+  is a `ReauthRequiredError`, writes once per token, fails open).
 
 ## Conventions
 

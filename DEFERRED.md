@@ -72,3 +72,65 @@ imports `routes/dev`, `index.ts` and `cron/pd-report.ts` legitimately import
 `risk/`), and adding it touches an existing file outside the plan's §2e
 registration list. Revisit if a second feature slice appears and the pattern
 needs to be a rule rather than a convention.
+
+## Sprint Risk Board: degraded-board alerting stops at the admin DM
+
+`worker/src/risk/notify.ts` ships **operational** alerting only — one
+channel-neutral message per degraded episode per org (plus a recovery message) to
+`admins ∩ listOrgMembers(cloudId)`, deep-linking to `/risk/admin`. Deliberately
+not built:
+
+- **No admin health panel.** No `RiskAdminConfigResponse` field, no
+  `risk-admin.component.ts` table of per-board `degraded_reason` / `failures` /
+  `last_refresh_at`. The `/risk` badge plus the DM's deep link cover the case; a
+  panel is worth it only once an operator is diagnosing rather than reacting.
+- **No per-org notification preferences** for these alerts — no quiet hours, no
+  opt-out, no recipient override, no new `SetupStep` kind or channel. Recipients
+  are whoever the org's admins have already linked, capped at
+  `MAX_NOTIFIED_ADMINS`, with `BOOTSTRAP_ADMIN_ACCOUNT_ID` as the fallback.
+- **No `dao.listOrgAdmins`.** Composed from the existing `listOrgMembers` +
+  `isAdmin` so `dao.ts` (the privacy-invariant file) stays out of the diff. Note
+  the consequence: `admins` is global (no `cloud_id`), so an admin with no
+  `user_sites` row for that org is not notified — the same scoping every other
+  admin surface uses, but a real blind spot for a single-site-per-admin deploy.
+- **No Phase-2 health-change notifications** (`risk_alert_state`, hysteresis, the
+  `// PHASE 2:` seam in `refreshBoard`). This is "the board stopped updating", not
+  "a ticket went red".
+- **No suppression of the `needs_reauth` → `errors` follow-up.** With the
+  eligibility self-heal in place, an org whose grant is usable but whose refreshes
+  still fail will flip reason after `MAX_CONSECUTIVE_FAILURES`, which counts as a
+  new episode — one org can legitimately get two messages ~15 min apart. Judged
+  correct (the fix differs), flagged rather than dampened.
+
+## OAuth scope drift: detection ships, proactive re-consent nudging does not
+
+`worker/src/jira/scopes.ts` + the `assertScopes` gate in `jira/client.ts` detect a
+grant minted under an older scope set by decoding the access token's own `scope`
+claim, and route it into the **existing** `needs_reauth` machinery
+(`ScopeDriftError extends ReauthRequiredError` → the "Re-connect Jira" banner from
+`/api/me`, and for a risk-board refresher the degraded notice in `risk/notify.ts`).
+That is the correct minimal core. Deliberately not built:
+
+- **No login-time scope-version stamp.** The alternative design — a
+  `scope_version` column on `oauth_tokens`, written at consent and compared to a
+  build constant — was rejected: it needs a migration and new bookkeeping, and it
+  measures *our record of what we asked for* rather than *what Atlassian actually
+  granted*. It would miss the real failure mode where a user re-consents but the
+  app in the developer console still doesn't offer the scope, so the grant comes
+  back short and the stamp says "current". The JWT claim is ground truth and needs
+  no schema change at all. Revisit only if Atlassian stops issuing JWT access
+  tokens, which the fail-open path already degrades to gracefully (behavior
+  reverts to today's: silent 401s).
+- **No proactive sweep.** Nothing scans stored grants for drift ahead of use; a
+  user is flagged the first time a Jira call is made on their behalf (the poller
+  touches every grant every 3 minutes, so the lag is small). A cron sweep would be
+  a second code path for a case the poller already covers within one tick.
+- **No dedicated "your scopes are out of date" copy.** The banner reads "Your Jira
+  consent expired", which is imprecise for drift. Distinguishing it means a new
+  `MeResponse` field and client branch; not worth it for a once-per-deploy event.
+
+**Operational note:** the release that added `read:board-scope.admin:jira-software`,
+`read:issue-details:jira` and `read:jql:jira` forces **every existing user to
+re-authorize once**. Tick the three new scopes on the app in the Atlassian
+developer console *before* deploying, or the re-consent hands back the same short
+grant and the banner reappears immediately.

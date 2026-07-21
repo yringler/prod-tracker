@@ -341,6 +341,43 @@ describe('eligibility', () => {
     };
     expect(isEligible(CLOUD, 5, state, now, ago(60 * 60_000))).toBe(false);
     expect(isEligible(CLOUD, 5, state, now, ago(30_000))).toBe(true);
+    // ...and an untouched config with an unusable grant stays parked.
+    expect(isEligible(CLOUD, 5, state, now, ago(60 * 60_000), false)).toBe(false);
+  });
+
+  it('self-heals a needs_reauth board once the refresher grant is usable again', () => {
+    const state = {
+      lastViewedAt: null,
+      lastRefreshAt: null,
+      lastAttemptAt: ago(60_000),
+      failures: 0,
+      degradedReason: 'needs_reauth' as const,
+    };
+    // No admin touched anything; the refresher just logged back in.
+    expect(isEligible(CLOUD, 5, state, now, ago(60 * 60_000), true)).toBe(true);
+  });
+
+  it('a re-elected needs_reauth board still obeys the failure backoff', () => {
+    // A usable grant that nonetheless keeps failing must fall THROUGH to the
+    // backoff rather than hot-looping every tick.
+    const state = {
+      lastViewedAt: null,
+      lastRefreshAt: null,
+      lastAttemptAt: ago(10 * 60_000),
+      failures: 3, // 2^3 * 5 min = 40 min of quiet
+      degradedReason: 'needs_reauth' as const,
+    };
+    expect(isEligible(CLOUD, 5, state, now, ago(60 * 60_000), true)).toBe(false);
+    expect(
+      isEligible(
+        CLOUD,
+        5,
+        { ...state, lastAttemptAt: ago(8 * 60 * 60_000) },
+        now,
+        ago(60 * 60_000),
+        true,
+      ),
+    ).toBe(true);
   });
 
   it('falls back to the idle cadence, jittered per board', () => {
@@ -488,7 +525,7 @@ describe('refreshRiskBoards (fleet)', () => {
     expect((await getState(env, CLOUD, 5))?.degradedReason).toBe('needs_reauth');
   });
 
-  it('stops retrying a needs_reauth org until an admin touches the config', async () => {
+  it('stops retrying a needs_reauth org while the refresher grant is still broken', async () => {
     await putConfig(env, orgConfig());
     // putConfig stamps updated_at from the wall clock; pin it behind the injected NOW.
     await db.prepare(`UPDATE risk_board_config SET updated_at = ?`).bind(at(0)).run();
@@ -497,23 +534,50 @@ describe('refreshRiskBoards (fleet)', () => {
     await refreshRiskBoards(env, dao, silent, NOW, 0); // no grant -> degraded
     expect(first).not.toHaveBeenCalled();
     expect((await getState(env, CLOUD, 5))?.degradedReason).toBe('needs_reauth');
+    const attempt = (await getState(env, CLOUD, 5))?.lastAttemptAt;
 
-    // Even with a grant in place, nothing retries: only an admin re-designating can
-    // fix a needs_reauth org, and markDegraded doesn't count a failure to back off.
-    await seedToken(REFRESHER);
+    // Still no grant: the board isn't even re-elected (markDegraded doesn't count a
+    // failure, so backoff can't cover it — only a fixable cause re-elects it).
     vi.unstubAllGlobals();
     const second = stubFetch();
     await refreshRiskBoards(env, dao, silent, NOW + 60_000, 0);
     expect(second).not.toHaveBeenCalled();
-    expect(await getSnapshot(env, CLOUD, 5)).toBeNull();
+    expect((await getState(env, CLOUD, 5))?.lastAttemptAt).toBe(attempt);
 
-    // An admin saves the config (updated_at bumps) -> the board is live again.
+    // An admin saves the config (updated_at bumps) -> re-elected, and it attempts
+    // again (still grant-less, so it re-degrades rather than fetching).
     await putConfig(env, orgConfig());
     vi.unstubAllGlobals();
     const third = stubFetch();
     await refreshRiskBoards(env, dao, silent, NOW + 120_000, 0);
-    expect(third).toHaveBeenCalled();
-    expect(await getSnapshot(env, CLOUD, 5)).not.toBeNull();
+    expect(third).not.toHaveBeenCalled();
+    expect((await getState(env, CLOUD, 5))?.lastAttemptAt).not.toBe(attempt);
+  });
+
+  it('self-heals a needs_reauth org when the refresher logs back in', async () => {
+    await seedToken(REFRESHER);
+    await dao.upsertUser(REFRESHER, 'Refresher', CLOUD);
+    await dao.setNeedsReauth(REFRESHER, true);
+    await putConfig(env, orgConfig({ boards: boardsFor(3, 'B') }));
+    await db.prepare(`UPDATE risk_board_config SET updated_at = ?`).bind(at(0)).run();
+    stubFetch();
+
+    await refreshRiskBoards(env, dao, silent, NOW, 0);
+    for (const id of [1, 2, 3]) {
+      expect((await getState(env, CLOUD, id))?.degradedReason).toBe('needs_reauth');
+    }
+
+    // The refresher signs in again: dao.upsertUser clears needs_reauth, and nobody
+    // touches the risk config. The boards must come back on their own.
+    await dao.upsertUser(REFRESHER, 'Refresher', CLOUD);
+    vi.unstubAllGlobals();
+    const after = stubFetch();
+    await refreshRiskBoards(env, dao, silent, NOW + 60_000, 0);
+    expect(after).toHaveBeenCalled();
+    for (const id of [1, 2, 3]) {
+      expect((await getState(env, CLOUD, id))?.degradedReason).toBeNull();
+      expect(await getSnapshot(env, CLOUD, id)).not.toBeNull();
+    }
   });
 
   it('holds a permanently failing board in backoff instead of retrying every tick', async () => {

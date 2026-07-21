@@ -62,10 +62,13 @@ interface BoardConfigResponse {
  * status category (a column named Done may hold statuses Jira hasn't marked done
  * but which are finished on THIS board).
  *
- * PROBE #1: the Agile API needs granular scopes (`read:board-scope:jira-software`
- * + `read:project:jira`, see env.ts). A 401/403 here means the token was consented
- * without them, which is an expensive fix (scopes freeze at consent), so the error
- * says so explicitly and the admin route runs this before anything is saved.
+ * PROBE #1: board CONFIGURATION is the one Agile read that needs the *admin*
+ * board scope — `read:board-scope.admin:jira-software` (a DIFFERENT scope from
+ * `read:board-scope:jira-software`, not a superset) plus `read:project:jira`.
+ * A 401/403 here means either the token was consented without them (an expensive
+ * fix — scopes freeze at consent) or the account lacks project-admin rights on
+ * the board (the scope is necessary, not sufficient). The error says both, and
+ * the admin route runs this before anything is saved.
  */
 export async function fetchBoardMaps(
   client: RiskJiraClient,
@@ -81,8 +84,12 @@ export async function fetchBoardMaps(
       throw new Error(
         `board ${boardId} configuration is not readable with this token (${e.status}) — ` +
           `the Agile board-configuration endpoint needs the granular scopes ` +
-          `read:board-scope:jira-software AND read:project:jira; scopes freeze at consent, ` +
-          `so every user must re-authorize after changing them`,
+          `read:board-scope.admin:jira-software AND read:project:jira ` +
+          `(the .admin scope is separate from read:board-scope:jira-software, not implied by it). ` +
+          `Enable both on the app in the Atlassian developer console — listing them in ` +
+          `OAUTH_SCOPES is not enough — then re-authorize, since scopes freeze at consent. ` +
+          `The scope is necessary but not sufficient: Jira permissions still apply, so the ` +
+          `designated refresher account also needs project-admin rights on this board.`,
       );
     }
     throw e;
@@ -157,6 +164,13 @@ async function pageAgile(
  * The issues a board is currently showing: a scrum board's ACTIVE sprints, or a
  * kanban board's whole backlog view. Ports rbPageAgile + the board/sprint walk of
  * rbBuildBoard.
+ *
+ * Scopes (see env.ts): `/board/{id}` and `/board/{id}/issue` need
+ * `read:board-scope:jira-software` + `read:issue-details:jira`;
+ * `/board/{id}/sprint/{sid}/issue` needs `read:sprint:jira-software` +
+ * `read:issue-details:jira` + `read:jql:jira`. Deliberately NOT rewritten onto
+ * JQL search — that fallback would cost board-column fidelity, which the whole
+ * feature is built on.
  */
 export async function pageBoardIssues(
   client: RiskJiraClient,
@@ -190,8 +204,9 @@ interface ChangelogPage {
 
 /**
  * One issue's status + assignee history, plus a flat "who edited, when" event
- * list. Ports rbFetchHistory. PROBE #3 — documented under the classic
- * `read:jira-work` scope this app already requests.
+ * list. Ports rbFetchHistory. PROBE #3 — a PLATFORM endpoint (`/rest/api/3/...`),
+ * so unlike the Agile reads above it is covered by the classic `read:jira-work`
+ * scope this app already requests (probed 200 on a live site).
  */
 export async function fetchChangelog(
   client: RiskJiraClient,

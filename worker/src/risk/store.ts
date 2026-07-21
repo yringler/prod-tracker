@@ -17,6 +17,7 @@ import type {
   RiskFieldIds,
   RiskWorkSchedule,
 } from '@shared/risk';
+import { runChanges } from '../db/driver';
 import type { Env } from '../env';
 
 /** Consecutive failed refreshes before a board is reported as degraded. */
@@ -34,10 +35,20 @@ export interface RiskOrgConfig {
   refresherAccountId: string | null;
   configuredBy: string | null;
   updatedAt: string;
+  /** Degraded-notice CAS state (see claimDegradedNotice): when the org's admins
+   *  were last told its boards stopped updating, and about what. NULL = no open
+   *  episode. Per ORG, so a 5-board org sends one message, not five. */
+  degradedNotifiedAt: string | null;
+  degradedNotifiedReason: RiskDegradedReason | null;
 }
 
-/** The writable half of a config row (updatedAt is stamped here). */
-export type RiskOrgConfigInput = Omit<RiskOrgConfig, 'updatedAt'>;
+/** The writable half of a config row: updatedAt is stamped here, and the two
+ *  degraded-notice columns are owned exclusively by the CAS helpers below (an
+ *  admin re-saving the config must not wipe an open episode). */
+export type RiskOrgConfigInput = Omit<
+  RiskOrgConfig,
+  'updatedAt' | 'degradedNotifiedAt' | 'degradedNotifiedReason'
+>;
 
 export interface RiskBoardState {
   cloudId: string;
@@ -61,6 +72,8 @@ interface ConfigRow {
   refresher_account_id: string | null;
   configured_by: string | null;
   updated_at: string;
+  degraded_notified_at: string | null;
+  degraded_notified_reason: string | null;
 }
 
 interface StateRow {
@@ -100,6 +113,8 @@ function mapConfig(r: ConfigRow): RiskOrgConfig {
     refresherAccountId: r.refresher_account_id,
     configuredBy: r.configured_by,
     updatedAt: r.updated_at,
+    degradedNotifiedAt: r.degraded_notified_at,
+    degradedNotifiedReason: (r.degraded_notified_reason as RiskDegradedReason | null) ?? null,
   };
 }
 
@@ -132,6 +147,10 @@ export async function listConfigs(env: Env): Promise<RiskOrgConfig[]> {
   return results.map(mapConfig);
 }
 
+/** Note the two `degraded_notified_*` columns are deliberately absent from BOTH
+ *  the insert list and the DO UPDATE SET list: an admin re-saving the config
+ *  preserves the open degraded episode (it only moves `updated_at`, which already
+ *  re-opens the eligibility gate). Only the CAS helpers below write them. */
 export async function putConfig(env: Env, cfg: RiskOrgConfigInput): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO risk_board_config (
@@ -300,6 +319,54 @@ export async function markDegraded(
     .run();
 }
 
+// --- Degraded-notice CAS (per org) --------------------------------------------
+//
+// A degraded board is only a badge on /risk until somebody is told, and a
+// needs_reauth org can't self-heal without a human. risk/notify.ts pushes one
+// message per EPISODE per ORG to that org's admins; these two helpers are its
+// serialization point, mirroring dao.claimReminder: read the stamp, then write it
+// back only if it is still what you read, so exactly one concurrent tick wins and
+// therefore exactly one sends.
+
+/**
+ * Stamp this org's degraded episode iff the stored stamp is still `prevAtIso`
+ * (the value the caller read from the config row; null = no open episode).
+ * Returns true iff this caller won the claim and should deliver.
+ */
+export async function claimDegradedNotice(
+  env: Env,
+  cloudId: string,
+  reason: RiskDegradedReason,
+  prevAtIso: string | null,
+  atIso: string,
+): Promise<boolean> {
+  const res = await env.DB.prepare(
+    `UPDATE risk_board_config
+        SET degraded_notified_at = ?, degraded_notified_reason = ?
+      WHERE cloud_id = ? AND degraded_notified_at IS ?`,
+  )
+    .bind(atIso, reason, cloudId, prevAtIso)
+    .run();
+  return runChanges(res) > 0;
+}
+
+/** Close the episode (the org recovered). Same CAS shape, so only one tick
+ *  announces the recovery. */
+export async function clearDegradedNotice(
+  env: Env,
+  cloudId: string,
+  prevAtIso: string,
+): Promise<boolean> {
+  const res = await env.DB.prepare(
+    `UPDATE risk_board_config
+        SET degraded_notified_at = NULL, degraded_notified_reason = NULL
+      WHERE cloud_id = ? AND degraded_notified_at IS ?`,
+  )
+    .bind(cloudId, prevAtIso)
+    .run();
+  return runChanges(res) > 0;
+}
+
 /** Cleanup when a board is dropped from the org's config: its snapshot and its
  *  refresh state go with it, so a re-added board starts clean. */
 export async function deleteBoardState(
@@ -342,8 +409,16 @@ export async function riskEraseAccount(env: Env, accountId: string): Promise<voi
     .all<{ cloud_id: string; boards_json: string }>();
 
   for (const row of results) {
+    // Reset the degraded-notice stamp in the same statement: an erasure-induced
+    // degradation is a NEW episode (a different cause than whatever was open), so
+    // the next tick's notice pass announces it instead of treating it as
+    // already-reported.
     await env.DB.prepare(
-      `UPDATE risk_board_config SET refresher_account_id = NULL WHERE cloud_id = ?`,
+      `UPDATE risk_board_config
+          SET refresher_account_id = NULL,
+              degraded_notified_at = NULL,
+              degraded_notified_reason = NULL
+        WHERE cloud_id = ?`,
     )
       .bind(row.cloud_id)
       .run();

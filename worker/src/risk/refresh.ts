@@ -52,6 +52,7 @@ import {
   type RawIssue,
   type RiskJiraClient,
 } from './jira';
+import { noticeDegradation } from './notify';
 import {
   getState,
   listConfigs,
@@ -60,6 +61,7 @@ import {
   recordFailure,
   recordSuccess,
   setDevStatusAvailable,
+  type RiskBoardState,
   type RiskOrgConfig,
 } from './store';
 
@@ -152,7 +154,8 @@ function dueByCadence(
  *   - exponential backoff on consecutive failures, capped at BACKOFF_CAP_MS;
  *   - `needs_reauth` is only retried once the org's config has been touched
  *     (markDegraded deliberately doesn't count a failure, so backoff can't cover
- *     it — nothing but an admin re-designating can fix it).
+ *     it) — OR once the refresher's grant looks usable again, which is the common
+ *     real recovery and needs no human at all (`refresherUsable`).
  */
 export function isEligible(
   cloudId: string,
@@ -160,17 +163,24 @@ export function isEligible(
   state: RiskEligibilityState | null,
   nowMs: number,
   cfgUpdatedAt: string | null = null,
+  /** The org's refresher grant currently looks usable (token present, not flagged
+   *  needs_reauth) — e.g. the refresher simply logged in again, which clears the
+   *  flag in dao.upsertUser without anyone touching the risk config. */
+  refresherUsable = false,
 ): boolean {
   if (!dueByCadence(cloudId, boardId, state, nowMs)) return false;
 
   const lastAttempt = state?.lastAttemptAt ? Date.parse(state.lastAttemptAt) : null;
   if (lastAttempt == null) return true;
 
-  if (state?.degradedReason === 'needs_reauth') {
+  if (state?.degradedReason === 'needs_reauth' && !refresherUsable) {
     const configuredAt = cfgUpdatedAt ? Date.parse(cfgUpdatedAt) : null;
     if (configuredAt == null || configuredAt <= lastAttempt) return false;
     return true;
   }
+  // A re-elected needs_reauth board falls THROUGH to the failure backoff rather
+  // than short-circuiting, so a board whose grant is healthy but which keeps
+  // failing for some other reason still backs off exponentially.
 
   const failures = state?.failures ?? 0;
   if (failures > 0) {
@@ -178,6 +188,19 @@ export function isEligible(
     if (nowMs - lastAttempt < wait) return false;
   }
   return true;
+}
+
+/**
+ * Does this org's designated refresher currently look able to reach Jira? The
+ * single most common real recovery from `needs_reauth` is the refresher simply
+ * logging in again — `dao.upsertUser` clears the flag on every login, which the
+ * risk board would otherwise never notice. Two queries, per degraded org only.
+ */
+export async function refresherUsable(dao: Dao, cfg: RiskOrgConfig): Promise<boolean> {
+  const accountId = cfg.refresherAccountId;
+  if (!accountId) return false;
+  if (!(await dao.getToken(accountId))) return false;
+  return !(await dao.getUserNeedsReauth(accountId));
 }
 
 /**
@@ -229,15 +252,38 @@ export async function refreshRiskBoards(
   const byCloud = new Map<string, RiskOrgConfig>();
   for (const cfg of configs) {
     byCloud.set(cfg.cloudId, cfg);
+    const states: Array<RiskBoardState | null> = [];
+    // Two extra queries, computed lazily — only for an org that actually has a
+    // needs_reauth board, and only once for that org.
+    let usable: boolean | null = null;
     for (const board of cfg.boards) {
       const state = await getState(env, cfg.cloudId, board.boardId);
-      if (!isEligible(cfg.cloudId, board.boardId, state, nowMs, cfg.updatedAt)) continue;
+      states.push(state);
+      if (state?.degradedReason === 'needs_reauth' && usable === null) {
+        usable = await refresherUsable(dao, cfg);
+      }
+      if (!isEligible(cfg.cloudId, board.boardId, state, nowMs, cfg.updatedAt, usable ?? false)) {
+        continue;
+      }
       planned.push({
         cloudId: cfg.cloudId,
         board,
         lastRefreshAt: state?.lastRefreshAt ?? null,
         lastAttemptAt: state?.lastAttemptAt ?? null,
       });
+    }
+    // Tell this org's admins when its boards stop (or resume) updating. Runs over
+    // the CONFIG loop, above the early return below, because the orgs that most
+    // need announcing — needs_reauth, or an erased refresher — are exactly the ones
+    // that are never eligible, so nothing hung off refreshOrg would ever fire.
+    // Recovery is therefore observed on the tick AFTER a successful refresh (state
+    // is read at the top of the tick): a <= 3-minute lag, deliberately traded for
+    // one code path. Isolated per org so a notification problem never stops the
+    // refresh fleet.
+    try {
+      await noticeDegradation(env, dao, cfg, states, log, nowMs);
+    } catch (e) {
+      log.warn('risk: degraded-notice failed', { cloudId: cfg.cloudId, ...errFields(e) });
     }
   }
   if (planned.length === 0) return;

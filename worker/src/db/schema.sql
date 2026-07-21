@@ -268,7 +268,11 @@ CREATE TABLE IF NOT EXISTS risk_board_config (
   dev_status_available INTEGER, -- NULL = unprobed; 0/1 = probe result (gates the PR feature)
   refresher_account_id TEXT,    -- whose oauth_tokens row the cron refresher uses
   configured_by        TEXT,    -- admin account_id (audit)
-  updated_at           TEXT NOT NULL
+  updated_at           TEXT NOT NULL,
+  -- added 0011 (keep in sync with migrations/0011_risk_degraded_notice.sql):
+  -- per-ORG stamp for the degraded-notice CAS (one message per episode per org).
+  degraded_notified_at     TEXT, -- ISO UTC; NULL = no open episode
+  degraded_notified_reason TEXT  -- NULL | 'needs_reauth' | 'errors'
 );
 CREATE TABLE IF NOT EXISTS risk_snapshots (
   cloud_id      TEXT NOT NULL,

@@ -87,7 +87,13 @@ module.exports = {
       // App code (routes + cron) reaches notification channels ONLY through the
       // registry seam — never by deep-importing adapter internals. This keeps the
       // "app never learns what a zulip_user_id is" invariant CI-enforced.
-      files: ['worker/src/routes/**/*.ts', 'worker/src/cron/**/*.ts'],
+      files: [
+        'worker/src/routes/**/*.ts',
+        'worker/src/cron/**/*.ts',
+        // The risk slice notifies org admins when a board stops updating
+        // (risk/notify.ts) — same rule, same seam.
+        'worker/src/risk/**/*.ts',
+      ],
       rules: {
         'no-restricted-imports': [
           'error',

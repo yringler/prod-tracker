@@ -96,47 +96,88 @@ OAuth 2.0 (3LO) app, callback `https://<your-worker>/api/auth/callback`. Set
 `JIRA_CLIENT_ID/SECRET` as secrets; VAPID keypair (base64url raw) as
 `VAPID_PUBLIC_KEY/PRIVATE_KEY`.
 
-**Scopes.** Each maps to an endpoint the poller actually calls (see
-`worker/src/jira/`). Three are selectable in the developer console; `offline_access`
-is not (see below).
+**Scopes.** Each maps to an endpoint the app actually calls (see `worker/src/jira/`
+and `worker/src/risk/jira.ts`). All but `offline_access` are selectable in the
+developer console.
 
 | Scope | Where it's set | Grants | Used by |
 | --- | --- | --- | --- |
 | `read:jira-user` | console — Jira platform REST API (classic) | current user / display name (`GET /rest/api/3/myself`) | `jira/oauth.ts` (login), `cron/pd-report.ts` |
-| `read:jira-work` | console — Jira platform REST API (classic) | read fields + JQL search (`GET /rest/api/3/field`, `GET /rest/api/3/search/jql`) | `jira/fields.ts`, `jira/search.ts` |
-| `read:project:jira` | console — Jira platform REST API (granular) | required alongside the Software scope for Agile board reads (`GET /rest/agile/1.0/board`) | `cron/poller.ts` → `jira/search.ts` |
-| `read:board-scope:jira-software` | console — Jira Software API (granular) | read boards + sprints (`GET /rest/agile/1.0/board`, `.../sprint`) | `cron/poller.ts` → `jira/search.ts` |
-| `read:sprint:jira-software` | console — Jira Software API (granular) | read sprints (`.../board/{id}/sprint`) | `cron/poller.ts` → `jira/search.ts` |
+| `read:jira-work` | console — Jira platform REST API (classic) | read fields, statuses, changelogs + JQL search (`GET /rest/api/3/field`, `/status`, `/issue/{id}/changelog`, `/search/jql`) | `jira/fields.ts`, `jira/search.ts`, `risk/jira.ts` |
+| `read:project:jira` | console — Jira platform REST API (granular) | required alongside the Software scope for Agile board reads, and again for board *configuration* | `cron/poller.ts` → `jira/search.ts`, `risk/jira.ts` |
+| `read:issue-details:jira` | console — Jira platform REST API (granular) | required alongside the Software scopes for every Agile endpoint that returns issues | `risk/jira.ts` (`pageBoardIssues`) |
+| `read:jql:jira` | console — Jira platform REST API (granular) | required for the Agile sprint-issues endpoint | `risk/jira.ts` (`pageBoardIssues`) |
+| `read:board-scope:jira-software` | console — Jira Software API (granular) | list boards + read a board (`GET /rest/agile/1.0/board`, `.../board/{id}`) | `cron/poller.ts` → `jira/search.ts`, `risk/jira.ts` |
+| `read:board-scope.admin:jira-software` | console — Jira Software API (granular) | read a board's **column configuration** (`.../board/{id}/configuration`) | `risk/jira.ts` (`fetchBoardMaps`) |
+| `read:sprint:jira-software` | console — Jira Software API (granular) | read sprints + their issues (`.../board/{id}/sprint`, `.../sprint/{sid}/issue`) | `cron/poller.ts` → `jira/search.ts`, `risk/jira.ts` |
 | `offline_access` | **authorize URL only** (not the console) | rotating refresh tokens | `jira/client.ts` |
 
 So in the developer console, under *Permissions*, add **two APIs** — "Jira platform
-REST API" (tick `read:jira-user`, `read:jira-work`, `read:project:jira`) and "Jira
-Software API" (tick `read:board-scope:jira-software` and `read:sprint:jira-software`).
-You **won't find `offline_access` in either list** — it's a standard OAuth 2.0
-scope, not a Jira permission. It's requested in the `/authorize` URL's `scope`
-param, which the app already does via `OAUTH_SCOPES` in `worker/src/env.ts`. The
-full string the app sends at consent:
-
-`read:jira-user read:jira-work read:project:jira read:board-scope:jira-software read:sprint:jira-software offline_access`
+REST API" (tick `read:jira-user`, `read:jira-work`, `read:project:jira`,
+`read:issue-details:jira`, `read:jql:jira`) and "Jira Software API" (tick
+`read:board-scope:jira-software`, `read:board-scope.admin:jira-software` and
+`read:sprint:jira-software`). You **won't find `offline_access` in either list** —
+it's a standard OAuth 2.0 scope, not a Jira permission. It's requested in the
+`/authorize` URL's `scope` param, which the app already does via `OAUTH_SCOPES` in
+`worker/src/env.ts` — the single source of the string sent at consent.
 
 Notes that bit us in practice:
 
-- **The Agile API ignores classic scopes.** `read:jira-work` (classic) covers the
-  platform calls (`/rest/api/3/...`) but does **not** authorize `/rest/agile/...`.
-  The Agile endpoints require **granular** scopes — and crucially `GET
-  /rest/agile/1.0/board` needs **both** `read:board-scope:jira-software` **and** the
-  granular Jira *platform* scope `read:project:jira`. We originally requested only
-  the `-software` granular scope, so boards 401'd even with everything ticked in the
-  console (the token simply never carried `read:project:jira`).
-- **The Jira Software API must be added to the app**, not just the scope ticked. If
-  it isn't, `/rest/agile/1.0/board` returns **401** (boards/sprints silently stay
-  empty — aggregates won't get a real "done" line). Note Atlassian *removes* an API
-  from the app once its last scope is unticked, so editing/trimming other scopes can
-  silently drop the Jira Software API — re-check it after any console scope change.
-- **A token's scopes are frozen at consent.** After changing scopes you must
-  **re-authorize** (log out and back in) — existing grants keep their old scopes.
-  An `invalid_grant` flags the user `needsReauth`; a *scope* change does not, so
-  re-auth is manual.
+- **Jira Software supports no classic scopes at all.** Not "prefers granular" —
+  *none*. `read:jira-work` authorizes the platform calls (`/rest/api/3/...`) and
+  grants literally nothing on `/rest/agile/...`. Worse, the platform-*granular*
+  scopes that a Software operation additionally requires must appear **literally**
+  in the request even when the classic `read:jira-work` is already present:
+  `read:jira-work` does not stand in for `read:issue-details:jira`. We originally
+  requested only the `-software` granular scopes and boards 401'd with everything
+  ticked in the console, because the token never carried `read:project:jira`.
+- **`.admin` is a different scope, not a bigger one.**
+  `read:board-scope.admin:jira-software` is not a superset of
+  `read:board-scope:jira-software` — nothing about holding one implies the other,
+  and the Sprint Risk Board needs both (the board read uses the base scope, the
+  column-configuration read uses the `.admin` one). And the scope is
+  *necessary, not sufficient*: Jira's own permissions still apply on top, so the
+  account designated as a board's refresher also needs project-admin rights on that
+  board or `/configuration` 401s with every scope in place.
+- **The empirical 401 map.** Probing a live site with a token granted exactly
+  `offline_access read:jira-user read:jira-work read:board-scope:jira-software
+  read:project:jira read:sprint:jira-software` gave a clean split. **200:**
+  `/rest/agile/1.0/board` (list), `/rest/agile/1.0/board/{id}/sprint`,
+  `/rest/api/3/status`, `/rest/api/3/field`, `/rest/api/3/issue/{id}/changelog`,
+  `/rest/api/3/search/jql` (bounded queries only). **401 "Unauthorized; scope does
+  not match":** `/rest/agile/1.0/board/{id}`, `.../board/{id}/configuration`,
+  `.../board/{id}/issue`, `.../board/{id}/backlog`,
+  `.../board/{id}/sprint/{sid}/issue`, `/rest/agile/1.0/sprint/{sid}/issue`, and
+  `/rest/dev-status/latest/issue/summary`. Note how *listing* boards and sprints
+  works while *reading* one doesn't — the difference is the issue-returning
+  endpoints needing `read:issue-details:jira`. Also note dev-status appears in
+  neither of Atlassian's OpenAPI specs: it's undocumented for 3LO, which is why the
+  risk board probes it once per org and permanently drops PRs when it fails.
+- **Ticking a scope in code is not enough — it must be enabled on the app.** Adding
+  a scope to `OAUTH_SCOPES` only changes the consent URL; if the app in the
+  developer console doesn't offer it, consent fails or comes back short. Note
+  Atlassian *removes* an API from the app once its last scope is unticked, so
+  editing/trimming other scopes can silently drop the Jira Software API — re-check
+  it after any console scope change.
+- **A token's scopes are frozen at consent, and a scope change is silent.** Adding
+  a scope does **not** invalidate existing grants: old refresh tokens keep working
+  and keep minting access tokens carrying the *old* scope set, so there's no
+  `invalid_grant` to notice and the new calls simply 401 forever. The app now
+  detects this itself — `worker/src/jira/scopes.ts` reads the `scope` claim out of
+  the access token (Atlassian's are JWTs) and compares it against what the build
+  requires; a short grant is flagged `needsReauth` and raises a `ScopeDriftError`,
+  which is a subclass of `ReauthRequiredError` so the poller, the GDPR job and the
+  risk-board refresher all handle it through paths that already existed. Users see
+  the "Re-connect Jira" banner; risk-board admins get the degraded notice. The check
+  fails **open** on any token it can't parse, so it can never lock out a working
+  user.
+
+> **Deploying a scope change:** after the release that added
+> `read:board-scope.admin:jira-software`, `read:issue-details:jira` and
+> `read:jql:jira`, **every existing user must re-authorize once** (log out and back
+> in, or follow the "Re-connect Jira" banner). Tick the three new scopes on the app
+> in the developer console *before* deploying, or the re-consent will hand back the
+> same short grant.
 
 ## Open flags (decide against your Jira)
 

@@ -7,6 +7,7 @@
 import type { Dao, OAuthTokenRow } from '../db/dao';
 import type { Env } from '../env';
 import { InvalidGrantError, refresh } from './oauth';
+import { missingScopes } from './scopes';
 
 const API_BASE = 'https://api.atlassian.com/ex/jira';
 
@@ -30,6 +31,26 @@ export class ReauthRequiredError extends Error {
   }
 }
 
+/**
+ * The grant is alive but was consented under an OLDER scope set, so it can never
+ * satisfy this build. Deliberately a SUBCLASS of ReauthRequiredError: the remedy
+ * is identical (re-authorize), and every caller that already handles a dead grant
+ * — the poller's per-account skip, pd-report's bearer loop, risk/refresh.ts'
+ * `markDegraded(..., 'needs_reauth')` and the admin notice hanging off it —
+ * handles this correctly with no new branch and no second notification path.
+ */
+export class ScopeDriftError extends ReauthRequiredError {
+  constructor(
+    accountId: string,
+    public readonly missing: string[],
+  ) {
+    super(accountId);
+    this.name = 'ScopeDriftError';
+    this.message =
+      `account ${accountId} consented an older scope set; missing: ${missing.join(', ')}`;
+  }
+}
+
 export class JiraClient {
   constructor(
     private readonly env: Env,
@@ -38,8 +59,43 @@ export class JiraClient {
     public readonly cloudId: string,
   ) {}
 
+  /** Memoized scope verdict, keyed by the exact token string it was computed
+   *  from — so the JWT decode and (at most one) DB write happen once per token,
+   *  not once per Jira call. */
+  private scopeVerdict: { token: string; missing: string[] } | null = null;
+
   private isFresh(t: OAuthTokenRow): boolean {
     return !!(t.accessToken && t.expiresAt && Date.parse(t.expiresAt) > Date.now());
+  }
+
+  /**
+   * Scope-drift gate. A grant minted before a scope was added keeps refreshing
+   * happily and keeps minting tokens carrying the OLD scope set — no
+   * `invalid_grant`, so nothing else in the app would ever notice; the new calls
+   * would just 401 forever (see jira/scopes.ts for the full story).
+   *
+   * So the moment we hold a token we can read, we compare its `scope` claim
+   * against what this build requires and, if it's short, flag `needs_reauth` (the
+   * flag `/api/me` already surfaces as the "Re-connect Jira" prompt) and throw
+   * ScopeDriftError — a ReauthRequiredError, so every existing dead-grant path
+   * handles it unchanged.
+   *
+   * Anti-spam: the verdict is memoized per token string, and the DB write only
+   * happens the first time a given token is judged short. Unreadable tokens
+   * fail open (missingScopes returns []).
+   */
+  private async assertScopes(accessToken: string): Promise<void> {
+    if (this.scopeVerdict?.token === accessToken) {
+      if (this.scopeVerdict.missing.length) {
+        throw new ScopeDriftError(this.token.accountId, this.scopeVerdict.missing);
+      }
+      return;
+    }
+    const missing = missingScopes(accessToken);
+    this.scopeVerdict = { token: accessToken, missing };
+    if (missing.length === 0) return;
+    await this.dao.setNeedsReauth(this.token.accountId, true);
+    throw new ScopeDriftError(this.token.accountId, missing);
   }
 
   /**
@@ -52,7 +108,15 @@ export class JiraClient {
     return this.accessToken();
   }
 
+  /** Mint, then gate on scope drift. Every path that produces a bearer goes
+   *  through here, so there is exactly one place the check can be missed. */
   private async accessToken(): Promise<string> {
+    const at = await this.mintAccessToken();
+    await this.assertScopes(at);
+    return at;
+  }
+
+  private async mintAccessToken(): Promise<string> {
     if (this.isFresh(this.token)) return this.token.accessToken as string;
 
     // Re-read: a sibling client may already hold a valid, freshly-rotated token.
