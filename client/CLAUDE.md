@@ -45,11 +45,56 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   (a visual schedule editor is deferred). Owns save + the message banner, and
   renders the server's per-rule `issues` on a 400.
 - `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold table that
-  replaced the raw-JSON textarea. A tab per metric, a per-row Scope/Size/Warn/Risk
-  row, a pinned undeletable "Everything else" fallback row, a work-hours↔work-days
-  toggle (hours are always what's stored), a "Test a ticket" preview, and an
-  Advanced JSON import/export. `input()` for `cutoffs`/`defaults`/`schedule`/
-  `columns`; `output()` emits `RiskCutoffs | null` (**null = inherit**, stored NULL).
+  replaced the raw-JSON textarea. A tab per metric, rules **grouped by column** into
+  collapsible `<tbody>` disclosure groups, a pinned undeletable "Everything else"
+  fallback row, a work-hours↔work-days toggle (hours are always what's stored), a
+  "Test a ticket" preview, and an Advanced JSON import/export. `input()` for
+  `cutoffs`/`defaults`/`schedule`/`columns`/`columnsError`/`boardsAwaitingSave`;
+  `output()` emits `RiskCutoffs | null` (**null = inherit**, stored NULL). It owns
+  the MODEL only (`model`/`custom`/`load`/`patch`/`emit`) and threads state one way
+  through inputs — deliberately **no shared service or store**. Four load-bearing
+  rules live here:
+  - **The parent must bind its `serverCutoffs`, never the draft it gets back from
+    `(cutoffsChange)`.** One signal for both made the editor's own emit re-enter its
+    own input, whose effect re-runs `load()` — which re-collapses — so every
+    keystroke was clobbered, a just-added row was deleted, and "repaired N rules"
+    re-announced. `risk-admin.component.ts` keeps `serverCutoffs` (written only on
+    load and on a successful save) separate from the `cutoffs` draft.
+  - **Collapse runs on LOAD, never on EDIT.** `collapseCutoffs` is reachable from
+    exactly three places (the input effect, the follow-defaults transitions,
+    `doImport`). Running it on a model holding a new row will delete that row.
+  - **Rules serialize in DISPLAY order** (`editorRowsInDisplayOrder`). A column-only
+    and a size-only rule are equally specific to `resolveRules`, so array position
+    decides — serializing in display order makes what you see the tie-break order.
+  - **"Add rule" seeds from `seedRowFor`**, i.e. from what the new row's own scope
+    resolves to today, so adding a rule changes no resolution until you type in it.
+- `cutoff-row.component.ts` — one editable rule. **Selector `tr[sp-cutoff-row]`, an
+  ATTRIBUTE selector**, so the host element IS the `<tr>`: an element selector inside
+  `<tbody>` breaks table layout and browsers hoist it out of the table. Owns the
+  hours↔days display conversion and the disclosure chevron on a group's header row.
+- `cutoff-group.component.ts` — one column's rules as a disclosure group. Selector
+  `tbody[sp-cutoff-group]` (a table may hold several `<tbody>`s — that is the
+  "one group = several `<tr>`s" shape). The nesting IS the specificity order.
+  `timeInColumn` opens as 7 collapsed column groups instead of 33 flat rows;
+  `idle`/`cycle` are under the row threshold and render exactly as before. Any group
+  holding a flagged rule is force-expanded, so no callout points at an invisible row.
+- `option-select.component.ts` — `<sp-option-select>`, the **single owner of the Web
+  Awesome `<wa-select>` contract**; nothing else in the slice touches a select's
+  value or options. (1) Never bind a value that isn't in the option list — WA's
+  getter filters the bound value against its own option set and returns null
+  otherwise, blanking display AND read-back, so a missing value is synthesized and
+  annotated. (2) Never mark the selected option `disabled` — same filter — enforced
+  structurally: options carry no `disabled` field. (3) "Not offered" is expressed by
+  OMITTING an option (that is what `showDone` now does: it **offers** Done columns
+  rather than greying them out, and defaults ON when the table holds a Done rule).
+  (4) Read-back is normalized once and REJECTED rather than coerced
+  (`parseSizeValue` returns `undefined` for a non-bucket; `Number(null) === 0` was
+  the original bug).
+- `select-options.ts` — pure, Angular-free `SelectOption[]` builders
+  (`columnOptions`/`sizeOptions`/`ensureValuePresent`/`hasDoneColumnRule`). Unit
+  tested in `client/test/select-options.test.ts`.
+- `dom-events.ts` — `targetValue` / `targetChecked` / `selectValue`, the one place a
+  value is read off a DOM or custom element. Pure functions, no class, no DI.
 - `composite-editor.component.ts` — `<sp-risk-composite>`, the power-mean `p` as a
   labeled slider plus the five weights, where `0` renders as an explicit
   **Excluded** badge (weight ≤ 0 drops the metric entirely; an *absent* weight
@@ -96,6 +141,29 @@ Other `src/` files:
 - `styles.css` — global styles: per-theme brand palette CSS vars (`--accent`/`--claimed`/`--done`/…) and a Web Awesome token bridge mapping `--wa-color-*` onto them.
 
 ## Conventions & patterns
+
+### Template type checking (load-bearing)
+
+`client/tsconfig.app.json` sets **`fullTemplateTypeCheck: true`** and
+**`strictTemplates: true`** under `angularCompilerOptions`. Do not remove them.
+
+- Without `fullTemplateTypeCheck`, Angular runs only *basic* template checking:
+  top-level binding expressions are checked, but expressions inside an **embedded
+  view** (`@if` / `@for` / `ng-template`) are **not**. That hole shipped a runtime
+  `TypeError: ctx.String is not a function` inside `@for` in the cutoffs editor,
+  blanking every row after the first, with a green build. The flag turns that whole
+  bug class — any template expression referencing a JS global or a member the
+  component class doesn't have — into a **build failure**, and `wrangler.toml`'s
+  `[build]` already runs `npm run build:client` before every dev/deploy, so the gate
+  was wired; only the flag was missing.
+- **Never satisfy this by adding `readonly String = String` (or any equivalent
+  alias) to a component class.** It fixes the build and re-hides the entire bug
+  class — `risk-board.component.ts` carried exactly that field, which is why its two
+  `String(...)` sites did not error. Add a real typed member instead
+  (`sizeValue()`, `weightText()`, `boardValue()`).
+- `strictTemplates` was measured before adoption: 4 errors repo-wide, all one real
+  defect (a `<wa-input>`'s `value` is `string | null`), all fixed by widening the
+  parameter type — no cast, no `$any`.
 
 ### Standalone + signals
 - Every component is `standalone: true` with explicit `imports`. No NgModules anywhere.
@@ -169,7 +237,12 @@ Run from the repo root:
   `ng serve`. `npm run deploy` builds the client then `wrangler deploy`.
 - `npm run typecheck` — root + shared TS (client is type-checked as part of the build).
 
-There is no standalone client test suite; tests live in `worker/` (vitest).
+There is no Angular test suite (no TestBed, no jsdom — see `DEFERRED.md` for the
+argued reason). The root `vitest.config.ts` `include` does carry
+**`client/test/**/*.test.ts`** for **pure, Angular-free** client modules only
+(today: `src/app/risk/select-options.ts`); the `@shared` alias and node environment
+already cover it, no extra config. Anything semantically risky should move to
+`shared/` and be tested there instead. Everything else lives in `worker/test/`.
 
 ## Where to make changes
 

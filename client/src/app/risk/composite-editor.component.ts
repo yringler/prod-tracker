@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import type { RiskCompositeConfig, RiskMetricId, RiskWorkSchedule } from '@shared/risk';
 import { scheduleDaysSummary, workHoursPerDay, workHoursPerWeek } from '@shared/risk-cutoffs';
+import { targetChecked, targetValue } from './dom-events';
 import { METRIC_LABELS } from './format';
 
 /** The order the server evaluates in (worker/src/risk/logic/scoring.ts METRIC_ORDER). */
@@ -84,7 +85,7 @@ const METRIC_IDS: RiskMetricId[] = ['rejections', 'blocked', 'idle', 'timeInColu
                   min="0"
                   step="0.5"
                   [attr.disabled]="!custom() ? '' : null"
-                  [value]="String(weight(m))"
+                  [value]="weightText(m)"
                   (change)="setWeight(m, $event)"
                 ></wa-number-input>
               </td>
@@ -190,25 +191,33 @@ export class RiskCompositeEditorComponent {
     return this.model().weights[id] ?? 1;
   }
 
+  /** `<wa-number-input>`'s value is a string. Explicit string method rather than a
+   *  `String(...)` call in the template — a template cannot reach JS globals, and
+   *  aliasing one onto the class re-hides the bug class `fullTemplateTypeCheck`
+   *  exists to catch. */
+  weightText(id: RiskMetricId): string {
+    return String(this.weight(id));
+  }
+
   share(id: RiskMetricId): number {
     const total = METRIC_IDS.reduce((sum, m) => sum + Math.max(0, this.weight(m)), 0);
     return total > 0 ? Math.round((this.weight(id) / total) * 100) : 0;
   }
 
   setP(e: Event): void {
-    const p = Number((e.target as HTMLInputElement).value);
+    const p = Number(targetValue(e));
     if (!Number.isFinite(p) || p <= 0) return;
     this.patch((c) => ({ ...c, p }));
   }
 
   setWeight(id: RiskMetricId, e: Event): void {
-    const w = Number((e.target as HTMLInputElement).value);
+    const w = Number(targetValue(e));
     if (!Number.isFinite(w) || w < 0) return;
     this.patch((c) => ({ ...c, weights: { ...c.weights, [id]: w } }));
   }
 
   onFollowDefaults(e: Event): void {
-    const followDefaults = (e.target as HTMLInputElement).checked;
+    const followDefaults = targetChecked(e);
     this.custom.set(!followDefaults);
     this.model.set(normalize(this.defaults()));
     this.emit();

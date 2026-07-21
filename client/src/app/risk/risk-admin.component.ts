@@ -25,6 +25,7 @@ import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
 import { RiskCompositeEditorComponent } from './composite-editor.component';
 import { RiskCutoffsEditorComponent } from './cutoffs-editor.component';
+import { targetChecked, targetValue } from './dom-events';
 import { RiskImpactPreviewComponent } from './impact-preview.component';
 
 type FieldKey = 'flagged' | 'rejections' | 'implementor' | 'codeReviewer';
@@ -145,18 +146,20 @@ const FIELD_LABELS: Record<FieldKey, string> = {
 
       @if (defaultCutoffs(); as defs) {
         <sp-risk-cutoffs
-          [cutoffs]="cutoffs()"
+          [cutoffs]="serverCutoffs()"
           [defaults]="defs"
           [schedule]="effectiveSchedule()"
           [scheduleIsCustom]="scheduleIsCustom()"
           [columns]="columnsInfo()"
+          [columnsError]="columnsError()"
+          [boardsAwaitingSave]="boardsAwaitingSave()"
           (cutoffsChange)="cutoffs.set($event)"
         ></sp-risk-cutoffs>
       }
 
       @if (defaultComposite(); as dc) {
         <sp-risk-composite
-          [composite]="composite()"
+          [composite]="serverComposite()"
           [defaults]="dc"
           [schedule]="effectiveSchedule()"
           (compositeChange)="composite.set($event)"
@@ -248,12 +251,26 @@ export class RiskAdminComponent implements OnInit {
   // The cutoff table is a structured model now, not text: null = follow the shipped
   // defaults (stored NULL), which is what <sp-risk-cutoffs> emits when its switch
   // is on. `defaultCutoffs` is the read-only reference the editor renders then.
+  //
+  // THE SPLIT IS LOAD-BEARING — do not collapse these back into one signal.
+  // `serverCutoffs` is what `[cutoffs]` binds to and is written ONLY here on load
+  // and on a successful save. `cutoffs` is the DRAFT, written ONLY by
+  // `(cutoffsChange)`, and read by save() and the impact preview. With one signal
+  // the editor's own emit flowed straight back into its own input, whose effect
+  // re-ran `load()` — which re-collapses the model — so every keystroke clobbered
+  // the edit, deleted a just-added row, and re-announced "repaired N rules". After
+  // the split the editor is UNCONTROLLED after mount: its input effect fires on a
+  // real reload only. Same split on composite for symmetry; benign there today
+  // (normalize() is idempotent), but the asymmetry is the trap.
+  serverCutoffs = signal<RiskCutoffs | null>(null);
   cutoffs = signal<RiskCutoffs | null>(null);
   defaultCutoffs = signal<RiskCutoffs | null>(null);
+  serverComposite = signal<RiskCompositeConfig | null>(null);
   composite = signal<RiskCompositeConfig | null>(null);
   defaultComposite = signal<RiskCompositeConfig | null>(null);
   defaultSchedule = signal<RiskWorkSchedule | null>(null);
   columnsInfo = signal<RiskColumnsResponse | null>(null);
+  columnsError = signal<string | null>(null);
   // Read-only reference copy of the shipped default (never written back).
   defaultScheduleJson = signal('');
   defaultInProgress = signal('In Progress');
@@ -266,6 +283,18 @@ export class RiskAdminComponent implements OnInit {
     return typed ?? this.defaultSchedule() ?? FALLBACK_SCHEDULE;
   });
   scheduleIsCustom = computed(() => safeParse<RiskWorkSchedule>(this.scheduleJson()) !== null);
+  /** Boards ticked in the picker that the columns endpoint doesn't know about yet.
+   *  Ticking a board genuinely CANNOT populate the Scope picker before a save —
+   *  `listRiskColumns` iterates the SAVED `cfg.boards` — so say so rather than
+   *  silently doing nothing. */
+  boardsAwaitingSave = computed<string[]>(() => {
+    const known = this.columnsInfo()?.boards;
+    if (!known) return [];
+    const ids = new Set(known.map((b) => b.boardId));
+    return this.picked()
+      .filter((b) => !ids.has(b.boardId))
+      .map((b) => b.name);
+  });
   /** "40 work hours/week (Mon–Thu 9–18, Fri 9–13, America/New_York)" — the derived
    *  summary the plan asks for wherever hours are entered. */
   scheduleSummary = computed(() => {
@@ -290,8 +319,10 @@ export class RiskAdminComponent implements OnInit {
         // would freeze a copy of them into the DB on the next Save, so the org would
         // never pick up later improvements to logic/defaults.ts — blank means
         // "NULL = use the built-in defaults", and clearing a box resets to them.
+        this.serverCutoffs.set(r.config.cutoffs);
         this.cutoffs.set(r.config.cutoffs);
         this.defaultCutoffs.set(r.defaults.cutoffs);
+        this.serverComposite.set(r.config.composite);
         this.composite.set(r.config.composite);
         this.defaultComposite.set(r.defaults.composite);
         this.defaultSchedule.set(r.defaults.schedule);
@@ -303,11 +334,26 @@ export class RiskAdminComponent implements OnInit {
     });
     this.loadCandidates();
     this.api.orgMembers().subscribe({ next: (r) => this.members.set(r.members) });
-    // Board columns for the cutoff editor's Scope picker. Served from the stored
-    // snapshots, so this normally costs no Jira calls; a failure just leaves the
-    // picker without suggestions.
-    this.api.adminRiskColumns().subscribe({ next: (r) => this.columnsInfo.set(r) });
+    this.loadColumns();
     this.api.adminRiskFields().subscribe({ next: (r) => this.fieldCandidates.set(r) });
+  }
+
+  /** Board columns for the cutoff editor's Scope picker. Served from the stored
+   *  snapshots, so this normally costs no Jira calls. Extracted from ngOnInit
+   *  because it must ALSO run after a successful save — `listRiskColumns` iterates
+   *  the SAVED `cfg.boards`, so that is the only moment new columns can appear. */
+  private loadColumns(): void {
+    this.api.adminRiskColumns().subscribe({
+      next: (r) => {
+        this.columnsInfo.set(r);
+        this.columnsError.set(null);
+      },
+      // A silent failure used to leave `columnsInfo` null, which both empties the
+      // Scope picker AND makes `pointsMissing()` false — so the "no Story Points
+      // field" warning could never fire and nobody learned why size rules were dead.
+      error: (e: { error?: ApiError }) =>
+        this.columnsError.set(e.error?.error ?? 'Could not load board columns.'),
+    });
   }
 
   private loadCandidates(probe?: number): void {
@@ -320,8 +366,10 @@ export class RiskAdminComponent implements OnInit {
     });
   }
 
+  /** Reads go through `dom-events.ts` so the `<wa-select>` `string | null | string[]`
+   *  normalization lives in exactly one place. */
   value(e: Event): string {
-    return (e.target as HTMLInputElement).value;
+    return targetValue(e);
   }
   label(k: FieldKey): string {
     return FIELD_LABELS[k];
@@ -334,7 +382,7 @@ export class RiskAdminComponent implements OnInit {
   }
 
   toggleBoard(b: RiskBoardCandidate, e: Event): void {
-    const on = (e.target as HTMLInputElement).checked;
+    const on = targetChecked(e);
     this.picked.update((list) =>
       on
         ? [...list.filter((x) => x.boardId !== b.boardId), { boardId: b.boardId, name: b.name }]
@@ -369,6 +417,15 @@ export class RiskAdminComponent implements OnInit {
       next: () => {
         this.saving.set(false);
         this.savedAt.update((n) => n + 1);
+        // The server now holds exactly what we sent, so re-baseline the editors'
+        // inputs from the body (not from a refetch). This is the ONLY other write
+        // to serverCutoffs/serverComposite besides ngOnInit.
+        this.serverCutoffs.set(body.cutoffs ?? null);
+        this.serverComposite.set(body.composite ?? null);
+        // The only moment new columns can appear: `listRiskColumns` iterates the
+        // SAVED cfg.boards, so a board ticked before this save had no columns to
+        // offer until now.
+        this.loadColumns();
         this.message.set({ ok: true, text: 'Saved. The next refresh picks this up.' });
       },
       error: (e: { error?: ApiError }) => {

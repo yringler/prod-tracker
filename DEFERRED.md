@@ -178,3 +178,53 @@ That is the correct minimal core. Deliberately not built:
 re-authorize once**. Tick the three new scopes on the app in the Atlassian
 developer console *before* deploying, or the re-consent hands back the same short
 grant and the banner reappears immediately.
+
+## Sprint Risk Board: the cutoffs-editor repair's deferred half
+
+The repair in `artifacts/3_cutoffs_editor_repair_plan.md` shipped the compiler
+gate, the grouped presentation, the feedback-loop fix and the Web Awesome select
+contract. Four things it deliberately did not build:
+
+- **A read-only resolved column × size matrix inside "Test a ticket".** The plan's
+  Option B (a full `column × bucket` grid) was rejected as the *editing* surface —
+  it loses per-rule validation callouts, per-rule deletion, the Any-column/fallback
+  asymmetry, and any narrow viewport — but its single best property, "see the whole
+  resolution surface at once", is worth recovering read-only: every (column,bucket)
+  cell showing the resolved warn/risk via the shared `resolveCutoff`, tinted by
+  which rule produced it. Pure derived data, no inputs, no validation anchoring.
+  Would upgrade "Test a ticket" from a point-probe to the whole surface.
+
+- **A real-browser smoke test of `/risk/admin`.** `fullTemplateTypeCheck` +
+  `strictTemplates` (both now on in `client/tsconfig.app.json`) convert the entire
+  bug CLASS that shipped this defect — a template expression referencing a JS
+  global or a non-existent member, anywhere including inside `@if`/`@for` — into a
+  build failure, and `wrangler.toml`'s `[build]` already gates dev/deploy on that
+  build. What the flags **cannot** catch is the four runtime/semantic defects the
+  same repair fixed: `Number(null) === 0` in the size read-back, the
+  output→input feedback loop that clobbered every keystroke, `wa-select` filtering
+  its bound value against its non-disabled options (so a Done-column row rendered
+  blank), and "collapse deletes the row you just added". The test that WOULD have
+  caught the shipped crash is a real-browser smoke: load `/risk/admin`, assert no
+  console error. Genuinely valuable, but it needs Playwright (or
+  `vitest --browser`), a `wrangler dev` fixture, a logged-in session and **a seeded
+  local D1** with a cutoffs blob that has a Done rule and no `default:true` rule —
+  a multi-day infra lift. An Angular TestBed/jsdom suite is explicitly NOT the
+  substitute: Web Awesome components are real custom elements with shadow DOM,
+  ResizeObserver and upgrade timing, so under jsdom they do not render the surface
+  the bug lived on. Instead, `client/test/**/*.test.ts` (one glob in the root
+  `vitest.config.ts`) covers the PURE client modules, and everything semantically
+  risky was moved into `shared/src/risk-cutoffs.ts` where it is already tested.
+
+- **Carrying probed column names on the `?probe=<boardId>` response.** Ticking a
+  board genuinely cannot populate the Scope picker before a save, because
+  `listRiskColumns` (`worker/src/risk/routes.ts`) iterates the SAVED `cfg.boards`.
+  The shippable version landed instead: refetch the columns after a successful
+  save, plus an explicit inline "Save to load columns for *Sprint B*" note. The
+  properly-correct fix — extend the probe response to carry the probed column names
+  — is a shared+worker+client change and was not worth attaching to a bug fix.
+
+- **`strictTemplates` was NOT deferred.** The plan's step-4 decision rule said
+  "≤ ~15 genuine errors → adopt". It was measured at **4**, all one real defect (a
+  `<wa-input>`'s `value` is `string | null`, and four handlers declared it
+  `string`), all fixable by widening the parameter type — no cast, no `$any`. It is
+  on. Recorded here because the plan asked for the measurement either way.
