@@ -24,6 +24,22 @@ export function fmtWorkHM(hours: number | null | undefined): string | null {
   return `${m}m`;
 }
 
+/**
+ * A stored threshold (always WORK HOURS) as the cutoffs editor's units toggle is
+ * currently showing it. In `hours` mode this is plain `fmtWorkHM`, the same string
+ * the caption under every number input shows; in `days` mode it is the fractional
+ * work-day value the input itself holds, so the collapsed rule summaries can never
+ * disagree with the control they expand into.
+ */
+export function fmtThreshold(
+  hours: number,
+  unit: 'hours' | 'days',
+  hoursPerDay: number,
+): string {
+  if (unit === 'days') return `${Math.round((hours / hoursPerDay) * 100) / 100}d`;
+  return fmtWorkHM(hours) ?? '—';
+}
+
 export const METRIC_LABELS: Record<RiskMetricId, string> = {
   blocked: 'Blocked',
   idle: 'Last movement',

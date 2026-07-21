@@ -33,14 +33,27 @@ export interface BoardColumns {
  * BOTH the display and the read-back — so a stored column that no longer exists on
  * any board (or a Done column while the toggle is off) would silently render as an
  * empty picker that then writes `''` back on the next change event.
+ *
+ * `note` is OPTIONAL, and a falsy note annotates nothing. Presence is rule 1 and is
+ * non-negotiable; the annotation is a CLAIM about the value, and a caller with no
+ * evidence for the claim must pass nothing rather than assert it (see
+ * `columnOptions`).
  */
 export function ensureValuePresent(
   options: readonly SelectOption[],
   value: string,
-  note: string,
+  note?: string | null,
 ): SelectOption[] {
   if (options.some((o) => o.value === value)) return [...options];
-  return [...options, { value, label: value, note }];
+  return [...options, { value, label: value, ...(note ? { note } : {}) }];
+}
+
+/** True when we actually hold column data for at least one board — i.e. when
+ *  "this column is on no board" is a statement we are in a position to make. A
+ *  board whose probe failed ships with `columns: []`, so counting BOARDS is not
+ *  enough; the columns are the evidence. */
+export function boardColumnsKnown(boards: readonly BoardColumns[]): boolean {
+  return boards.some((b) => b.columns.length > 0);
 }
 
 /**
@@ -75,8 +88,20 @@ export function columnOptions(
       });
     }
   }
-  return ensureValuePresent(out, opts.value, 'not on any configured board');
+  // Only claim "not on any configured board" when we have board data to contradict
+  // it. With zero known columns (no board configured, or the columns fetch failed)
+  // EVERY value would be annotated with a fact we do not have — the option must
+  // still be present and selectable, just unannotated.
+  return ensureValuePresent(
+    out,
+    opts.value,
+    boardColumnsKnown(boards) ? UNKNOWN_COLUMN_NOTE : null,
+  );
 }
+
+/** The one wording for "we have board data, and this column isn't in it" — shared
+ *  with the group header's badge so the two can't drift. */
+export const UNKNOWN_COLUMN_NOTE = 'not on any configured board';
 
 /** The Size picker: "any size", then every bucket as the point RANGE it captures. */
 export function sizeOptions(): SelectOption[] {

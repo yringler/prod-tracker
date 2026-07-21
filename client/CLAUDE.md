@@ -44,11 +44,15 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   field pickers, the two structured editors below, and the work-schedule JSON box
   (a visual schedule editor is deferred). Owns save + the message banner, and
   renders the server's per-rule `issues` on a 400.
-- `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold table that
-  replaced the raw-JSON textarea. A tab per metric, rules **grouped by column** into
-  collapsible `<tbody>` disclosure groups, a pinned undeletable "Everything else"
-  fallback row, a work-hours↔work-days toggle (hours are always what's stored), a
-  "Test a ticket" preview, and an Advanced JSON import/export. `input()` for
+- `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold editor that
+  replaced the raw-JSON textarea. A tab per metric, rules **grouped by column**, a
+  pinned undeletable "Everything else" fallback rule, a work-hours↔work-days toggle
+  (hours are always what's stored), a "Test a ticket" preview, and an Advanced JSON
+  import/export. **There is no `<table>`**: a rule is a one-line SENTENCE that
+  expands into a vertical form (see `cutoff-row.component.ts`), because a 5-column
+  table overflowed a normal viewport to show two number inputs. The two facts the
+  old `<thead>` carried ("warn = badge only", "risk = drives the score, value ÷ risk")
+  are now a legend above the list. `input()` for
   `cutoffs`/`defaults`/`schedule`/`columns`/`columnsError`/`boardsAwaitingSave`;
   `output()` emits `RiskCutoffs | null` (**null = inherit**, stored NULL). It owns
   the MODEL only (`model`/`custom`/`load`/`patch`/`emit`) and threads state one way
@@ -68,16 +72,25 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
     decides — serializing in display order makes what you see the tie-break order.
   - **"Add rule" seeds from `seedRowFor`**, i.e. from what the new row's own scope
     resolves to today, so adding a rule changes no resolution until you type in it.
-- `cutoff-row.component.ts` — one editable rule. **Selector `tr[sp-cutoff-row]`, an
-  ATTRIBUTE selector**, so the host element IS the `<tr>`: an element selector inside
-  `<tbody>` breaks table layout and browsers hoist it out of the table. Owns the
-  hours↔days display conversion and the disclosure chevron on a group's header row.
-- `cutoff-group.component.ts` — one column's rules as a disclosure group. Selector
-  `tbody[sp-cutoff-group]` (a table may hold several `<tbody>`s — that is the
-  "one group = several `<tr>`s" shape). The nesting IS the specificity order.
-  `timeInColumn` opens as 7 collapsed column groups instead of 33 flat rows;
-  `idle`/`cycle` are under the row threshold and render exactly as before. Any group
-  holding a flagged rule is force-expanded, so no callout points at an invisible row.
+- `cutoff-row.component.ts` — one rule, as a **summary line that expands into a
+  vertical form** (`<sp-cutoff-row>`, an ELEMENT selector now the table is gone —
+  it had to be `tr[sp-cutoff-row]` while the host was a `<tr>`). Collapsed it reads
+  "In Progress · points 4–5 — warn after 5h 00m, risk after 9h 00m", built from
+  `fmtThreshold` so it FOLLOWS the units toggle and can never disagree with the
+  control it expands into. Expanded it is one field per row (scope, size, warn, risk,
+  remove) — no horizontal layout. Owns the hours↔days conversion, and, on a group's
+  column-only rule, the separate LADDER toggle ("7 size rules · warn 1h → 4d 4h").
+  The disclosure is **hand-rolled, not `<wa-details>`**: `open() = forcedOpen() ||
+  userOpen()`, and `forcedOpen()` (a flagged rule, or the row "Add rule" just made)
+  cannot be closed away, which `wa-details` — owning and animating its own `open` —
+  fights.
+- `cutoff-group.component.ts` — one column's rules (`<sp-cutoff-group>`, likewise an
+  element selector since the `<tbody>` went away). The nesting IS the specificity
+  order. `timeInColumn` opens as 7 collapsed column groups instead of 33 flat rules;
+  `idle`/`cycle` are under the row threshold and open expanded. A group with no
+  column-only rule states its fall-through in words rather than rendering an empty
+  form that would imply a rule that isn't stored. Its "not on any configured board"
+  badge is gated on `columnsKnown` — see the annotation rule under `select-options.ts`.
 - `option-select.component.ts` — `<sp-option-select>`, the **single owner of the Web
   Awesome `<wa-select>` contract**; nothing else in the slice touches a select's
   value or options. (1) Never bind a value that isn't in the option list — WA's
@@ -91,8 +104,19 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   (`parseSizeValue` returns `undefined` for a non-bucket; `Number(null) === 0` was
   the original bug).
 - `select-options.ts` — pure, Angular-free `SelectOption[]` builders
-  (`columnOptions`/`sizeOptions`/`ensureValuePresent`/`hasDoneColumnRule`). Unit
-  tested in `client/test/select-options.test.ts`.
+  (`columnOptions`/`sizeOptions`/`ensureValuePresent`/`hasDoneColumnRule`/
+  `boardColumnsKnown`). Unit tested in `client/test/select-options.test.ts`.
+  **An option's `note` is a CLAIM, and is only made when we can support it.**
+  `ensureValuePresent` must always make the bound value selectable (rule 1), but its
+  note is optional: `columnOptions` attaches "not on any configured board" only when
+  `boardColumnsKnown(boards)` — one board with at least one column. A board whose
+  probe failed ships `columns: []`, so counting boards is not evidence. Without this
+  a site whose columns fetch returned nothing had EVERY rule annotated "not on any
+  configured board", which is a statement about our ignorance, not about the column.
+  The same gate drives the group header's `wa-badge` (`columnsKnown` input) and the
+  editor's `noColumnsNote()` callout, which names the empty state (no boards saved
+  yet vs. saved boards that have not reported columns) instead of leaving the Scope
+  picker silently empty.
 - `dom-events.ts` — `targetValue` / `targetChecked` / `selectValue`, the one place a
   value is read off a DOM or custom element. Pure functions, no class, no DI.
 - `composite-editor.component.ts` — `<sp-risk-composite>`, the power-mean `p` as a
@@ -110,7 +134,9 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   hues are the board's own `--risk`/`--warn`/`--done`; those are status colors, too
   close in light mode to carry meaning by hue, so every tile and verdict pairs the
   color with an icon and a word.
-- `format.ts` — pure display helpers (`fmtWorkHM`, firing-metric pills, band variants).
+- `format.ts` — pure display helpers (`fmtWorkHM`, `fmtThreshold` — the same number
+  the units toggle is showing, so the cutoff editor's collapsed summaries and its
+  inputs cannot disagree — firing-metric pills, band variants).
   `HOURS_PER_WORKDAY` now re-exports `WORK_HOURS_PER_DAY` from `@shared/risk-cutoffs`.
   **No SCORING of ticket data happens client-side** — the snapshot carries every
   value, band and threshold (see `worker/src/risk/`). The narrowed rule, since the

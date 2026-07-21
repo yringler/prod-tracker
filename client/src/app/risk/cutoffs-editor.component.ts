@@ -43,9 +43,9 @@ import {
   type GroupThresholdChange,
 } from './cutoff-group.component';
 import { targetChecked, targetValue } from './dom-events';
-import { fmtWorkHM } from './format';
+import { fmtThreshold, fmtWorkHM } from './format';
 import { OptionSelectComponent, type SelectOption } from './option-select.component';
-import { columnOptions, hasDoneColumnRule, sizeOptions } from './select-options';
+import { boardColumnsKnown, columnOptions, hasDoneColumnRule, sizeOptions } from './select-options';
 
 type Unit = 'hours' | 'days';
 
@@ -158,6 +158,16 @@ const EXPAND_ALL_BELOW = 10;
           from the boards that are already saved.
         </wa-callout>
       }
+      @if (noColumnsNote(); as note) {
+        <!-- The state the admin is ACTUALLY in when the picker is empty and nothing
+             failed. Without this the Scope picker just quietly offers nothing, and
+             (before the fix in select-options.ts) every rule was annotated "not on
+             any configured board" — a claim about columns made with no column data. -->
+        <wa-callout variant="neutral" style="margin-top:8px">
+          <wa-icon slot="icon" name="circle-info"></wa-icon>
+          {{ note }}
+        </wa-callout>
+      }
 
       <wa-tab-group [attr.active]="metric()" (wa-tab-show)="onTab($event)">
         @for (m of metrics; track m.id) {
@@ -184,19 +194,19 @@ const EXPAND_ALL_BELOW = 10;
         </wa-radio-group>
       </div>
 
-      <table class="cut">
-        <thead>
-          <tr>
-            <th>Scope (column)</th>
-            <th>Size</th>
-            <th id="th-warn-{{ metric() }}">Warn ≥ <wa-badge appearance="outlined" variant="warning">badge only</wa-badge></th>
-            <th id="th-risk-{{ metric() }}">Risk ≥ <wa-badge appearance="outlined" variant="danger">drives the score</wa-badge></th>
-            <th></th>
-          </tr>
-        </thead>
+      <!-- The old table's two header cells carried these two facts. There is no
+           header row any more (a rule is a sentence, not five cells), so they are
+           stated once, here, above the list they describe. -->
+      <p class="muted legend">
+        <wa-badge appearance="outlined" variant="warning">Warn</wa-badge> only paints a
+        badge. <wa-badge appearance="outlined" variant="danger">Risk</wa-badge> drives
+        the score — a ticket's score is value ÷ risk, so lowering it raises the
+        composite for every matching ticket and can flip the board.
+      </p>
+
+      <div class="rules">
         @for (g of groups(); track groupKey(g)) {
-          <tbody
-            sp-cutoff-group
+          <sp-cutoff-group
             [group]="g"
             [resolvedFallthrough]="fallthroughFor(g)"
             [expanded]="isExpanded(g)"
@@ -208,64 +218,78 @@ const EXPAND_ALL_BELOW = 10;
             [sizeDisabled]="pointsMissing()"
             [newRowKey]="newRowKey()"
             [issuesByKey]="issuesByKey()"
+            [columnsKnown]="columnsKnown()"
             (toggle)="toggleGroup(g)"
             (addRule)="addRow(g.column)"
             (scopeChange)="onScopeChange($event)"
             (thresholdChange)="onThresholdChange($event)"
             (remove)="removeRow($event)"
-          ></tbody>
+          ></sp-cutoff-group>
         }
-        <tbody>
-          <tr class="fallback">
-            <td>
-              Everything else
-              @if (hasFallback()) {
-                <wa-badge appearance="outlined" variant="neutral">Yours</wa-badge>
-              } @else {
-                <wa-badge appearance="outlined" variant="warning">Built-in floor</wa-badge>
-              }
-            </td>
-            <td>—</td>
-            <td>
-              <wa-number-input
-                size="small"
-                min="0"
-                [attr.step]="step()"
-                [attr.disabled]="!custom() ? '' : null"
-                [value]="disp(fallback().warn)"
-                (change)="setFallback('warn', $event)"
-              ></wa-number-input>
-              <div class="cap">{{ hm(fallback().warn) }}</div>
-            </td>
-            <td>
-              <wa-number-input
-                size="small"
-                min="0"
-                [attr.step]="step()"
-                [attr.disabled]="!custom() ? '' : null"
-                [value]="disp(fallback().risk)"
-                (change)="setFallback('risk', $event)"
-              ></wa-number-input>
-              <div class="cap">{{ hm(fallback().risk) }}</div>
-            </td>
-            <td></td>
-          </tr>
+
+        <div class="rule fallback">
+          <div class="head">
+            <button
+              type="button"
+              class="disclose"
+              [attr.aria-expanded]="fallbackOpen()"
+              (click)="fallbackOpen.set(!fallbackOpen())"
+            >
+              <wa-icon [attr.name]="fallbackOpen() ? 'chevron-down' : 'chevron-right'"></wa-icon>
+              <span class="sentence">{{ fallbackSummary() }}</span>
+            </button>
+            @if (hasFallback()) {
+              <wa-badge appearance="outlined" variant="neutral">Yours</wa-badge>
+            } @else {
+              <wa-badge appearance="outlined" variant="warning">Built-in floor</wa-badge>
+            }
+          </div>
           @if (!hasFallback()) {
-            <!-- The explanation belongs ON the row, not in a detached paragraph 40px
-                 below it that contradicts it. -->
-            <tr class="fallback">
-              <td colspan="5" class="cap">
-                No catch-all rule is stored, so unmatched tickets use the built-in
-                floor. Type a number here to make it yours.
-              </td>
-            </tr>
+            <!-- The explanation belongs ON the rule, not in a detached paragraph
+                 40px below it that contradicts it. -->
+            <p class="cap indent">
+              No catch-all rule is stored, so unmatched tickets use the built-in
+              floor. Type a number here to make it yours.
+            </p>
           }
-        </tbody>
-      </table>
-      <wa-tooltip [attr.for]="'th-risk-' + metric()">
-        A ticket's score is value ÷ risk, so lowering this raises the composite for
-        every matching ticket and can flip the board. "Warn" only paints a badge.
-      </wa-tooltip>
+          @if (fallbackOpen()) {
+            <div class="fields">
+              <div class="frow">
+                <span class="lbl">
+                  Warn ≥ <wa-badge appearance="outlined" variant="warning">badge only</wa-badge>
+                </span>
+                <span class="ctl">
+                  <wa-number-input
+                    size="small"
+                    min="0"
+                    [attr.step]="step()"
+                    [attr.disabled]="!custom() ? '' : null"
+                    [value]="disp(fallback().warn)"
+                    (change)="setFallback('warn', $event)"
+                  ></wa-number-input>
+                  <span class="cap">{{ hm(fallback().warn) }}</span>
+                </span>
+              </div>
+              <div class="frow">
+                <span class="lbl">
+                  Risk ≥ <wa-badge appearance="outlined" variant="danger">drives the score</wa-badge>
+                </span>
+                <span class="ctl">
+                  <wa-number-input
+                    size="small"
+                    min="0"
+                    [attr.step]="step()"
+                    [attr.disabled]="!custom() ? '' : null"
+                    [value]="disp(fallback().risk)"
+                    (change)="setFallback('risk', $event)"
+                  ></wa-number-input>
+                  <span class="cap">{{ hm(fallback().risk) }}</span>
+                </span>
+              </div>
+            </div>
+          }
+        </div>
+      </div>
 
       <div class="row" style="gap:8px; margin-top:8px; align-items:center">
         @if (custom()) {
@@ -356,33 +380,77 @@ const EXPAND_ALL_BELOW = 10;
   `,
   styles: [
     `
-      table.cut {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 8px;
-        font-size: 13px;
+      .legend {
+        font-size: 12px;
+        margin: 8px 0 0;
       }
-      table.cut th {
+      .rules {
+        margin-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+      /* The pinned fallback repeats the rule component's summary/vertical-form
+         shape; it is inline here rather than a CutoffRowComponent because it has
+         no scope and cannot be removed. */
+      .rule.fallback {
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        padding: 2px 4px;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .disclose {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        background: none;
+        border: 0;
+        padding: 4px 2px;
         text-align: left;
-        font-weight: 600;
+        font: inherit;
+        font-size: 13px;
+        color: inherit;
+        cursor: pointer;
+      }
+      .disclose:hover .sentence {
+        text-decoration: underline;
+      }
+      .fields {
+        padding: 4px 0 8px 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .frow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .lbl {
+        flex: 0 0 auto;
+        width: 190px;
         font-size: 12px;
         color: var(--muted);
-        padding: 4px 6px;
-        border-bottom: 1px solid var(--line);
       }
-      table.cut td {
-        padding: 4px 6px;
-        vertical-align: top;
-        border-bottom: 1px solid var(--line);
-      }
-      tr.fallback td {
-        font-style: italic;
-        background: var(--panel);
+      .ctl {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
       }
       .cap {
         font-size: 11px;
         color: var(--muted);
         padding-top: 2px;
+      }
+      .indent {
+        margin: 0 0 4px 22px;
       }
       .units {
         font-size: 12px;
@@ -452,6 +520,9 @@ export class RiskCutoffsEditorComponent {
   importIssues = signal<RiskConfigIssue[]>([]);
   importOk = signal(false);
   confirmDefaults = signal(false);
+  /** The pinned catch-all's own disclosure — same summary-then-vertical-form shape
+   *  as every other rule, so the list reads uniformly. */
+  fallbackOpen = signal(false);
   /** The row "Add rule" just created — marked so the button has visible feedback
    *  even when the seeded numbers match what was already resolving there. */
   newRowKey = signal<string | null>(null);
@@ -545,6 +616,32 @@ export class RiskCutoffsEditorComponent {
     const seen: string[] = [];
     for (const b of this.boards()) for (const c of b.columns) if (!seen.includes(c)) seen.push(c);
     return seen;
+  });
+
+  /** Do we hold board columns at all? Everything that says "this column is not on
+   *  any board" — the option note and the group badge — is gated on this, because
+   *  with no column data that sentence is about our ignorance, not the column. */
+  readonly columnsKnown = computed(() => boardColumnsKnown(this.boards()));
+
+  /** The empty state nothing else covers: the fetch SUCCEEDED and still yielded no
+   *  columns. Silent before; the picker simply had nothing in it. */
+  readonly noColumnsNote = computed<string | null>(() => {
+    if (this.columns() === null || this.columnsError() !== null) return null;
+    if (this.columnsKnown() || this.boardsAwaitingSave().length) return null;
+    if (this.boards().length === 0) {
+      return (
+        'No boards are configured for this site yet, so there are no columns to pick' +
+        ' from. Pick the boards above and Save — the column list is read from the' +
+        ' saved boards. The rules below still apply; a column named here just cannot' +
+        ' be checked against a board.'
+      );
+    }
+    return (
+      "None of this site's saved boards has reported its columns yet — they come" +
+      ' from each board\'s latest snapshot, or one live read for a board that has' +
+      ' never refreshed. Until then the Scope picker offers only the columns these' +
+      ' rules already use, and no column can be checked against a board.'
+    );
   });
 
   readonly groups = computed<CutoffRowGroup[]>(() =>
@@ -679,6 +776,16 @@ export class RiskCutoffsEditorComponent {
   }
 
   // --- Display helpers --------------------------------------------------------
+
+  /** "Everything else — warn after 3d 0h 00m, risk after 9d 0h 00m". */
+  readonly fallbackSummary = computed(
+    () =>
+      `Everything else — warn after ${this.t(this.fallback().warn)}, risk after ${this.t(this.fallback().risk)}`,
+  );
+
+  private t(hours: number): string {
+    return fmtThreshold(hours, this.unit(), workHoursPerDay(this.schedule()));
+  }
 
   hm(hours: number): string {
     return fmtWorkHM(hours) ?? '—';

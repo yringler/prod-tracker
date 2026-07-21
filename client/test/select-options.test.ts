@@ -14,6 +14,7 @@
 // not render the surface the bug lived on.
 import { describe, expect, it } from 'vitest';
 import {
+  boardColumnsKnown,
   columnOptions,
   ensureValuePresent,
   hasDoneColumnRule,
@@ -40,6 +41,14 @@ describe('ensureValuePresent', () => {
     const out = ensureValuePresent([{ value: 'a', label: 'A' }], 'gone', 'not on any board');
     expect(out).toHaveLength(2);
     expect(out[1]).toEqual({ value: 'gone', label: 'gone', note: 'not on any board' });
+  });
+
+  it('synthesizes WITHOUT a note when the caller has nothing to assert', () => {
+    // Presence is the invariant; the note is an optional claim.
+    expect(ensureValuePresent([{ value: 'a', label: 'A' }], 'gone')[1]).toEqual({
+      value: 'gone',
+      label: 'gone',
+    });
   });
 });
 
@@ -71,9 +80,32 @@ describe('columnOptions', () => {
     expect(out.map((o) => o.value)).toContain('Done');
   });
 
-  it('synthesizes a stored column that no board has any more', () => {
+  it('synthesizes a stored column that no board has any more, and SAYS so', () => {
     const out = columnOptions(boards, { value: 'Retired', showDone: false });
     expect(out.find((o) => o.value === 'Retired')?.note).toBe('not on any configured board');
+  });
+
+  // The annotation is a CLAIM about the board set. With no board data we are in no
+  // position to make it — the screenshot that prompted this had EVERY row annotated
+  // "not on any configured board" purely because the columns fetch returned nothing.
+  // Rule 1 (the bound value is always present) is unaffected and non-negotiable.
+  it('with ZERO known boards, still offers the value but claims nothing about it', () => {
+    const out = columnOptions([], { value: 'In Progress', showDone: false });
+    const opt = out.find((o) => o.value === 'In Progress');
+    expect(opt).toBeDefined();
+    expect(opt?.note).toBeUndefined();
+  });
+
+  it('treats a board whose columns failed to load as no evidence either', () => {
+    // `listRiskColumns` degrades an unprobeable board to `columns: []` rather than
+    // failing the endpoint — so counting BOARDS would re-assert the false claim.
+    const blind: BoardColumns[] = [{ name: 'Sprint A', columns: [], doneColumn: null }];
+    expect(boardColumnsKnown(blind)).toBe(false);
+    expect(columnOptions(blind, { value: 'In Progress', showDone: false })[1]?.note).toBeUndefined();
+  });
+
+  it('boardColumnsKnown is true as soon as one board has a column', () => {
+    expect(boardColumnsKnown(boards)).toBe(true);
   });
 
   it('groups columns by board and never repeats one', () => {
