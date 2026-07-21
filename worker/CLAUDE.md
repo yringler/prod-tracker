@@ -70,13 +70,37 @@ each tick (each isolated).
   client), `refresh.ts` (the 4th isolated cron job — demand-driven eligibility,
   org-fair scheduling under a per-tick subrequest budget, overwrite-only snapshots),
   `store.ts` (**all `risk_*` SQL via `env.DB` — never `dao.ts`**, the adapter-store
-  convention), `notify.ts` (the slice's ONLY crossing of the notification seam:
+  convention), `notify.ts` (one of two crossings of the notification seam:
   tells an org's admins when its boards stop/resume updating, via
   `registry.resolve()` only — never an adapter, never a vendor string; deduped per
   ORG by a claim-before-send CAS on `risk_board_config.degraded_notified_*`, and
-  eslint-walled in `.eslintrc.cjs` alongside `routes/**` and `cron/**`) and
+  eslint-walled in `.eslintrc.cjs` alongside `routes/**` and `cron/**`; exports
+  `deliverToAccount`, the per-account channel loop shared with alerts.ts),
+  `alerts.ts` (the SECOND seam crossing — Phase-2 health nudges, see below) and
   `routes.ts` (two dispatchers: the authed read tier and the admin config tier).
   Wire types live in `@shared/risk`.
+  - **Health-change nudges (Phase 2, `alerts.ts`).** When a ticket sits
+    continuously at the `risk` tier for `FIRE_AFTER_RISK_WORK_HOURS` (8) **work**-hours,
+    its assignee gets one private nudge through their linked channels (via
+    `deliverToAccount`; registry seam only). Runs at the seam in `refreshBoard`
+    (`processBoardAlerts`, before `overwriteSnapshot`, wrapped so it can never fail
+    the board). Firing is **transition-only** with hysteresis: a pure state machine
+    (`stepAlertState`) latches on the edge into `firing`, stays quiet, and re-arms
+    only on a full return to `ok`/done — with a `REFIRE_COOLDOWN_WORK_HOURS` (16)
+    gate before it can fire again. The accumulator is a stored **timestamp**
+    (`risk_since`) measured by the org `WorkClock`, NOT a refresh counter, so a
+    re-run recomputes the identical verdict (idempotent under overlapping polls).
+    Ordering is **claim-before-send** (`store.claimAlertFiring`, the CAS twin of
+    `claimDegradedNotice`): persist the latch, then deliver — lost, never duplicated.
+    Quiet hours (`isWorkOpen` off the work clock) **hold** a fire, they don't drop it
+    — the accumulator persists and the next work-open refresh re-derives and fires.
+    Recipient key is `RiskTicket.assigneeAccountId` (populated by `mapIssue`;
+    identity-mapped to `user_channels.account_id` — no join). Unassigned / unlinked /
+    muted assignees consume the transition silently (claim with a NULL stamp, no
+    per-refresh re-probe). Tables `risk_alert_state` (per ticket per board) and
+    `risk_alert_prefs` (per-user mute opt-out) are touched only by `store.ts`; the
+    two self-scoped prefs routes (`GET/PUT /api/risk/alerts/prefs`) live in
+    `routes.ts` (`ctx.accountId`, never `dao.ts`).
   - **Scopes the slice needs beyond the poller's.** `fetchBoardMaps` reads
     `/board/{id}/configuration`, the one Agile call needing
     `read:board-scope.admin:jira-software` (a **separate** scope from
@@ -409,6 +433,12 @@ SQL against better-sqlite3.
   editor's two load-time transforms: over every (column × points) pair the shipped
   tables can distinguish, `collapseRedundantRules` (64 idle rules -> 7) and the
   `toEditorModel`/`fromEditorModel` round-trip change **no** resolution.
+- `risk-alerts.test.ts` — Phase-2 health nudges: the pure hysteresis policy
+  (threshold, weekend-zero accrual, mid-vs-ok, recovered cooldown, GC, re-run
+  safety, drivers/hash/format) + the diff step through `processBoardAlerts`
+  (fire-once-on-edge, per-recipient aggregation, quiet-hours hold, the claim CAS,
+  unreachable/muted consume-and-latch, board-departure cleanup, alert-pass D1
+  failure not failing the board, deploy-day storm guard).
 - `risk-notify.test.ts` — the degraded/recovery notice: per-org collapse, the
   claim-before-send CAS (idempotent re-run), renotify cadence + reason change,
   recipient scoping (org admins only, bootstrap fallback, unreachable org still

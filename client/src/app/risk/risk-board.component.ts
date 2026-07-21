@@ -35,6 +35,14 @@ import { bandVariant, firingMetrics, sinceLabel, type MetricPill } from './forma
             }
           </wa-select>
         }
+        <wa-switch
+          size="small"
+          [checked]="muted()"
+          (change)="onToggleMute($event)"
+          title="Silence the private 'this ticket looks stuck' nudges for your assigned tickets"
+        >
+          Mute nudges
+        </wa-switch>
         @if (auth.isAdmin()) {
           <wa-button size="small" appearance="plain" routerLink="/risk/admin">
             <wa-icon slot="start" name="gear"></wa-icon>
@@ -155,6 +163,7 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
   board = signal<RiskBoardResponse | null>(null);
   loading = signal(true);
   refreshingNow = signal(false);
+  muted = signal(false);
 
   snapshot = computed(() => this.board()?.snapshot ?? null);
   degradedReason = computed(() => this.board()?.degradedReason ?? null);
@@ -175,6 +184,7 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
       },
       error: () => this.loading.set(false),
     });
+    this.api.riskAlertPrefs().subscribe({ next: (p) => this.muted.set(p.muted) });
   }
 
   ngOnDestroy(): void {
@@ -229,6 +239,16 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
         this.fetchBoard(boardId);
       },
       error: () => this.refreshingNow.set(false),
+    });
+  }
+
+  /** Persist the mute opt-out; reflect the server's echoed value (revert on error). */
+  onToggleMute(e: Event): void {
+    const next = (e.target as HTMLInputElement).checked;
+    this.muted.set(next);
+    this.api.putRiskAlertPrefs({ muted: next }).subscribe({
+      next: (p) => this.muted.set(p.muted),
+      error: () => this.muted.set(!next),
     });
   }
 

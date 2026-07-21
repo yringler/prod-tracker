@@ -5,6 +5,7 @@
 // (including that the admin tier sits inside the requireAdmin block).
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
+  PutRiskAlertPrefsRequest,
   RiskAdminConfigResponse,
   RiskBoardResponse,
   RiskBoardsResponse,
@@ -389,6 +390,43 @@ describe('admin config', () => {
     await put({ boards: [{ boardId: 9, name: 'Comms' }] });
     expect(await getSnapshot(env, CLOUD, 5)).toBeNull();
     expect(await getState(env, CLOUD, 5)).toBeNull();
+  });
+});
+
+describe('alert prefs (self-scoped)', () => {
+  const prefsGet = (accountId: string) =>
+    riskRoutes(
+      new Request('https://app.example/api/risk/alerts/prefs'),
+      ctxFor(accountId),
+      '/api/risk/alerts/prefs',
+      'GET',
+    );
+  const prefsPut = (accountId: string, body: unknown) =>
+    riskRoutes(
+      new Request('https://app.example/api/risk/alerts/prefs', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+      ctxFor(accountId),
+      '/api/risk/alerts/prefs',
+      'PUT',
+    );
+
+  it('defaults to unmuted, round-trips the toggle, and stays per-account', async () => {
+    expect(await (await prefsGet(DEV)).json()).toEqual({ muted: false });
+
+    const put = await prefsPut(DEV, { muted: true } satisfies PutRiskAlertPrefsRequest);
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ muted: true });
+    expect(await (await prefsGet(DEV)).json()).toEqual({ muted: true });
+
+    // Another account is unaffected — the route reads/writes ctx.accountId only.
+    expect(await (await prefsGet(ADMIN)).json()).toEqual({ muted: false });
+  });
+
+  it('rejects a non-boolean muted', async () => {
+    expect((await prefsPut(DEV, {})).status).toBe(400);
+    expect((await prefsPut(DEV, { muted: 'yes' })).status).toBe(400);
   });
 });
 

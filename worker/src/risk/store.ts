@@ -19,6 +19,9 @@ import type {
 } from '@shared/risk';
 import { runChanges } from '../db/driver';
 import type { Env } from '../env';
+// Type-only (erased at runtime): the persisted alert-state shape is owned by the
+// pure policy module. No runtime cycle — alerts.ts imports the writers below.
+import type { AlertState } from './alerts';
 
 /** Consecutive failed refreshes before a board is reported as degraded. */
 export const MAX_CONSECUTIVE_FAILURES = 5;
@@ -403,8 +406,9 @@ export async function clearDegradedNotice(
   return runChanges(res) > 0;
 }
 
-/** Cleanup when a board is dropped from the org's config: its snapshot and its
- *  refresh state go with it, so a re-added board starts clean. */
+/** Cleanup when a board is dropped from the org's config: its snapshot, its
+ *  refresh state, and its per-ticket alert-hysteresis rows go with it, so a
+ *  re-added board starts clean. */
 export async function deleteBoardState(
   env: Env,
   cloudId: string,
@@ -415,6 +419,176 @@ export async function deleteBoardState(
     .run();
   await env.DB.prepare(`DELETE FROM risk_snapshots WHERE cloud_id = ? AND board_id = ?`)
     .bind(cloudId, boardId)
+    .run();
+  await env.DB.prepare(`DELETE FROM risk_alert_state WHERE cloud_id = ? AND board_id = ?`)
+    .bind(cloudId, boardId)
+    .run();
+}
+
+// --- Alert hysteresis state (Phase 2) -----------------------------------------
+//
+// One row per ticket per board while it is in (or just out of) a risk episode.
+// The pure state machine lives in alerts.ts (stepAlertState); these are the plain
+// idempotent writers plus the claim-before-send CAS (claimAlertFiring), which
+// mirrors claimDegradedNotice: exactly one concurrent tick may flip a row into
+// 'firing', so exactly one nudge is sent.
+
+interface AlertStateRow {
+  issue_key: string;
+  phase: string;
+  risk_since: string | null;
+  risk_streak: number;
+  last_notified_at: string | null;
+  last_payload_hash: string | null;
+  updated_at: string;
+}
+
+/** Every alert row for one board, keyed by issue_key — the diff step's prior state. */
+export async function listAlertStates(
+  env: Env,
+  cloudId: string,
+  boardId: number,
+): Promise<Map<string, AlertState>> {
+  const { results } = await env.DB.prepare(
+    `SELECT issue_key, phase, risk_since, risk_streak, last_notified_at, last_payload_hash, updated_at
+       FROM risk_alert_state WHERE cloud_id = ? AND board_id = ?`,
+  )
+    .bind(cloudId, boardId)
+    .all<AlertStateRow>();
+  const out = new Map<string, AlertState>();
+  for (const r of results) {
+    out.set(r.issue_key, {
+      phase: r.phase as AlertState['phase'],
+      riskSince: r.risk_since,
+      riskStreak: r.risk_streak,
+      lastNotifiedAt: r.last_notified_at,
+      lastPayloadHash: r.last_payload_hash,
+      updatedAt: r.updated_at,
+    });
+  }
+  return out;
+}
+
+/** Accumulate / latch / recover: an absolute-value upsert (writes the whole row,
+ *  not a SQL increment). Note `risk_streak` is nonetheless derived by
+ *  `stepAlertState` as `prev + 1` from the DB-loaded row, so a genuine DB
+ *  round-trip re-run DOES re-increment it (and `updated_at` advances). That's
+ *  diagnostic-only and does NOT affect the fire verdict, which is derived from
+ *  `risk_since` + the work clock (plan §2.7/§5). */
+export async function upsertAlertState(
+  env: Env,
+  cloudId: string,
+  boardId: number,
+  issueKey: string,
+  s: AlertState,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO risk_alert_state
+       (cloud_id, board_id, issue_key, phase, risk_since, risk_streak,
+        last_notified_at, last_payload_hash, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(cloud_id, board_id, issue_key) DO UPDATE SET
+       phase             = excluded.phase,
+       risk_since        = excluded.risk_since,
+       risk_streak       = excluded.risk_streak,
+       last_notified_at  = excluded.last_notified_at,
+       last_payload_hash = excluded.last_payload_hash,
+       updated_at        = excluded.updated_at`,
+  )
+    .bind(
+      cloudId,
+      boardId,
+      issueKey,
+      s.phase,
+      s.riskSince,
+      s.riskStreak,
+      s.lastNotifiedAt,
+      s.lastPayloadHash,
+      s.updatedAt,
+    )
+    .run();
+}
+
+/** Drop a ticket's alert row (it recovered past the TTL, or left the board). */
+export async function deleteAlertState(
+  env: Env,
+  cloudId: string,
+  boardId: number,
+  issueKey: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `DELETE FROM risk_alert_state WHERE cloud_id = ? AND board_id = ? AND issue_key = ?`,
+  )
+    .bind(cloudId, boardId, issueKey)
+    .run();
+}
+
+/**
+ * Claim a ticket's transition into 'firing' — the send's serialization point.
+ * Mirrors claimDegradedNotice: flip to 'firing' iff the row is still exactly what
+ * the caller read (its prior phase AND its prior last_notified_at), so exactly one
+ * concurrent tick wins and therefore exactly one nudge goes out. `risk_since` is
+ * deliberately not written, so the accrual origin survives the latch. Pass
+ * `lastNotifiedAt = null` for an unreachable recipient: the episode is consumed
+ * (no per-refresh channel re-probing) while recording that nothing was sent.
+ */
+export async function claimAlertFiring(
+  env: Env,
+  cloudId: string,
+  boardId: number,
+  issueKey: string,
+  prevPhase: 'armed' | 'recovered',
+  prevNotifiedAt: string | null,
+  next: {
+    riskStreak: number;
+    lastNotifiedAt: string | null;
+    lastPayloadHash: string | null;
+    updatedAt: string;
+  },
+): Promise<boolean> {
+  const res = await env.DB.prepare(
+    `UPDATE risk_alert_state
+        SET phase = 'firing', risk_streak = ?, last_notified_at = ?,
+            last_payload_hash = ?, updated_at = ?
+      WHERE cloud_id = ? AND board_id = ? AND issue_key = ?
+        AND phase IS ? AND last_notified_at IS ?`,
+  )
+    .bind(
+      next.riskStreak,
+      next.lastNotifiedAt,
+      next.lastPayloadHash,
+      next.updatedAt,
+      cloudId,
+      boardId,
+      issueKey,
+      prevPhase,
+      prevNotifiedAt,
+    )
+    .run();
+  return runChanges(res) > 0;
+}
+
+// --- Alert opt-out (Phase 2) --------------------------------------------------
+
+/** Whether this account has muted struggling-ticket nudges. Absent row = not muted. */
+export async function getAlertMuted(env: Env, accountId: string): Promise<boolean> {
+  const r = await env.DB.prepare(`SELECT muted FROM risk_alert_prefs WHERE account_id = ?`)
+    .bind(accountId)
+    .first<{ muted: number }>();
+  return r ? r.muted === 1 : false;
+}
+
+export async function setAlertMuted(
+  env: Env,
+  accountId: string,
+  muted: boolean,
+  atIso: string = nowIso(),
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO risk_alert_prefs (account_id, muted, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(account_id) DO UPDATE SET muted = excluded.muted, updated_at = excluded.updated_at`,
+  )
+    .bind(accountId, muted ? 1 : 0, atIso)
     .run();
 }
 
@@ -437,6 +611,10 @@ export async function riskEraseAccount(env: Env, accountId: string): Promise<voi
   await env.DB.prepare(`UPDATE risk_board_config SET configured_by = NULL WHERE configured_by = ?`)
     .bind(accountId)
     .run();
+
+  // The account's alert opt-out is the one row here keyed by its raw account id
+  // (risk_alert_state stores only issue keys). Drop it with the account.
+  await env.DB.prepare(`DELETE FROM risk_alert_prefs WHERE account_id = ?`).bind(accountId).run();
 
   const { results } = await env.DB.prepare(
     `SELECT cloud_id, boards_json FROM risk_board_config WHERE refresher_account_id = ?`,
