@@ -91,9 +91,9 @@ const PUBLIC_ROUTES = ["/privacy"];
                                     }}</wa-option>
                                 }
                             </wa-select>
-                        } @else if (me.sites.length === 1) {
+                        } @else if (me.sites[0]; as onlySite) {
                             <wa-tag size="small" appearance="outlined">{{
-                                me.sites[0].name
+                                onlySite.name
                             }}</wa-tag>
                         }
                         <a

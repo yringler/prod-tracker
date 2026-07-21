@@ -10,6 +10,7 @@ import type {
   RiskBoardResponse,
   RiskBoardsResponse,
   RiskColumnsResponse,
+  RiskFieldCandidatesResponse,
   RiskConfigIssue,
   PutRiskConfigRequest,
 } from '@shared/risk';
@@ -314,6 +315,81 @@ describe('admin config', () => {
         expect(body.probeError).toBeTruthy();
       } finally {
         globalThis.fetch = realFetch;
+      }
+    });
+  });
+
+  // The Fields panel's vocabulary. Both halves are live Jira reads with the ADMIN'S
+  // token — a field/status list is in no snapshot — but the STATUS half is the one
+  // the picker can do without, so it degrades to [] instead of failing the panel.
+  describe('GET /api/admin/risk/fields', () => {
+    const fields = async (accountId = ADMIN) =>
+      riskAdminRoutes(
+        new Request('https://app.example/api/admin/risk/fields'),
+        ctxFor(accountId),
+        '/api/admin/risk/fields',
+        'GET',
+      );
+
+    const stubJira = (statusRes: () => Response) => {
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.includes('/rest/api/3/field')) {
+          return Response.json([
+            { id: 'customfield_1', name: 'Flagged', custom: true },
+            { id: 'customfield_2', name: 'Rejection count', custom: true },
+            { id: 'summary', name: 'Flagged summary' }, // not a customfield_*
+          ]);
+        }
+        if (url.includes('/rest/api/3/status')) return statusRes();
+        return new Response('{}', { status: 200 });
+      }) as unknown as typeof fetch;
+      return () => {
+        globalThis.fetch = realFetch;
+      };
+    };
+
+    const okStatuses = () =>
+      Response.json([
+        { name: 'Done', statusCategory: { key: 'done' } },
+        { name: 'In Review', statusCategory: { key: 'indeterminate' } },
+        { name: 'To Do', statusCategory: { key: 'new' } },
+        { name: 'In Progress', statusCategory: { key: 'indeterminate' } },
+        // Jira lists a status once per project that uses it; the config stores a
+        // NAME, so the repeat is one choice, not two.
+        { name: 'In Progress', statusCategory: { key: 'indeterminate' } },
+        { name: 'Odd', statusCategory: {} },
+      ]);
+
+    it('serves the field candidates and the site statuses, in-progress first', async () => {
+      const restore = stubJira(okStatuses);
+      try {
+        const body = (await (await fields()).json()) as RiskFieldCandidatesResponse;
+        expect(body.flagged).toEqual([{ id: 'customfield_1', name: 'Flagged' }]);
+        expect(body.rejections).toEqual([{ id: 'customfield_2', name: 'Rejection count' }]);
+        expect(body.statuses).toEqual([
+          { name: 'In Progress', category: 'indeterminate' },
+          { name: 'In Review', category: 'indeterminate' },
+          { name: 'To Do', category: 'new' },
+          { name: 'Done', category: 'done' },
+          { name: 'Odd', category: 'unknown' },
+        ]);
+      } finally {
+        restore();
+      }
+    });
+
+    it('degrades the status list to [] rather than failing the panel', async () => {
+      const restore = stubJira(() => new Response('nope', { status: 403 }));
+      try {
+        const res = await fields();
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as RiskFieldCandidatesResponse;
+        expect(body.statuses).toEqual([]);
+        expect(body.flagged).toHaveLength(1);
+      } finally {
+        restore();
       }
     });
   });

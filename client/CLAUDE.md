@@ -40,11 +40,118 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   stripe, degraded banner, polls while the first snapshot is being built).
 - `risk-detail.component.ts` — `wa-dialog` rundown with each ticket's own resolved
   thresholds and per-column time bars.
-- `risk-admin.component.ts` — per-site config (boards, refresher account, optional
-  field pickers, JSON cutoff/composite/schedule editors).
-- `format.ts` — pure display helpers (`fmtWorkHM`, firing-metric pills, band variants).
-  **No risk math happens client-side** — the snapshot carries every value, band and
-  threshold (see `worker/src/risk/`).
+- `risk-admin.component.ts` — per-site config: boards, refresher account, the
+  optional field pickers + the In Progress status picker (all `<sp-option-select>`,
+  fed by `GET /api/admin/risk/fields`; the status one used to be a free-text box
+  because nothing served the site's status list), the two structured editors below, and the work-schedule JSON box
+  (a visual schedule editor is deferred). Owns save + the message banner, and
+  renders the server's per-rule `issues` on a 400.
+- `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold editor that
+  replaced the raw-JSON textarea. A tab per metric, rules **grouped by column**, a
+  pinned undeletable "Everything else" fallback rule, a work-hours↔work-days toggle
+  (hours are always what's stored), a "Test a ticket" preview, and an Advanced JSON
+  import/export. **There is no `<table>`**: a rule is a one-line SENTENCE that
+  expands into a vertical form (see `cutoff-row.component.ts`), because a 5-column
+  table overflowed a normal viewport to show two number inputs. The two facts the
+  old `<thead>` carried ("warn = badge only", "risk = drives the score, value ÷ risk")
+  are now a legend above the list. `input()` for
+  `cutoffs`/`defaults`/`schedule`/`columns`/`columnsError`/`boardsAwaitingSave`;
+  `output()` emits `RiskCutoffs | null` (**null = inherit**, stored NULL). It owns
+  the MODEL only (`model`/`custom`/`load`/`patch`/`emit`) and threads state one way
+  through inputs — deliberately **no shared service or store**. Four load-bearing
+  rules live here:
+  - **The parent must bind its `serverCutoffs`, never the draft it gets back from
+    `(cutoffsChange)`.** One signal for both made the editor's own emit re-enter its
+    own input, whose effect re-runs `load()` — which re-collapses — so every
+    keystroke was clobbered, a just-added row was deleted, and "repaired N rules"
+    re-announced. `risk-admin.component.ts` keeps `serverCutoffs` (written only on
+    load and on a successful save) separate from the `cutoffs` draft.
+  - **Collapse runs on LOAD, never on EDIT.** `collapseCutoffs` is reachable from
+    exactly three places (the input effect, the follow-defaults transitions,
+    `doImport`). Running it on a model holding a new row will delete that row.
+  - **Rules serialize in DISPLAY order** (`editorRowsInDisplayOrder`). A column-only
+    and a size-only rule are equally specific to `resolveRules`, so array position
+    decides — serializing in display order makes what you see the tie-break order.
+  - **"Add rule" seeds from `seedRowFor`**, i.e. from what the new row's own scope
+    resolves to today, so adding a rule changes no resolution until you type in it.
+- `cutoff-row.component.ts` — one rule, as a **summary line that expands into a
+  vertical form** (`<sp-cutoff-row>`, an ELEMENT selector now the table is gone —
+  it had to be `tr[sp-cutoff-row]` while the host was a `<tr>`). Collapsed it reads
+  "In Progress · points 4–5 — warn after 5h 00m, risk after 9h 00m", built from
+  `fmtThreshold` so it FOLLOWS the units toggle and can never disagree with the
+  control it expands into. Expanded it is one field per row (scope, size, warn, risk,
+  remove) — no horizontal layout. Owns the hours↔days conversion, and, on a group's
+  column-only rule, the separate LADDER toggle ("7 size rules · warn 1h → 4d 4h").
+  The disclosure is **hand-rolled, not `<wa-details>`**: `open() = forcedOpen() ||
+  userOpen()`, and `forcedOpen()` (a flagged rule, or the row "Add rule" just made)
+  cannot be closed away, which `wa-details` — owning and animating its own `open` —
+  fights.
+- `cutoff-group.component.ts` — one column's rules (`<sp-cutoff-group>`, likewise an
+  element selector since the `<tbody>` went away). The nesting IS the specificity
+  order. `timeInColumn` opens as 7 collapsed column groups instead of 33 flat rules;
+  `idle`/`cycle` are under the row threshold and open expanded. A group with no
+  column-only rule states its fall-through in words rather than rendering an empty
+  form that would imply a rule that isn't stored. Its "not on any configured board"
+  badge is gated on `columnsKnown` — see the annotation rule under `select-options.ts`.
+- `option-select.component.ts` — `<sp-option-select>`, the **single owner of the Web
+  Awesome `<wa-select>` contract**; nothing else in the slice touches a select's
+  value or options. (1) Never bind a value that isn't in the option list — WA's
+  getter filters the bound value against its own option set and returns null
+  otherwise, blanking display AND read-back, so a missing value is synthesized and
+  annotated. (2) Never mark the selected option `disabled` — same filter — enforced
+  structurally: options carry no `disabled` field. (3) "Not offered" is expressed by
+  OMITTING an option (that is what `showDone` now does: it **offers** Done columns
+  rather than greying them out, and defaults ON when the table holds a Done rule).
+  (4) Read-back is normalized once and REJECTED rather than coerced
+  (`parseSizeValue` returns `undefined` for a non-bucket; `Number(null) === 0` was
+  the original bug).
+- `select-options.ts` — pure, Angular-free `SelectOption[]` builders
+  (`columnOptions`/`sizeOptions`/`fieldOptions`/`statusOptions`/`ensureValuePresent`/
+  `hasDoneColumnRule`/`boardColumnsKnown`). Unit tested in
+  `client/test/select-options.test.ts`.
+  **"None"/"Default" is an OPTION, never the absence of one.** `fieldOptions` leads
+  with a real `''` option and `statusOptions` with `Default — <shipped default>`,
+  because a bound `''` with no `''` option is exactly the value WA filters away —
+  which is why the Fields panel's raw `<wa-select>`s used to read as though the
+  first discovered candidate were configured when nothing was.
+  **An option's `note` is a CLAIM, and is only made when we can support it.**
+  `ensureValuePresent` must always make the bound value selectable (rule 1), but its
+  note is optional: `columnOptions` attaches "not on any configured board" only when
+  `boardColumnsKnown(boards)` — one board with at least one column. A board whose
+  probe failed ships `columns: []`, so counting boards is not evidence. Without this
+  a site whose columns fetch returned nothing had EVERY rule annotated "not on any
+  configured board", which is a statement about our ignorance, not about the column.
+  The same gate drives the group header's `wa-badge` (`columnsKnown` input) and the
+  editor's `noColumnsNote()` callout, which names the empty state (no boards saved
+  yet vs. saved boards that have not reported columns) instead of leaving the Scope
+  picker silently empty.
+- `dom-events.ts` — `targetValue` / `targetChecked` / `selectValue`, the one place a
+  value is read off a DOM or custom element. Pure functions, no class, no DI.
+- `composite-editor.component.ts` — `<sp-risk-composite>`, the power-mean `p` as a
+  labeled slider plus the five weights, where `0` renders as an explicit
+  **Excluded** badge (weight ≤ 0 drops the metric entirely; an *absent* weight
+  defaults to 1 — not the same thing).
+- `impact-preview.component.ts` — `<sp-risk-impact>`, the anti-footgun that answers
+  "what would these settings do?": per saved board, "12 at risk / 9 warning / 40
+  healthy" with a signed delta per tier, a Now/After composition bar, and a sample
+  of the tickets that change tier. It debounces (500 ms) a `POST
+  /api/admin/risk/preview` — a server-side re-score of the STORED snapshots, so no
+  scoring happens here and it costs no Jira calls. It renders the server's
+  `scheduleStale` caveat verbatim (the preview covers thresholds and weights, never
+  a schedule edit) and reports a board with no snapshot instead of hiding it. Tier
+  hues are the board's own `--risk`/`--warn`/`--done`; those are status colors, too
+  close in light mode to carry meaning by hue, so every tile and verdict pairs the
+  color with an icon and a word.
+- `format.ts` — pure display helpers (`fmtWorkHM`, `fmtThreshold` — the same number
+  the units toggle is showing, so the cutoff editor's collapsed summaries and its
+  inputs cannot disagree — firing-metric pills, band variants).
+  `HOURS_PER_WORKDAY` now re-exports `WORK_HOURS_PER_DAY` from `@shared/risk-cutoffs`.
+  **No SCORING of ticket data happens client-side** — the snapshot carries every
+  value, band and threshold (see `worker/src/risk/`). The narrowed rule, since the
+  cutoffs editor landed: *config-editing math is shared* — the editor imports
+  `resolveCutoff`/`validateCutoffs`/`toEditorModel` from `@shared/risk-cutoffs` and
+  runs the **server's own** functions, precisely so its "which rule wins" preview
+  cannot drift from the scorer. Read-path components still recompute nothing.
 
 UI / charts — `src/app/ui/` (reusable):
 - `chart.component.ts` — `<sp-chart>`, thin Chart.js wrapper owning the canvas/lifecycle; registers only the line-chart pieces (no `TimeScale`). Updates in place on config swap (avoids replaying the entry animation).
@@ -68,6 +175,29 @@ Other `src/` files:
 - `styles.css` — global styles: per-theme brand palette CSS vars (`--accent`/`--claimed`/`--done`/…) and a Web Awesome token bridge mapping `--wa-color-*` onto them.
 
 ## Conventions & patterns
+
+### Template type checking (load-bearing)
+
+`client/tsconfig.app.json` sets **`fullTemplateTypeCheck: true`** and
+**`strictTemplates: true`** under `angularCompilerOptions`. Do not remove them.
+
+- Without `fullTemplateTypeCheck`, Angular runs only *basic* template checking:
+  top-level binding expressions are checked, but expressions inside an **embedded
+  view** (`@if` / `@for` / `ng-template`) are **not**. That hole shipped a runtime
+  `TypeError: ctx.String is not a function` inside `@for` in the cutoffs editor,
+  blanking every row after the first, with a green build. The flag turns that whole
+  bug class — any template expression referencing a JS global or a member the
+  component class doesn't have — into a **build failure**, and `wrangler.toml`'s
+  `[build]` already runs `npm run build:client` before every dev/deploy, so the gate
+  was wired; only the flag was missing.
+- **Never satisfy this by adding `readonly String = String` (or any equivalent
+  alias) to a component class.** It fixes the build and re-hides the entire bug
+  class — `risk-board.component.ts` carried exactly that field, which is why its two
+  `String(...)` sites did not error. Add a real typed member instead
+  (`sizeValue()`, `weightText()`, `boardValue()`).
+- `strictTemplates` was measured before adoption: 4 errors repo-wide, all one real
+  defect (a `<wa-input>`'s `value` is `string | null`), all fixed by widening the
+  parameter type — no cast, no `$any`.
 
 ### Standalone + signals
 - Every component is `standalone: true` with explicit `imports`. No NgModules anywhere.
@@ -141,7 +271,12 @@ Run from the repo root:
   `ng serve`. `npm run deploy` builds the client then `wrangler deploy`.
 - `npm run typecheck` — root + shared TS (client is type-checked as part of the build).
 
-There is no standalone client test suite; tests live in `worker/` (vitest).
+There is no Angular test suite (no TestBed, no jsdom — see `DEFERRED.md` for the
+argued reason). The root `vitest.config.ts` `include` does carry
+**`client/test/**/*.test.ts`** for **pure, Angular-free** client modules only
+(today: `src/app/risk/select-options.ts`); the `@shared` alias and node environment
+already cover it, no extra config. Anything semantically risky should move to
+`shared/` and be tested there instead. Everything else lives in `worker/test/`.
 
 ## Where to make changes
 

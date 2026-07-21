@@ -113,10 +113,18 @@ Short pointers — read the referenced code/tests before changing anything nearb
   that time — not the issue's current sprint.
 - **Schema mirroring:** `worker/src/db/schema.sql` mirrors the full migrated schema and
   backs the tests. Any migration change must keep it in sync — see `migrations/CLAUDE.md`.
+- **Angular templates are fully type-checked.** `client/tsconfig.app.json` sets
+  `fullTemplateTypeCheck` + `strictTemplates`. Without the former, expressions inside
+  `@if`/`@for` are NOT checked, which once shipped a runtime `ctx.String is not a
+  function` with a green build. Never satisfy a template type error by aliasing a JS
+  global onto the component class (`readonly String = String`) — that re-hides the
+  whole bug class. See `client/CLAUDE.md`.
 
 ## Testing
 
-- **Vitest** (`npm test`). Coverage lives in `worker/test/` and includes changelog
+- **Vitest** (`npm test`). Coverage lives in `worker/test/`, `shared/test/` and — for
+  PURE, Angular-free client modules only — `client/test/`. There is deliberately no
+  Angular TestBed/jsdom suite (see `DEFERRED.md`). It includes changelog
   idempotency, the privacy invariant, DAO behavior, domain logic, admin guards, and
   multi-site token handling.
 - Tests run against `worker/src/db/schema.sql` (via better-sqlite3), so keep that schema

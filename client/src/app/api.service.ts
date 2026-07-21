@@ -40,8 +40,11 @@ import type {
   RiskAlertPrefs,
   RiskBoardCandidatesResponse,
   RiskBoardResponse,
+  RiskColumnsResponse,
   RiskBoardsResponse,
   RiskFieldCandidatesResponse,
+  RiskPreviewRequest,
+  RiskPreviewResponse,
 } from '@shared/risk';
 
 // Typed client for /api/*. Same-origin — the browser NEVER talks to Jira (no
@@ -190,6 +193,18 @@ export class ApiService {
   adminRiskBoards(probe?: number): Observable<RiskBoardCandidatesResponse> {
     const q = probe == null ? '' : `?probe=${probe}`;
     return this.http.get<RiskBoardCandidatesResponse>(`/api/admin/risk/boards${q}`);
+  }
+  /** Per-board column vocabulary for the cutoffs editor. Served from the stored
+   *  snapshots where possible, so this is normally free of Jira calls. */
+  adminRiskColumns(): Observable<RiskColumnsResponse> {
+    return this.http.get<RiskColumnsResponse>('/api/admin/risk/columns');
+  }
+  /** "What would these thresholds do to the boards?" — the server re-scores the
+   *  STORED snapshots with the same scorer the cron uses, so this costs no Jira
+   *  calls and cannot drift from what the next refresh will do. Debounce it; it is
+   *  a POST because the whole candidate config is the query. */
+  adminRiskPreview(body: RiskPreviewRequest): Observable<RiskPreviewResponse> {
+    return this.http.post<RiskPreviewResponse>('/api/admin/risk/preview', body);
   }
   adminRiskFields(): Observable<RiskFieldCandidatesResponse> {
     return this.http.get<RiskFieldCandidatesResponse>('/api/admin/risk/fields');

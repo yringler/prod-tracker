@@ -166,6 +166,16 @@ each tick (each isolated).
     `source:'unavailable'` with a `probeError` rather than failing the endpoint.
     `doneColumn` comes from `logic/health.ts`'s `isDoneColumn`, not a re-derived "last
     element".
+  - **`GET /api/admin/risk/fields`** (admin tier) serves the Fields panel's whole
+    vocabulary: the name-regex custom-field candidates (`listRiskFieldCandidates`)
+    **and** the site's status names (`listStatusCandidates`), for the In Progress
+    status picker. This is the one admin endpoint that must hit Jira — neither list
+    is in any snapshot — and it uses the ADMIN'S own token. Statuses are deduped BY
+    NAME (Jira lists one per project; the config stores a name, and `logic/timers.ts`
+    matches on the name) and carry Jira's `statusCategory` key, so the picker can
+    offer `indeterminate` — Jira's own "in progress" — first. The status half
+    **degrades to `[]`** rather than failing the endpoint: the field pickers still
+    work without it, and the client keeps a stored status selectable regardless.
   - **`POST /api/admin/risk/preview`** (admin tier) is the editor's IMPACT preview:
     "12 at risk / 9 warning / 40 healthy (was 6 / 8 / 47)", per board, before the
     save. Body is the candidate `{cutoffs, composite, schedule}` with the same

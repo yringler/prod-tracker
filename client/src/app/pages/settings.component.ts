@@ -90,7 +90,9 @@ export class SettingsComponent {
     return me?.sites.find((s) => s.cloudId === me.cloudId)?.name ?? me?.sites[0]?.name ?? '';
   });
 
-  save(input: { value: string; reportValidity(): boolean }): void {
+  // `value: string | null` because that is genuinely what a `<wa-input>` element's
+  // `value` is typed as; `Number(null)` is 0, which the guard below rejects.
+  save(input: { value: string | null; reportValidity(): boolean }): void {
     const goal = Number(input.value);
     if (!Number.isFinite(goal) || goal <= 0) return; // ignore blank/garbage
     if (!input.reportValidity()) return; // surfaces "must be ≤ max" on the input

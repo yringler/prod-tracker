@@ -13,8 +13,15 @@ import {
   HARD_FALLBACK,
   SIZE_BUCKET_LABELS,
   WORK_HOURS_PER_DAY,
+  NO_SUCH_COLUMN,
+  SIZE_BUCKET_KEYS,
   ambiguousPairs,
+  applyScopeChange,
   collapseRedundantRules,
+  editorRowsInDisplayOrder,
+  groupRowsByColumn,
+  parseSizeValue,
+  seedRowFor,
   equivalentRules,
   fromEditorModel,
   resolveCutoff,
@@ -348,5 +355,206 @@ describe('work-hours vocabulary', () => {
     };
     expect(workHoursPerWeek(none)).toBe(0);
     expect(workHoursPerDay(none)).toBe(WORK_HOURS_PER_DAY);
+  });
+});
+
+// --- The editor's mutation/grouping half -------------------------------------
+//
+// Everything semantically risky in the cutoffs editor is a pure function over
+// EditorMetricModel/RiskCutoffs, which is why it lives here rather than behind an
+// Angular TestBed: `fullTemplateTypeCheck` catches the template bug class, and
+// these catch the four runtime defects it cannot (Number(null) === 0, a seeded row
+// that silently re-bands a column, a row landing in no group, and a tie whose
+// winner the UI misreports).
+
+describe('parseSizeValue rejects rather than coerces', () => {
+  it('maps the two sentinels', () => {
+    expect(parseSizeValue('')).toBeNull(); // any size
+    expect(parseSizeValue('none')).toBe('none'); // unpointed
+  });
+
+  it('accepts only real buckets', () => {
+    for (const b of FIB_BUCKETS) expect(parseSizeValue(String(b))).toBe(b);
+  });
+
+  it('REJECTS everything else instead of coercing it to a number', () => {
+    // `Number(null)` and `Number([])` are both 0 — the exact path that used to
+    // write a `size: 0` the validator then refused to save.
+    expect(parseSizeValue(null)).toBeUndefined();
+    expect(parseSizeValue(undefined)).toBeUndefined();
+    expect(parseSizeValue([])).toBeUndefined();
+    expect(parseSizeValue(['3'])).toBeUndefined();
+    expect(parseSizeValue('0')).toBeUndefined();
+    expect(parseSizeValue('4')).toBeUndefined(); // off-ladder: 4 points is the 5 bucket
+    expect(parseSizeValue('abc')).toBeUndefined();
+  });
+});
+
+describe('seedRowFor — adding a rule changes no resolution', () => {
+  const table: RiskCutoffs = {
+    idle: [
+      { column: 'Code Review', warn: 4, risk: 8 },
+      { column: 'Code Review', size: 13, warn: 2, risk: 3 },
+      { size: 1, warn: 6, risk: 12 },
+      { default: true, warn: 24, risk: 72 },
+    ],
+    cycle: [{ default: true, warn: 160, risk: 240 }],
+    timeInColumn: [{ default: true, warn: 24, risk: 56 }],
+  };
+  const columns = ['Code Review', 'In Progress', 'Nope'];
+
+  it('seeds a fully-specified scope to exactly what that scope resolves to today', () => {
+    for (const column of columns) {
+      for (const size of SIZE_BUCKET_KEYS) {
+        const before = resolveCutoff(table, 'idle', column, size === 'none' ? null : size);
+        expect(seedRowFor(table, 'idle', column, size), `${column}/${String(size)}`).toEqual(before);
+      }
+    }
+  });
+
+  it('inserting that seeded rule changes NO resolution anywhere', () => {
+    for (const column of columns) {
+      for (const size of SIZE_BUCKET_KEYS) {
+        const seed = seedRowFor(table, 'idle', column, size);
+        const withRule: RiskCutoffs = {
+          ...table,
+          idle: sortRowsForDisplay([
+            ...toEditorModel(table)[0]!.rows,
+            { key: 'new', column, size, ...seed },
+          ]).map((r) => ({
+            ...(r.column !== null ? { column: r.column } : {}),
+            ...(r.size !== null ? { size: r.size } : {}),
+            warn: r.warn,
+            risk: r.risk,
+          })).concat([{ default: true, warn: 24, risk: 72 }]),
+        };
+        for (const probe of [...columns, NO_SUCH_COLUMN]) {
+          for (const points of [null, 1, 2, 3, 5, 8, 13, 20, 40]) {
+            expect(
+              resolveCutoff(withRule, 'idle', probe, points),
+              `added ${column}/${String(size)} then probed ${probe}/${String(points)}`,
+            ).toEqual(resolveCutoff(table, 'idle', probe, points));
+          }
+        }
+      }
+    }
+  });
+
+  it('does NOT seed from the fallback when a column rule already covers the scope', () => {
+    // The old behavior. `Code Review` resolves to 4/8, not the default's 24/72.
+    expect(seedRowFor(table, 'idle', 'Code Review', 5)).toEqual({ warn: 4, risk: 8 });
+    expect(seedRowFor(table, 'idle', 'Code Review', 5)).not.toEqual({ warn: 24, risk: 72 });
+  });
+});
+
+describe('groupRowsByColumn', () => {
+  const rows = toEditorModel({
+    idle: [
+      { column: 'In Progress', warn: 4, risk: 8 },
+      { column: 'In Progress', size: 13, warn: 2, risk: 3 },
+      { column: 'Ghost', warn: 9, risk: 9 },
+      { size: 1, warn: 6, risk: 12 },
+      { column: 'To Do', warn: 1, risk: 2 },
+      { default: true, warn: 24, risk: 72 },
+    ],
+    cycle: [],
+    timeInColumn: [],
+  })[0]!.rows;
+
+  it('puts every row in exactly one group', () => {
+    const groups = groupRowsByColumn(rows, ['To Do', 'In Progress']);
+    const placed = groups.flatMap((g) => [...(g.headerRow ? [g.headerRow] : []), ...g.sizeRows]);
+    expect(placed).toHaveLength(rows.length);
+    expect(new Set(placed.map((r) => r.key)).size).toBe(rows.length);
+  });
+
+  it('orders board columns first, then unknown columns, then the Any-column group', () => {
+    const groups = groupRowsByColumn(rows, ['To Do', 'In Progress']);
+    expect(groups.map((g) => g.column)).toEqual(['To Do', 'In Progress', 'Ghost', null]);
+    expect(groups.find((g) => g.column === 'Ghost')?.known).toBe(false);
+    expect(groups.find((g) => g.column === 'In Progress')?.known).toBe(true);
+  });
+
+  it('separates a column-only header row from its size rows', () => {
+    const g = groupRowsByColumn(rows, ['In Progress']).find((x) => x.column === 'In Progress');
+    expect(g?.headerRow?.size).toBeNull();
+    expect(g?.sizeRows.map((r) => r.size)).toEqual([13]);
+  });
+
+  it('a group with no column-only rule reports headerRow null', () => {
+    const g = groupRowsByColumn(rows, []).find((x) => x.column === null);
+    expect(g?.headerRow).toBeNull();
+    expect(g?.sizeRows).toHaveLength(1);
+  });
+});
+
+describe('the editor serializes in DISPLAY order, so what you see is the tie-break', () => {
+  // A deliberate tie: a column-only rule and a size-only rule are EQUALLY specific
+  // to `resolveRules`, so array position decides. The editor renders column-only
+  // above size-only, so that must be the stored order too.
+  const tied: RiskCutoffs = {
+    idle: [
+      { size: 5, warn: 100, risk: 200 }, // stored FIRST — wins today
+      { column: 'In Progress', warn: 1, risk: 2 },
+      { default: true, warn: 24, risk: 72 },
+    ],
+    cycle: [{ default: true, warn: 160, risk: 240 }],
+    timeInColumn: [{ default: true, warn: 24, risk: 56 }],
+  };
+
+  it('ambiguousPairs flags the tie in the first place', () => {
+    expect(ambiguousPairs(tied.idle).length).toBeGreaterThan(0);
+  });
+
+  it('the display-order round trip makes the visible (column-only) rule the winner', () => {
+    const round = fromEditorModel(editorRowsInDisplayOrder(toEditorModel(tied)));
+    // Column-only sorts above size-only in the table, and now in the blob.
+    expect(round.idle[0]?.column).toBe('In Progress');
+    // USER-VISIBLE: this is the one change in the repair that can alter scoring.
+    expect(resolveCutoff(tied, 'idle', 'In Progress', 5)).toEqual({ warn: 100, risk: 200 });
+    expect(resolveCutoff(round, 'idle', 'In Progress', 5)).toEqual({ warn: 1, risk: 2 });
+  });
+
+  it('changes nothing for a table with no such tie', () => {
+    const plain: RiskCutoffs = {
+      idle: [
+        { column: 'In Progress', warn: 1, risk: 2 },
+        { column: 'In Progress', size: 5, warn: 3, risk: 4 },
+        { default: true, warn: 24, risk: 72 },
+      ],
+      cycle: [{ default: true, warn: 160, risk: 240 }],
+      timeInColumn: [{ default: true, warn: 24, risk: 56 }],
+    };
+    const round = fromEditorModel(editorRowsInDisplayOrder(toEditorModel(plain)));
+    for (const column of ['In Progress', 'Other', NO_SUCH_COLUMN]) {
+      for (const points of [null, 1, 5, 20]) {
+        expect(resolveCutoff(round, 'idle', column, points)).toEqual(
+          resolveCutoff(plain, 'idle', column, points),
+        );
+      }
+    }
+  });
+});
+
+describe('applyScopeChange', () => {
+  const model = toEditorModel({
+    idle: [
+      { column: 'A', warn: 1, risk: 2 },
+      { column: 'B', warn: 3, risk: 4 },
+    ],
+    cycle: [],
+    timeInColumn: [],
+  })[0]!;
+
+  it('moves a row and re-keys it', () => {
+    const row = model.rows[0]!;
+    const next = applyScopeChange(model, row.key, 'C', 5);
+    expect(next.rows[0]).toMatchObject({ column: 'C', size: 5 });
+    expect(next.rows[0]!.key).not.toBe(row.key);
+  });
+
+  it('REFUSES a move onto an occupied scope rather than creating a duplicate', () => {
+    const row = model.rows[0]!;
+    expect(applyScopeChange(model, row.key, 'B', null)).toBe(model);
   });
 });

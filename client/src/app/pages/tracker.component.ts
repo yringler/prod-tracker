@@ -291,7 +291,7 @@ export class TrackerComponent implements OnInit {
 
     // The chosen Fibonacci/custom value IS the claimed points — submit it directly.
     // The backend only ever sees points (plus the optional note).
-    rate(p: PendingRating, claimedPoints: number, notes: string): void {
+    rate(p: PendingRating, claimedPoints: number, notes: string | null): void {
         // Coerce BEFORE touching busy: if the notes element ever fails to provide a
         // string, this must not throw after the spinner is already on (which would
         // strand it forever with no request sent).
@@ -349,8 +349,10 @@ export class TrackerComponent implements OnInit {
     // 400) when the value is too high; otherwise rate() submits it directly.
     rateCustom(
         p: PendingRating,
-        input: { value: string; reportValidity(): boolean },
-        notes: string,
+        // `string | null` is what a `<wa-input>`'s `value` actually is; the
+        // finite/negative guard below already rejects the `Number(null) === 0` case.
+        input: { value: string | null; reportValidity(): boolean },
+        notes: string | null,
     ): void {
         const points = Number(input.value);
         if (!Number.isFinite(points) || points < 0) return; // ignore blank/garbage

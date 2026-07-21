@@ -360,10 +360,26 @@ export interface RiskFieldOption {
   id: string;
   name: string;
 }
+/** Jira's own `statusCategory.key`, plus `unknown` for a status Jira reports
+ *  without one. `indeterminate` is what Jira means by "in progress", so it is the
+ *  group the In Progress picker offers first. */
+export type RiskStatusCategory = 'new' | 'indeterminate' | 'done' | 'unknown';
+
+/** A candidate for `inProgressStatus`. Deduped BY NAME, because the config stores
+ *  a name and the timers match on the name (`logic/timers.ts`) — the same status
+ *  name repeated across projects is one choice here, not several. */
+export interface RiskStatusOption {
+  name: string;
+  category: RiskStatusCategory;
+}
+
 export interface RiskFieldCandidatesResponse {
   flagged: RiskFieldOption[];
   rejections: RiskFieldOption[];
   implementor: RiskFieldOption[];
   codeReviewer: RiskFieldOption[];
+  /** The site's status vocabulary, for the In Progress status picker. Empty when
+   *  the status read failed — the picker then still offers the stored value. */
+  statuses: RiskStatusOption[];
   current: RiskFieldIds;
 }

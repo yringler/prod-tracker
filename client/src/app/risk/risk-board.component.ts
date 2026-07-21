@@ -13,6 +13,7 @@ import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
 import { AvatarComponent } from '../ui/avatar.component';
 import { RiskDetailComponent } from './risk-detail.component';
+import { selectValue } from './dom-events';
 import { bandVariant, firingMetrics, sinceLabel, type MetricPill } from './format';
 
 // The triage list (arch §11): one list, worst first, showing ONLY the metrics that
@@ -29,9 +30,9 @@ import { bandVariant, firingMetrics, sinceLabel, type MetricPill } from './forma
       <h2>Sprint risk</h2>
       <div class="row" style="gap:8px">
         @if (boards().length > 1) {
-          <wa-select size="small" [value]="String(selected())" (change)="onPickBoard($event)">
+          <wa-select size="small" [value]="selectedValue()" (change)="onPickBoard($event)">
             @for (b of boards(); track b.boardId) {
-              <wa-option [value]="String(b.boardId)">{{ b.name }}</wa-option>
+              <wa-option [value]="boardValue(b)">{{ b.name }}</wa-option>
             }
           </wa-select>
         }
@@ -156,7 +157,6 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
   auth = inject(AuthService);
 
   readonly isDev = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  readonly String = String; // template helper: <wa-select> values are strings
 
   boards = signal<RiskBoardSummary[]>([]);
   selected = signal<number | null>(null);
@@ -191,8 +191,20 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
     this.stopPolling();
   }
 
+  /** `<wa-select>`/`<wa-option>` values are strings. These are component members on
+   *  purpose: a template may NOT reach a JS global like `String`, and a
+   *  `readonly String = String` field on the class would satisfy the compiler while
+   *  re-hiding that whole bug class (it used to live right here). */
+  selectedValue(): string {
+    const id = this.selected();
+    return id === null ? '' : String(id);
+  }
+  boardValue(b: RiskBoardSummary): string {
+    return String(b.boardId);
+  }
+
   onPickBoard(e: Event): void {
-    const id = Number((e.target as HTMLSelectElement).value);
+    const id = Number(selectValue(e));
     if (Number.isInteger(id)) this.loadBoard(id);
   }
 

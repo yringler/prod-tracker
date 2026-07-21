@@ -193,8 +193,8 @@ export class NotificationChannelsComponent {
 
   // In-app setup completion (an `input` flow, e.g. email). On success, close the
   // panel and refresh so the row flips to "Connected".
-  submitInput(channel: string, name: string, el: { value: string }): void {
-    this.api.completeChannelSetup(channel, { [name]: el.value }).subscribe({
+  submitInput(channel: string, name: string, el: { value: string | null }): void {
+    this.api.completeChannelSetup(channel, { [name]: el.value ?? '' }).subscribe({
       next: (status) => {
         if (status.linked) {
           this.setup.set(null);

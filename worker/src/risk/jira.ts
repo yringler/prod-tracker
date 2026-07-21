@@ -11,7 +11,7 @@
 // flagged/rejections/implementor/codeReviewer fields).
 
 import { JiraApiError } from '../jira/client';
-import type { RiskPr } from '@shared/risk';
+import type { RiskPr, RiskStatusCategory, RiskStatusOption } from '@shared/risk';
 import type { AssigneeChange, ChangelogEvent, StatusChange } from './logic/timers';
 
 /** The only capability the risk board needs from a Jira client. */
@@ -126,6 +126,41 @@ export async function fetchDoneStatusIds(client: RiskJiraClient): Promise<Set<st
     if (sid && st.statusCategory?.key === 'done') out.add(sid);
   }
   return out;
+}
+
+/**
+ * The site's status vocabulary, for the admin's In Progress status picker.
+ *
+ * Deduped BY NAME (Jira lists a status once per project that uses it) because the
+ * config stores a name and `logic/timers.ts` matches on the name. `indeterminate`
+ * first, then `new`, then `done`/`unknown` — the picker groups on `category`, so
+ * the ordering here is what the groups end up in.
+ */
+export async function listStatusCandidates(
+  client: RiskJiraClient,
+): Promise<RiskStatusOption[]> {
+  const arr = await client.get<{ name?: string; statusCategory?: { key?: string } }[]>(
+    '/rest/api/3/status',
+  );
+  const byName = new Map<string, RiskStatusCategory>();
+  for (const st of arr ?? []) {
+    const name = typeof st.name === 'string' ? st.name.trim() : '';
+    if (!name || byName.has(name)) continue;
+    byName.set(name, statusCategory(st.statusCategory?.key));
+  }
+  const rank: Record<RiskStatusCategory, number> = {
+    indeterminate: 0,
+    new: 1,
+    done: 2,
+    unknown: 3,
+  };
+  return [...byName]
+    .map(([name, category]) => ({ name, category }))
+    .sort((a, b) => rank[a.category] - rank[b.category] || a.name.localeCompare(b.name));
+}
+
+function statusCategory(key: string | undefined): RiskStatusCategory {
+  return key === 'new' || key === 'indeterminate' || key === 'done' ? key : 'unknown';
 }
 
 // --- Issues -------------------------------------------------------------------
