@@ -34,8 +34,10 @@ import type {
   SetupSubmission,
 } from '@shared/notifications';
 import type {
+  PutRiskAlertPrefsRequest,
   PutRiskConfigRequest,
   RiskAdminConfigResponse,
+  RiskAlertPrefs,
   RiskBoardCandidatesResponse,
   RiskBoardResponse,
   RiskBoardsResponse,
@@ -191,5 +193,12 @@ export class ApiService {
   }
   adminRiskFields(): Observable<RiskFieldCandidatesResponse> {
     return this.http.get<RiskFieldCandidatesResponse>('/api/admin/risk/fields');
+  }
+  /** The caller's own opt-out from struggling-ticket health nudges. */
+  riskAlertPrefs(): Observable<RiskAlertPrefs> {
+    return this.http.get<RiskAlertPrefs>('/api/risk/alerts/prefs');
+  }
+  putRiskAlertPrefs(body: PutRiskAlertPrefsRequest): Observable<RiskAlertPrefs> {
+    return this.http.put<RiskAlertPrefs>('/api/risk/alerts/prefs', body);
   }
 }

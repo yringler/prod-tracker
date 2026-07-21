@@ -52,6 +52,7 @@ import {
   type RawIssue,
   type RiskJiraClient,
 } from './jira';
+import { processBoardAlerts } from './alerts';
 import { noticeDegradation } from './notify';
 import {
   getState,
@@ -391,6 +392,8 @@ export async function refreshOrg(
         storyPointsFieldId: appConfig.storyPointsFieldId,
         nowMs,
         pacingMs,
+        dao,
+        log: orgLog,
       });
       await recordSuccess(env, cfg.cloudId, board.boardId, atIso);
       orgLog.info('risk: board refreshed', {
@@ -437,6 +440,12 @@ export interface RefreshBoardOptions {
   nowMs: number;
   /** Gap between Jira calls; tests pass 0. */
   pacingMs?: number;
+  /** Required so the Phase-2 alert pass can resolve recipients' channels. Made
+   *  required (not optional) so production can't silently skip alerting; the
+   *  risk-internal call sites all already hold a Dao. */
+  dao: Dao;
+  /** Threaded so the alert pass logs under the same run context. */
+  log?: Logger;
 }
 
 /**
@@ -541,7 +550,20 @@ export async function refreshBoard(
     computedAt: new Date(opts.nowMs).toISOString(),
   };
 
-  // PHASE 2: diff vs prior snapshot + risk_alert_state hysteresis here (arch §9).
+  // PHASE 2 seam: diff vs risk_alert_state + fire health nudges (arch §9). Wrapped
+  // so an alerting failure can never fail the board — the snapshot still overwrites
+  // and the board still records success. State is written before the snapshot
+  // (arch step ordering), so a nudge whose board view is one refresh stale is
+  // harmless: alert state is already latched, so the re-run can't re-send.
+  const alertLog = opts.log ?? rootLog;
+  try {
+    await processBoardAlerts(env, opts.dao, cfg, board, tickets, clock, alertLog, opts.nowMs);
+  } catch (e) {
+    alertLog.warn('risk: alert pass failed; snapshot proceeds', {
+      boardId: board.boardId,
+      ...errFields(e),
+    });
+  }
 
   await overwriteSnapshot(env, cfg.cloudId, snapshot);
   return snapshot;
@@ -571,6 +593,7 @@ interface StatusField {
   statusCategory?: { key?: string };
 }
 interface UserField {
+  accountId?: string;
   displayName?: string;
   avatarUrls?: Record<string, string>;
 }
@@ -674,6 +697,7 @@ export function mapIssue(issue: RawIssue, ctx: MapContext): RiskTicket {
     column,
     assignee,
     avatarUrl,
+    assigneeAccountId: assigneeField?.accountId ?? null,
     points,
     parentKey: parent?.key ?? null,
     implementor: userName(ctx.fieldIds.implementor),

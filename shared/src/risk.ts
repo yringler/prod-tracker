@@ -111,6 +111,10 @@ export interface RiskTicket {
   column: string;
   assignee: string | null;
   avatarUrl: string | null;
+  /** Atlassian account id — the recipient key for health nudges; org-visible in
+   *  Jira already, so no new privacy surface. Null when unassigned (or on a
+   *  snapshot written before this field shipped). */
+  assigneeAccountId: string | null;
   points: number | null;
   parentKey: string | null;
   implementor: string | null;
@@ -239,6 +243,15 @@ export interface RiskBoardCandidatesResponse {
   boards: RiskBoardCandidate[];
   /** Non-null when the board-configuration probe failed (usually OAuth scopes). */
   probeError: string | null;
+}
+
+/** Per-user opt-out for struggling-ticket health nudges (Phase 2). Self-scoped:
+ *  the route always reads/writes the caller's own account. */
+export interface RiskAlertPrefs {
+  muted: boolean;
+}
+export interface PutRiskAlertPrefsRequest {
+  muted: boolean;
 }
 
 export interface RiskFieldOption {

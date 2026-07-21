@@ -123,8 +123,41 @@ function recoveryPayload(env: Env): NotificationPayload {
   };
 }
 
-/** Fan out to each admin's linked channels: first success wins, an unlinked
- *  channel falls through to the next, and nothing here can throw past the caller. */
+/**
+ * Deliver one payload to one account across its linked channels: first success
+ * wins, an unlinked channel falls through to the next, and nothing here throws
+ * past the caller. Returns whether any channel accepted the message. Shared by
+ * both crossings of the notification seam in this slice — the degraded/recovery
+ * notice (below) and the Phase-2 health nudge (alerts.ts). registry.resolve() only.
+ */
+export async function deliverToAccount(
+  env: Env,
+  dao: Dao,
+  accountId: string,
+  payload: NotificationPayload,
+  idempotencyKey: string,
+  log: Logger,
+): Promise<boolean> {
+  const channels = await dao.getUserChannels(accountId);
+  for (const { channel } of channels) {
+    const adapter = resolve(env, channel);
+    if (!adapter) {
+      log.warn('risk: unknown channel (config drift)', { channel });
+      continue;
+    }
+    try {
+      const r = await adapter.deliver({ userId: accountId, payload, idempotencyKey });
+      if (r.status === 'delivered') return true; // stop at the first success
+      if (r.status === 'not_linked') continue; // try the next channel
+      log.warn('risk: notice delivery failed', { channel, retryable: r.retryable });
+    } catch (e) {
+      log.warn('risk: notice adapter threw', { channel, ...errFields(e) });
+    }
+  }
+  return false;
+}
+
+/** Fan out to each admin's linked channels (see deliverToAccount). */
 async function deliverToAdmins(
   env: Env,
   dao: Dao,
@@ -134,22 +167,7 @@ async function deliverToAdmins(
   log: Logger,
 ): Promise<void> {
   for (const accountId of admins) {
-    const channels = await dao.getUserChannels(accountId);
-    for (const { channel } of channels) {
-      const adapter = resolve(env, channel);
-      if (!adapter) {
-        log.warn('risk: unknown channel (config drift)', { channel });
-        continue;
-      }
-      try {
-        const r = await adapter.deliver({ userId: accountId, payload, idempotencyKey });
-        if (r.status === 'delivered') break; // stop at the first success
-        if (r.status === 'not_linked') continue; // try the next channel
-        log.warn('risk: degraded-notice delivery failed', { channel, retryable: r.retryable });
-      } catch (e) {
-        log.warn('risk: degraded-notice adapter threw', { channel, ...errFields(e) });
-      }
-    }
+    await deliverToAccount(env, dao, accountId, payload, idempotencyKey, log);
   }
 }
 

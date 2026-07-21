@@ -102,7 +102,11 @@ function issue(
         statusCategory: { key: statusId === '9' ? 'done' : 'indeterminate' },
       },
       issuetype: { name: 'Story' },
-      assignee: { displayName: 'Ann A', avatarUrls: { '32x32': 'https://av/ann' } },
+      assignee: {
+        accountId: 'acct-ann',
+        displayName: 'Ann A',
+        avatarUrls: { '32x32': 'https://av/ann' },
+      },
       created: at(0),
       customfield_pts: 3,
       ...extra,
@@ -205,6 +209,7 @@ describe('refreshBoard', () => {
       storyPointsFieldId: 'customfield_pts',
       nowMs: NOW,
       pacingMs: 0,
+      dao,
     });
 
     expect(snap.boardId).toBe(5);
@@ -214,6 +219,7 @@ describe('refreshBoard', () => {
 
     const stuck = snap.tickets[0]!;
     expect(stuck.column).toBe('Code Review 1');
+    expect(stuck.assigneeAccountId).toBe('acct-ann'); // recipient key for Phase-2 nudges
     expect(stuck.started).toBe(true);
     expect(stuck.idleHours).toBe(80); // in Code Review since h=20
     expect(stuck.cycleHours).toBe(90); // In Progress from h=10
@@ -264,6 +270,7 @@ describe('refreshBoard', () => {
       storyPointsFieldId: 'customfield_pts',
       nowMs: NOW,
       pacingMs: 0,
+      dao,
     });
     const t = snap.tickets[0]!;
     expect(t.blocked).toBe(true);
@@ -273,7 +280,7 @@ describe('refreshBoard', () => {
 
   it('is idempotent: two runs produce one identical row', async () => {
     const cfg = orgConfig();
-    const opts = { storyPointsFieldId: 'customfield_pts', nowMs: NOW, pacingMs: 0 };
+    const opts = { storyPointsFieldId: 'customfield_pts', nowMs: NOW, pacingMs: 0, dao };
     const a = await refreshBoard(env, stubClient(), cfg, cfg.boards[0]!, opts);
     const b = await refreshBoard(env, stubClient(), cfg, cfg.boards[0]!, opts);
     expect(JSON.stringify(b)).toBe(JSON.stringify(a));

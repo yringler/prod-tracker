@@ -11,8 +11,10 @@
 // board that isn't in the caller's org config 404s.
 
 import type {
+  PutRiskAlertPrefsRequest,
   PutRiskConfigRequest,
   RiskAdminConfigResponse,
+  RiskAlertPrefs,
   RiskBoardCandidate,
   RiskBoardCandidatesResponse,
   RiskBoardRef,
@@ -43,11 +45,13 @@ import { fetchBoardMaps, listRiskFieldCandidates } from './jira';
 import { refreshOrg } from './refresh';
 import {
   deleteBoardState,
+  getAlertMuted,
   getConfig,
   getSnapshot,
   getState,
   markViewed,
   putConfig,
+  setAlertMuted,
 } from './store';
 
 // --- Authed tier --------------------------------------------------------------
@@ -59,6 +63,12 @@ export async function riskRoutes(
   method: string,
 ): Promise<Response> {
   if (path === '/api/risk/boards' && method === 'GET') return listRiskBoards(ctx);
+
+  // Per-user opt-out for Phase-2 health nudges. Self-scoped (ctx.accountId) — no id
+  // ever crosses the wire, so no privacy surface; risk-owned so it deletes with the
+  // feature (store.ts, not dao.ts).
+  if (path === '/api/risk/alerts/prefs' && method === 'GET') return getAlertPrefs(ctx);
+  if (path === '/api/risk/alerts/prefs' && method === 'PUT') return putAlertPrefs(req, ctx);
 
   const boardMatch = path.match(/^\/api\/risk\/board\/([^/]+)$/);
   if (boardMatch && method === 'GET') return getRiskBoard(ctx, boardMatch[1]!);
@@ -121,6 +131,19 @@ async function devRefresh(ctx: AuthedCtx): Promise<Response> {
   if (!cfg) return error(409, 'risk board not configured for this site', 'NOT_CONFIGURED');
   await refreshOrg(ctx.env, ctx.dao, cfg, cfg.boards, log);
   return json({ ok: true, boards: cfg.boards.length });
+}
+
+/** The caller's own nudge opt-out. Absent row = not muted. */
+async function getAlertPrefs(ctx: AuthedCtx): Promise<Response> {
+  const muted = await getAlertMuted(ctx.env, ctx.accountId);
+  return json({ muted } satisfies RiskAlertPrefs);
+}
+
+async function putAlertPrefs(req: Request, ctx: AuthedCtx): Promise<Response> {
+  const body = await readJson<PutRiskAlertPrefsRequest>(req);
+  if (!body || typeof body.muted !== 'boolean') return error(400, 'muted (boolean) required');
+  await setAlertMuted(ctx.env, ctx.accountId, body.muted);
+  return json({ muted: body.muted } satisfies RiskAlertPrefs);
 }
 
 // --- Admin tier (registered INSIDE index.ts's requireAdmin block) --------------

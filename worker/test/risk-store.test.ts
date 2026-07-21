@@ -7,12 +7,16 @@ import type { RiskBoardSnapshot } from '@shared/risk';
 import type { Env } from '../src/env';
 import {
   MAX_CONSECUTIVE_FAILURES,
+  claimAlertFiring,
   claimDegradedNotice,
   clearDegradedNotice,
+  deleteAlertState,
   deleteBoardState,
+  getAlertMuted,
   getConfig,
   getSnapshot,
   getState,
+  listAlertStates,
   listConfigs,
   markDegraded,
   markViewed,
@@ -21,9 +25,12 @@ import {
   recordFailure,
   recordSuccess,
   riskEraseAccount,
+  setAlertMuted,
   setDevStatusAvailable,
+  upsertAlertState,
   type RiskOrgConfigInput,
 } from '../src/risk/store';
+import type { AlertState } from '../src/risk/alerts';
 import { DEFAULT_COMPOSITE, DEFAULT_CUTOFFS, DEFAULT_SCHEDULE } from '../src/risk/logic/defaults';
 import { SqliteD1 } from './support/sqlite-d1';
 
@@ -258,5 +265,92 @@ describe('risk store: refresh state', () => {
     await deleteBoardState(env, CLOUD, 5);
     expect(await getState(env, CLOUD, 5)).toBeNull();
     expect(await getSnapshot(env, CLOUD, 5)).toBeNull();
+  });
+});
+
+describe('risk store: alert hysteresis state', () => {
+  const armed = (over: Partial<AlertState> = {}): AlertState => ({
+    phase: 'armed',
+    riskSince: AT,
+    riskStreak: 1,
+    lastNotifiedAt: null,
+    lastPayloadHash: null,
+    updatedAt: AT,
+    ...over,
+  });
+
+  it('upserts, lists and deletes rows keyed by (cloud, board, issue)', async () => {
+    await upsertAlertState(env, CLOUD, 5, 'RB-1', armed());
+    await upsertAlertState(env, CLOUD, 5, 'RB-2', armed({ riskStreak: 3 }));
+    await upsertAlertState(env, OTHER, 5, 'RB-1', armed()); // another org, same board+key
+
+    const rows = await listAlertStates(env, CLOUD, 5);
+    expect([...rows.keys()].sort()).toEqual(['RB-1', 'RB-2']);
+    expect(rows.get('RB-2')).toEqual(armed({ riskStreak: 3 }));
+
+    // Upsert is in place (absolute values, no accumulation).
+    await upsertAlertState(env, CLOUD, 5, 'RB-1', armed({ phase: 'firing', riskStreak: 9 }));
+    const after = await listAlertStates(env, CLOUD, 5);
+    expect(after.size).toBe(2);
+    expect(after.get('RB-1')?.phase).toBe('firing');
+
+    await deleteAlertState(env, CLOUD, 5, 'RB-1');
+    expect((await listAlertStates(env, CLOUD, 5)).has('RB-1')).toBe(false);
+    // Other org untouched.
+    expect((await listAlertStates(env, OTHER, 5)).has('RB-1')).toBe(true);
+  });
+
+  it('claimAlertFiring latches once and rejects a stale read (the CAS)', async () => {
+    await upsertAlertState(env, CLOUD, 5, 'RB-1', armed());
+    const next = { riskStreak: 5, lastNotifiedAt: AT, lastPayloadHash: 'deadbeef', updatedAt: AT };
+
+    // Two ticks race off the same read (phase armed, last_notified_at null).
+    expect(await claimAlertFiring(env, CLOUD, 5, 'RB-1', 'armed', null, next)).toBe(true);
+    expect(await claimAlertFiring(env, CLOUD, 5, 'RB-1', 'armed', null, next)).toBe(false);
+
+    const row = (await listAlertStates(env, CLOUD, 5)).get('RB-1');
+    expect(row?.phase).toBe('firing');
+    expect(row?.lastNotifiedAt).toBe(AT);
+    expect(row?.lastPayloadHash).toBe('deadbeef');
+    expect(row?.riskSince).toBe(AT); // risk_since is preserved across the latch
+  });
+
+  it('claims an unreachable recipient with a NULL stamp (episode consumed, nothing sent)', async () => {
+    await upsertAlertState(env, CLOUD, 5, 'RB-1', armed());
+    const ok = await claimAlertFiring(env, CLOUD, 5, 'RB-1', 'armed', null, {
+      riskStreak: 2,
+      lastNotifiedAt: null,
+      lastPayloadHash: 'h',
+      updatedAt: AT,
+    });
+    expect(ok).toBe(true);
+    const row = (await listAlertStates(env, CLOUD, 5)).get('RB-1');
+    expect(row?.phase).toBe('firing');
+    expect(row?.lastNotifiedAt).toBeNull();
+  });
+
+  it('deleteBoardState drops the board’s alert rows too', async () => {
+    await upsertAlertState(env, CLOUD, 5, 'RB-1', armed());
+    await upsertAlertState(env, CLOUD, 5, 'RB-2', armed());
+    await deleteBoardState(env, CLOUD, 5);
+    expect((await listAlertStates(env, CLOUD, 5)).size).toBe(0);
+  });
+});
+
+describe('risk store: alert opt-out prefs', () => {
+  const ACCT = 'acct-dev';
+
+  it('defaults to unmuted and round-trips the toggle', async () => {
+    expect(await getAlertMuted(env, ACCT)).toBe(false);
+    await setAlertMuted(env, ACCT, true);
+    expect(await getAlertMuted(env, ACCT)).toBe(true);
+    await setAlertMuted(env, ACCT, false); // upsert in place
+    expect(await getAlertMuted(env, ACCT)).toBe(false);
+  });
+
+  it('riskEraseAccount wipes the erased account’s prefs row', async () => {
+    await setAlertMuted(env, ACCT, true);
+    await riskEraseAccount(env, ACCT);
+    expect(await getAlertMuted(env, ACCT)).toBe(false); // row gone
   });
 });
