@@ -89,6 +89,22 @@ Small on purpose — a handful of source files under `src/`, one test under `tes
     `ambiguousPairs`, `sortRowsForDisplay`. `collapseRedundantRules` is behavior-preserving
     **by construction**: it drops a rule only if `equivalentRules` proves the result
     resolves identically over every (column, bucket) pair — not by pattern-matching.
+  - Editor MUTATIONS + grouping (pure `EditorMetricModel` math, deliberately here and
+    not in the component, so it is testable with zero new infra):
+    `editorRowKey`, `editorRowsInDisplayOrder`, `parseSizeValue`, `seedRowFor`,
+    `applyScopeChange`, `groupRowsByColumn` / `CutoffRowGroup`, `NO_SUCH_COLUMN`.
+    Three of these carry invariants worth knowing before touching them:
+    - `parseSizeValue` **rejects** (`undefined`) rather than coerces — the caller must
+      return early. `Number(null) === 0` is not a `SizeBucketKey`, and a
+      `<wa-select>` genuinely hands back `string | null | string[]`.
+    - `seedRowFor` makes **adding a rule change no resolution until you type in it**:
+      a new rule starts at whatever its own scope resolves to today, not at the
+      table's fallback (which silently re-bands a column that already had a rule).
+    - `editorRowsInDisplayOrder` is why the editor serializes in display order: a
+      column-only and a size-only rule are EQUALLY specific to `resolveRules`, so
+      array position decides. USER-VISIBLE — it can change which of a tied pair wins.
+    Keep UI vocabulary (`SelectOption` builders) client-side, in
+    `client/src/app/risk/select-options.ts`.
   - Delete this file (and its barrel line) with the feature.
 
 - **`src/index.ts`** — barrel; re-exports `./domain`, `./contracts`, `./notifications`, `./risk` and `./risk-cutoffs`. Import from
@@ -123,7 +139,11 @@ Shared code must stay **pure and isomorphic** so both runtimes can run it:
   `sprintForTimestamp`, `isStaleTransition`, `computeRatio`, `workdayPace`, `claimCeiling`.
 - `test/risk-cutoffs.test.ts` — one case per validation rule (errors vs warnings), the
   editor-model round-trip + auto-repairs, `collapseRedundantRules` equivalence and
-  idempotence, `ambiguousPairs`, the bucket labels, and the work-hours derivations.
+  idempotence, `ambiguousPairs`, the bucket labels, the work-hours derivations, and
+  the editor-mutation half: `parseSizeValue`'s rejections, `seedRowFor`'s
+  "adding a rule changes no resolution" invariant (asserted exhaustively over the
+  probe space), `groupRowsByColumn`'s partition/order, `applyScopeChange`'s refusal
+  to duplicate a scope, and the display-order round trip on a deliberate tie.
   Note it uses **local fixtures**, not `DEFAULT_CUTOFFS`/`DEFAULT_SCHEDULE`: those live in
   `worker/src/risk/logic/defaults.ts` and shared/ may not import worker/. The assertions
   over the real shipped tables are in `worker/test/risk-cutoff-editor.test.ts`.

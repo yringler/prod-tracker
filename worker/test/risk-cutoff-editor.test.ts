@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CUTOFF_METRIC_IDS,
   collapseCutoffs,
+  groupRowsByColumn,
+  sortRowsForDisplay,
   fromEditorModel,
   resolveCutoff,
   toEditorModel,
@@ -88,5 +90,60 @@ describe('the units caption is derived from the real schedule', () => {
   it('reads 40h/week and 8h/day off DEFAULT_SCHEDULE', () => {
     expect(workHoursPerWeek(DEFAULT_SCHEDULE)).toBe(40);
     expect(workHoursPerDay(DEFAULT_SCHEDULE)).toBe(8);
+  });
+});
+
+// Pins the numbers the grouped presentation is designed around. `timeInColumn` is
+// not "33 arbitrary rows": it is 7 COLUMNS, three of them one-liners and four of
+// them genuine monotonic size ladders. If a defaults edit breaks that shape, the
+// accordion's "idle/cycle degrade to the old flat UI, timeInColumn opens
+// collapsed" property quietly stops holding — so it fails here instead.
+describe('the shape the grouped editor is designed around', () => {
+  const collapsed = collapseCutoffs(DEFAULT_CUTOFFS);
+  const model = toEditorModel(collapsed);
+  const groupsFor = (metric: (typeof CUTOFF_METRIC_IDS)[number]) => {
+    const m = model.find((x) => x.metric === metric);
+    if (!m) throw new Error(`no model for ${metric}`);
+    return groupRowsByColumn(sortRowsForDisplay(m.rows), []);
+  };
+
+  it('timeInColumn collapses 64 rules -> 33', () => {
+    expect(DEFAULT_CUTOFFS.timeInColumn).toHaveLength(64);
+    expect(collapsed.timeInColumn).toHaveLength(33);
+  });
+
+  it('timeInColumn is 7 column groups, 3 of them single-row', () => {
+    const groups = groupsFor('timeInColumn');
+    expect(groups).toHaveLength(7);
+    expect(groups.every((g) => g.column !== null && g.headerRow !== null)).toBe(true);
+    // Flat columns: one column-only rule, no size ladder.
+    expect(groups.filter((g) => g.sizeRows.length === 0).map((g) => g.column).sort()).toEqual([
+      'Blocked',
+      'Done',
+      'To Do',
+    ]);
+    // Laddered columns: a real monotonic size ladder each.
+    const ladders = groups.filter((g) => g.sizeRows.length > 0);
+    expect(ladders.map((g) => g.column).sort()).toEqual([
+      'Code Review 1',
+      'Code Review 2',
+      'In Progress',
+      'Pending QA',
+    ]);
+    for (const g of ladders) {
+      const warns = g.sizeRows.map((r) => r.warn);
+      expect(warns, `${g.column} is a monotonic ladder`).toEqual([...warns].sort((a, b) => a - b));
+    }
+  });
+
+  it('idle and cycle stay small enough to render exactly as the old flat table did', () => {
+    // idle: one one-liner group per column, so every group is already "expanded".
+    const idle = groupsFor('idle');
+    expect(idle.every((g) => g.sizeRows.length === 0)).toBe(true);
+    // cycle: a single "Any column" group of size rows, under the 10-row threshold.
+    const cycle = groupsFor('cycle');
+    expect(cycle).toHaveLength(1);
+    expect(cycle[0]?.column).toBeNull();
+    expect(cycle[0]!.sizeRows.length).toBeLessThan(10);
   });
 });

@@ -677,7 +677,14 @@ export function fromEditorModel(model: readonly EditorMetricModel[]): RiskCutoff
 }
 
 /** Display order for the table: most specific first, so the winner is at the top
- *  and there is nothing to drag. */
+ *  and there is nothing to drag.
+ *
+ *  NOTE the deliberate disagreement with `resolveRules`: this scores a column-only
+ *  rule 2 and a size-only rule 1, while `specificity()` scores BOTH 1 — for the
+ *  resolver they are equally specific and the winner is decided by ARRAY POSITION
+ *  (that is what `ambiguousPairs`/`AMBIGUOUS_SPECIFICITY` warns about). The editor
+ *  therefore serializes in THIS order (`editorRowsInDisplayOrder` below), so the
+ *  position that actually decides is the position you can see. */
 export function sortRowsForDisplay(rows: readonly EditorRow[]): EditorRow[] {
   const spec = (r: EditorRow): number => (r.column !== null ? 2 : 0) + (r.size !== null ? 1 : 0);
   return [...rows].sort(
@@ -686,4 +693,161 @@ export function sortRowsForDisplay(rows: readonly EditorRow[]): EditorRow[] {
       (a.column ?? '').localeCompare(b.column ?? '') ||
       SIZE_BUCKET_KEYS.indexOf(a.size ?? 'none') - SIZE_BUCKET_KEYS.indexOf(b.size ?? 'none'),
   );
+}
+
+/**
+ * The model the editor SERIALIZES: every metric's rows in display order.
+ *
+ * WHAT YOU SEE IS THE TIE-BREAK ORDER. `fromEditorModel` writes `m.rows` in model
+ * order, and for a column-only/size-only tie the resolver's winner is decided by
+ * array position — so before this, the UI asserted a precedence (column-only above
+ * size-only) that the stored blob did not honor, and the position that actually
+ * decided was invisible. USER-VISIBLE: for an org holding such a tied pair, this
+ * can change which of the two wins.
+ */
+export function editorRowsInDisplayOrder(
+  model: readonly EditorMetricModel[],
+): EditorMetricModel[] {
+  return model.map((m) => ({ ...m, rows: sortRowsForDisplay(m.rows) }));
+}
+
+// --- Editor mutations (pure EditorMetricModel math) ----------------------------
+
+/** Rows are keyed by scope, so the key IS the uniqueness constraint that keeps the
+ *  UI from ever producing a `DUPLICATE_SCOPE`. One builder, used everywhere. */
+export function editorRowKey(
+  metric: CutoffMetricId,
+  column: string | null,
+  size: SizeBucketKey | null,
+): string {
+  return `${metric}:${column ?? '*'}:${size ?? '*'}`;
+}
+
+/**
+ * Read a size back off a `<wa-select>`. REJECTS rather than coerces:
+ * - `''`         → `null`      (the explicit "any size" sentinel)
+ * - `'none'`     → `'none'`    (Unpointed)
+ * - `'1'|'2'|…`  → the bucket, but only if it IS a bucket
+ * - anything else (including `null`, an array, `'0'`, `'4'`) → `undefined` = REJECT.
+ *
+ * The caller must return early on `undefined` rather than write it. This exists
+ * because `Number(null) === 0` and `Number([]) === 0`, and a Web Awesome select
+ * hands back `string | null | string[]` — so the old `Number(raw)` path silently
+ * wrote `0`, which is not a `SizeBucketKey` and which the validator later rejects.
+ */
+export function parseSizeValue(raw: unknown): SizeBucketKey | null | undefined {
+  if (raw === '') return null;
+  if (raw === 'none') return 'none';
+  if (typeof raw !== 'string') return undefined;
+  const n = Number(raw);
+  return isBucket(n) ? n : undefined;
+}
+
+/** The representative probe cell for a scope: the bucket's own point value, or
+ *  `null` (unpointed) for 'none'/"any size". */
+function probePoints(size: SizeBucketKey | null): number | null {
+  return size === null || size === 'none' ? null : size;
+}
+
+/** A column no rule can match — the probe sentinel for an "any column" scope. */
+export const NO_SUCH_COLUMN = '  no such column  ';
+
+/**
+ * The thresholds a NEW rule at `(column, size)` should start at: whatever that
+ * scope resolves to TODAY.
+ *
+ * The invariant this buys — **adding a rule changes no resolution until you type in
+ * it** — is what makes "Add rule" safe. Seeding from the table's `default`/fallback
+ * (the old behavior) violates it whenever a column rule already covers the scope:
+ * the row appears, claims to change nothing, and silently re-bands every ticket in
+ * that column.
+ *
+ * EXACT for a fully-specified `(column, size)` scope, which is the only kind the
+ * editor's "Add rule" produces. For a partially-specified scope (one of the two is
+ * null) the rule spans several cells that may not all resolve alike, so this is the
+ * value at the scope's representative probe — still strictly better than the
+ * fallback, and the row is visibly new and focused so the admin types over it.
+ */
+export function seedRowFor(
+  cutoffs: RiskCutoffs | null,
+  metric: CutoffMetricId,
+  column: string | null,
+  size: SizeBucketKey | null,
+): Cutoff {
+  return resolveCutoff(cutoffs, metric, column ?? NO_SUCH_COLUMN, probePoints(size));
+}
+
+/**
+ * Move one row to a new scope. Returns the model UNCHANGED if the target scope is
+ * already occupied — refusing beats silently producing a duplicate the server
+ * would 400 on.
+ */
+export function applyScopeChange(
+  model: EditorMetricModel,
+  rowKey: string,
+  column: string | null,
+  size: SizeBucketKey | null,
+): EditorMetricModel {
+  const key = editorRowKey(model.metric, column, size);
+  if (model.rows.some((r) => r.key === key && r.key !== rowKey)) return model;
+  return {
+    ...model,
+    rows: model.rows.map((r) => (r.key === rowKey ? { ...r, key, column, size } : r)),
+  };
+}
+
+// --- Grouping (the per-column disclosure the editor renders) -------------------
+
+export interface CutoffRowGroup {
+  /** null = the "Any column" group. */
+  column: string | null;
+  /** The column-only rule (no size), if the table has one. */
+  headerRow: EditorRow | null;
+  /** Size-scoped rows within this column, in bucket order. */
+  sizeRows: EditorRow[];
+  /** False when no configured board has this column (the UNKNOWN_COLUMN case). */
+  known: boolean;
+}
+
+/**
+ * Group an editor table by column, in board-column order, then unknown columns,
+ * then the "Any column" group. Every row lands in exactly one group.
+ *
+ * This is what turns `timeInColumn`'s 33 flat rows into 7 collapsible column
+ * groups. The nesting IS the specificity order — a size row inside a column group
+ * beats its header, which beats "Any column", which beats the fallback — so the
+ * precedence the old flat list only asserted typographically becomes structural.
+ *
+ * Groups are ROW-DRIVEN: a board column with no rule at all gets no group. (The
+ * plan left this open; rendering every board column would explode `idle`'s 7 rows
+ * into one group per column and lose the "degrades to the current UI" property
+ * that makes the accordion safe to ship.)
+ */
+export function groupRowsByColumn(
+  rows: readonly EditorRow[],
+  columnOrder: readonly string[],
+): CutoffRowGroup[] {
+  const byColumn = new Map<string | null, EditorRow[]>();
+  for (const row of rows) {
+    const list = byColumn.get(row.column);
+    if (list) list.push(row);
+    else byColumn.set(row.column, [row]);
+  }
+
+  const known = columnOrder.filter((c) => byColumn.has(c));
+  const unknown = [...byColumn.keys()]
+    .filter((c): c is string => c !== null && !columnOrder.includes(c))
+    .sort((a, b) => a.localeCompare(b));
+  const order: (string | null)[] = [...known, ...unknown];
+  if (byColumn.has(null)) order.push(null);
+
+  return order.map((column) => {
+    const group = byColumn.get(column) ?? [];
+    return {
+      column,
+      headerRow: group.find((r) => r.size === null) ?? null,
+      sizeRows: sortRowsForDisplay(group.filter((r) => r.size !== null)),
+      known: column === null || columnOrder.includes(column),
+    };
+  });
 }
