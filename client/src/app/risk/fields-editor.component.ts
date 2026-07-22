@@ -10,7 +10,7 @@ import {
 } from '@angular/core';
 import type { RiskConfigIssue, RiskFieldConfigEntry, RiskFieldMeta } from '@shared/risk';
 import { validateFieldEntries } from '@shared/risk-fields';
-import { targetValue } from './dom-events';
+import { targetChecked, targetValue } from './dom-events';
 import { FieldPickerComponent } from './field-picker.component';
 
 /** One row of the editor. Thresholds/weight are kept as TEXT while editing — a
@@ -81,7 +81,7 @@ const SEED_RISK = 4;
                   min="0"
                   aria-label="warn threshold"
                   [value]="row.warnText"
-                  (change)="patch(i, { warnText: inputValue($event) })"
+                  (input)="patch(i, { warnText: inputValue($event) })"
                 ></wa-number-input>
               </label>
               <label class="mini">risk at
@@ -90,20 +90,29 @@ const SEED_RISK = 4;
                   min="0"
                   aria-label="risk threshold"
                   [value]="row.riskText"
-                  (change)="patch(i, { riskText: inputValue($event) })"
+                  (input)="patch(i, { riskText: inputValue($event) })"
                 ></wa-number-input>
               </label>
+              <label class="mini">weight
+                <wa-number-input
+                  size="small"
+                  min="0"
+                  step="0.5"
+                  aria-label="composite weight"
+                  [value]="row.weightText"
+                  (input)="patch(i, { weightText: inputValue($event) })"
+                ></wa-number-input>
+              </label>
+            } @else {
+              <label class="mini">include in score
+                <wa-switch
+                  size="small"
+                  aria-label="include this flag in the composite score"
+                  [checked]="flagIncluded(row)"
+                  (change)="patch(i, { weightText: toggled($event) ? '1' : '0' })"
+                ></wa-switch>
+              </label>
             }
-            <label class="mini">weight
-              <wa-number-input
-                size="small"
-                min="0"
-                step="0.5"
-                aria-label="composite weight"
-                [value]="row.weightText"
-                (change)="patch(i, { weightText: inputValue($event) })"
-              ></wa-number-input>
-            </label>
           </div>
           <wa-button
             size="small"
@@ -199,6 +208,18 @@ export class RiskFieldsEditorComponent {
 
   inputValue(e: Event): string {
     return targetValue(e);
+  }
+
+  toggled(e: Event): boolean {
+    return targetChecked(e);
+  }
+
+  /** Flag inclusion: blank weight defaults to 1 (matches toEntry), else weight > 0. */
+  flagIncluded(row: FieldRow): boolean {
+    const t = row.weightText.trim();
+    if (t === '') return true;
+    const n = Number(t);
+    return Number.isFinite(n) ? n > 0 : true;
   }
 
   add(): void {

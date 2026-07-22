@@ -52,21 +52,36 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   list that replaced the four fixed slots (Flagged / rejections / Developer /
   Reviewer). Starts empty; "+ Add field" appends a row of label `wa-input`,
   `<sp-field-picker>`, a kind badge once a field is chosen, warn/risk
-  `wa-number-input`s (count kind only, seeded 2/4 at pick), an explicit weight
-  (written as 1, mirroring the composite editor's "make the default visible"
-  normalize), and remove. Kind is COPIED from the picked `RiskFieldMeta.kind` at
+  `wa-number-input`s (count kind only, seeded 2/4 at pick), a weight control that is
+  a `wa-number-input` for count rows (written as 1, mirroring the composite editor's
+  "make the default visible" normalize) but an include-in-score `<wa-switch>` for
+  flag rows (on↔`weightText='1'`, off↔`'0'`), and remove. The threshold/weight
+  number inputs emit on `(input)` (caret-safe — rows echo raw text back via
+  `[value]`). Kind is COPIED from the picked `RiskFieldMeta.kind` at
   selection time — the entry, not discovery, owns it from then on. Thresholds are
   kept as TEXT while editing (a half-typed number must not snap to 0) and parsed
   on emit; inline errors come from the shared `validateFieldEntries`, so an error
   shown here is exactly an error the server would 400. Same
   controlled-on-load/uncontrolled-after-mount contract as the cutoffs editor: the
   parent binds its SERVER entries, never the draft from `(entriesChange)`.
-- `field-picker.component.ts` — `<sp-field-picker>`, a `wa-input` text filter over
-  an `<sp-option-select>` of ALL the site's Jira fields. Deliberately NOT a
-  hand-rolled combobox — `sp-option-select` stays the single owner of the
-  wa-select contract; this component only decides which options to feed it
-  (`filterFieldOptions` + `allFieldOptions`, capped at `FIELD_PICKER_CAP` with a
-  counted "keep typing" sentinel option it swallows rather than emits).
+- `field-picker.component.ts` — `<sp-field-picker>`, a pencil-opens-a-modal picker
+  over ALL the site's Jira fields. The collapsed control is a one-line display of the
+  current field (`resolveFieldDisplay`) plus a `pen-to-square` `<wa-button>`; the
+  pencil opens a `<wa-dialog>` (the repo's `[open]` + `(wa-after-hide)` idiom, from
+  `risk-detail`) holding a `<wa-input>` search box over a plain list of native
+  `<button class="option">` rows (`fieldListItems`, capped at `FIELD_PICKER_CAP`).
+  Deliberately NOT a `<wa-select>` combobox and NO longer uses `<sp-option-select>`:
+  a modal search over hundreds of fields reads far better than a listbox flipping
+  over its own filter input, and because the list is plain buttons NONE of the
+  wa-select value-presence contract applies — a picked id the filter hides simply
+  isn't in the list (the trigger still labels it via `resolveFieldDisplay`, which
+  annotates an unrecognized id "not in this site's field list" only when we hold the
+  field list). Overflow past the cap is a plain non-interactive hint line ("N more —
+  keep typing to narrow"). The dialog is always in the DOM (`[open]` toggled) but its
+  list is guarded by `@if (open())` so N closed row-pickers don't each render a list.
+  `filterFieldOptions` RANKS matches (exact › prefix › substring, stable) so the cap
+  shows the best few. Public contract unchanged (inputs `fields`/`value`/`ariaLabel`,
+  output `valueChange`) so `fields-editor`/`pickField` were untouched.
 - `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold editor that
   replaced the raw-JSON textarea. A tab per metric, rules **grouped by column**, a
   pinned undeletable "Everything else" fallback rule, a work-hours↔work-days toggle
@@ -125,19 +140,28 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   rather than greying them out, and defaults ON when the table holds a Done rule).
   (4) Read-back is normalized once and REJECTED rather than coerced
   (`parseSizeValue` returns `undefined` for a non-bucket; `Number(null) === 0` was
-  the original bug).
-- `select-options.ts` — pure, Angular-free `SelectOption[]` builders
-  (`columnOptions`/`sizeOptions`/`filterFieldOptions`/`allFieldOptions`/
-  `statusOptions`/`ensureValuePresent`/`hasDoneColumnRule`/`boardColumnsKnown`).
-  Unit tested in `client/test/select-options.test.ts`.
-  **"None"/"Default" is an OPTION, never the absence of one.** `allFieldOptions`
-  leads with a real `''` option ("Pick a field…") and `statusOptions` with
-  `Default — <shipped default>`, because a bound `''` with no `''` option is
-  exactly the value WA filters away — which is why the Fields panel's raw
-  `<wa-select>`s used to read as though the first discovered candidate were
-  configured when nothing was. The field list is capped (`FIELD_PICKER_CAP`) with
-  a counted `MORE_FIELDS_VALUE` sentinel — a real option (rule 2: never disable)
-  the picker component swallows on pick.
+  the original bug). Its consumers are now the cutoffs column/size/status selects
+  only; the listbox-open machinery (`isOpen`/`openListbox()`/`[attr.open]`/
+  `wa-show`/`wa-hide`) and the `placement` input were retired when the field picker
+  stopped using it (the field picker is now a modal, not a select).
+- `select-options.ts` — pure, Angular-free builders. `SelectOption[]` for the
+  wa-select pickers (`columnOptions`/`sizeOptions`/`statusOptions`/
+  `ensureValuePresent`/`hasDoneColumnRule`/`boardColumnsKnown`) PLUS the field
+  picker's own helpers (`fieldLabel`/`resolveFieldDisplay`/`fieldListItems`, over
+  `filterFieldOptions`). Unit tested in `client/test/select-options.test.ts`.
+  **The field picker is a modal list, not a `<wa-select>`**, so its old
+  `allFieldOptions`/`FIELD_FILTER_CAP` (which existed only to satisfy the wa-select
+  value-presence contract with a leading `''` "Pick a field…" option and a small
+  filtering cap) are GONE. In their place: `fieldLabel(f)` is the one "name (id)"
+  form; `resolveFieldDisplay(value, all)` is the trigger's one-line display (found →
+  "name (id)"; unknown id → the bare id, noted "not in this site's field list" only
+  when the list is held; `''` → empty); `fieldListItems(fields, query, selectedId,
+  cap?)` is the ranked, `FIELD_PICKER_CAP`-capped list with `{ items, overflow }` —
+  no value-presence defense, a hidden selected id just isn't listed. `filterFieldOptions`
+  ranks matches (exact › prefix › substring, stable) so the cap shows the best few.
+  **For the remaining wa-select pickers, "None"/"Default" is an OPTION, never the
+  absence of one.** `statusOptions` leads with `Default — <shipped default>`, because
+  a bound `''` with no `''` option is exactly the value WA filters away.
   **An option's `note` is a CLAIM, and is only made when we can support it.**
   `ensureValuePresent` must always make the bound value selectable (rule 1), but its
   note is optional: `columnOptions` attaches "not on any configured board" only when

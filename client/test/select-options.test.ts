@@ -18,12 +18,14 @@ import {
   columnOptions,
   ensureValuePresent,
   FIELD_PICKER_CAP,
-  MORE_FIELDS_VALUE,
-  allFieldOptions,
+  fieldLabel,
+  fieldListItems,
   filterFieldOptions,
   hasDoneColumnRule,
+  resolveFieldDisplay,
   sizeOptions,
   statusOptions,
+  UNKNOWN_FIELD_NOTE,
   UNKNOWN_STATUS_NOTE,
   type BoardColumns,
 } from '../src/app/risk/select-options';
@@ -172,51 +174,117 @@ describe('filterFieldOptions', () => {
     expect(filterFieldOptions(fields, '')).toHaveLength(3);
     expect(filterFieldOptions(fields, '   ')).toHaveLength(3);
   });
+
+  it('ranks exact and prefix matches ahead of a bare substring match', () => {
+    const ranked = [
+      { id: 'cf_1', name: 'Story flag' }, // substring only → score 1
+      { id: 'cf_2', name: 'Flagged' }, // name prefix → score 2
+      { id: 'flag', name: 'Whatever' }, // exact id → score 3
+    ];
+    expect(filterFieldOptions(ranked, 'flag').map((f) => f.id)).toEqual(['flag', 'cf_2', 'cf_1']);
+  });
+
+  it('keeps Jira order among equal-rank matches (stable sort)', () => {
+    const same = [
+      { id: 'a', name: 'Zeta flag' },
+      { id: 'b', name: 'Alpha flag' },
+    ];
+    expect(filterFieldOptions(same, 'flag').map((f) => f.id)).toEqual(['a', 'b']);
+  });
 });
 
-describe('allFieldOptions', () => {
+describe('fieldLabel', () => {
+  it('formats a field as "Name (id)"', () => {
+    expect(fieldLabel({ id: 'customfield_1002', name: 'Flagged' })).toBe('Flagged (customfield_1002)');
+  });
+});
+
+describe('resolveFieldDisplay', () => {
   const fields = [
     { id: 'customfield_1002', name: 'Flagged' },
     { id: 'customfield_2', name: 'Rejection count' },
   ];
 
-  it("leads with a selectable 'Pick a field…' option and labels name (id)", () => {
-    const out = allFieldOptions(fields, '');
-    expect(out[0]?.value).toBe('');
-    expect(out[1]).toEqual({ value: 'customfield_1002', label: 'Flagged (customfield_1002)' });
+  it('labels a found field with its name (id) and no note', () => {
+    expect(resolveFieldDisplay('customfield_1002', fields)).toEqual({
+      label: 'Flagged (customfield_1002)',
+      note: null,
+    });
   });
 
-  it('caps the list and counts the overflow out loud', () => {
+  it('falls back to the bare id, annotated, for an unknown id when the list is held', () => {
+    expect(resolveFieldDisplay('customfield_99', fields)).toEqual({
+      label: 'customfield_99',
+      note: UNKNOWN_FIELD_NOTE,
+    });
+  });
+
+  it('claims nothing about an unknown id when the field list is empty', () => {
+    // No field data (fetch failed / still loading) — we cannot assert it's unknown.
+    expect(resolveFieldDisplay('customfield_99', [])).toEqual({
+      label: 'customfield_99',
+      note: null,
+    });
+  });
+
+  it('resolves the empty value to an empty display', () => {
+    expect(resolveFieldDisplay('', fields)).toEqual({ label: '', note: null });
+  });
+});
+
+describe('fieldListItems', () => {
+  const fields = [
+    { id: 'customfield_1002', name: 'Flagged' },
+    { id: 'customfield_2', name: 'Rejection count' },
+    { id: 'labels', name: 'Labels' },
+  ];
+
+  it('labels every row "name (id)"', () => {
+    const { items } = fieldListItems(fields, '', '');
+    expect(items.map((i) => i.label)).toEqual([
+      'Flagged (customfield_1002)',
+      'Rejection count (customfield_2)',
+      'Labels (labels)',
+    ]);
+  });
+
+  it('flags the row matching selectedId, and only that one', () => {
+    const { items } = fieldListItems(fields, '', 'customfield_2');
+    expect(items.find((i) => i.id === 'customfield_2')?.selected).toBe(true);
+    expect(items.filter((i) => i.selected)).toHaveLength(1);
+  });
+
+  it('respects the cap, reporting the remainder as overflow', () => {
     const many = Array.from({ length: FIELD_PICKER_CAP + 7 }, (_, i) => ({
       id: `customfield_${i}`,
       name: `Field ${i}`,
     }));
-    const out = allFieldOptions(many, '');
-    // leading '' + cap + the sentinel
-    expect(out).toHaveLength(1 + FIELD_PICKER_CAP + 1);
-    const last = out[out.length - 1]!;
-    expect(last.value).toBe(MORE_FIELDS_VALUE);
-    expect(last.label).toBe('7 more — keep typing to narrow');
+    const { items, overflow } = fieldListItems(many, '', '');
+    expect(items).toHaveLength(FIELD_PICKER_CAP);
+    expect(overflow).toBe(7);
   });
 
-  it('keeps a stored id selectable, annotated only when we hold the field list', () => {
-    const stored = allFieldOptions(fields, 'customfield_99');
-    expect(stored.find((o) => o.value === 'customfield_99')?.note).toBe(
-      "not in this site's field list",
-    );
-    // With no field data at all (fetch failed / still loading), presence without
-    // the claim — same evidence discipline as columnOptions.
-    const unknown = allFieldOptions([], 'customfield_99');
-    const opt = unknown.find((o) => o.value === 'customfield_99');
-    expect(opt).toBeDefined();
-    expect(opt?.note).toBeUndefined();
+  it('honors an explicit cap', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ id: `cf_${i}`, name: `Field ${i}` }));
+    const { items, overflow } = fieldListItems(many, '', '', 5);
+    expect(items).toHaveLength(5);
+    expect(overflow).toBe(15);
   });
 
-  it('keeps the bound value selectable even when the filter has hidden it', () => {
-    // The picker filters BEFORE building options; a value filtered out must
-    // still be present or WA blanks the control (contract rule 1).
-    const out = allFieldOptions(filterFieldOptions(fields, 'reject'), 'customfield_1002');
-    expect(out.some((o) => o.value === 'customfield_1002')).toBe(true);
+  it('simply omits a selected id the query filters out — no throw, no synthesis', () => {
+    const { items } = fieldListItems(fields, 'reject', 'customfield_1002');
+    expect(items.map((i) => i.id)).toEqual(['customfield_2']);
+    expect(items.some((i) => i.id === 'customfield_1002')).toBe(false);
+  });
+
+  it('delegates order to filterFieldOptions (ranked: exact › prefix › substring)', () => {
+    const ranked = [
+      { id: 'cf_1', name: 'Story flag' }, // substring only
+      { id: 'cf_2', name: 'Flagged' }, // name prefix
+      { id: 'flag', name: 'Whatever' }, // exact id
+    ];
+    const { items } = fieldListItems(ranked, 'flag', '');
+    expect(items.map((i) => i.id)).toEqual(['flag', 'cf_2', 'cf_1']);
   });
 });
 
