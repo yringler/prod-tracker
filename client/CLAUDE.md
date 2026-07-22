@@ -41,11 +41,32 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
 - `risk-detail.component.ts` — `wa-dialog` rundown with each ticket's own resolved
   thresholds and per-column time bars.
 - `risk-admin.component.ts` — per-site config: boards, refresher account, the
-  optional field pickers + the In Progress status picker (all `<sp-option-select>`,
-  fed by `GET /api/admin/risk/fields`; the status one used to be a free-text box
-  because nothing served the site's status list), the two structured editors below, and the work-schedule JSON box
-  (a visual schedule editor is deferred). Owns save + the message banner, and
-  renders the server's per-rule `issues` on a 400.
+  Fields panel (`<sp-risk-fields>` below + the In Progress status picker, fed by
+  `GET /api/admin/risk/fields`), the two structured editors below, and the
+  work-schedule JSON box (a visual schedule editor is deferred). Owns save + the
+  message banner, renders the server's per-rule `issues` on a 400, and
+  client-validates the field entries with the shared `validateFieldEntries`
+  before sending. Keeps the same server/draft signal split for the field entries
+  (`serverFieldEntries` vs `fieldEntries`) as for cutoffs/composite.
+- `fields-editor.component.ts` — `<sp-risk-fields>`, the generic field-mapping
+  list that replaced the four fixed slots (Flagged / rejections / Developer /
+  Reviewer). Starts empty; "+ Add field" appends a row of label `wa-input`,
+  `<sp-field-picker>`, a kind badge once a field is chosen, warn/risk
+  `wa-number-input`s (count kind only, seeded 2/4 at pick), an explicit weight
+  (written as 1, mirroring the composite editor's "make the default visible"
+  normalize), and remove. Kind is COPIED from the picked `RiskFieldMeta.kind` at
+  selection time — the entry, not discovery, owns it from then on. Thresholds are
+  kept as TEXT while editing (a half-typed number must not snap to 0) and parsed
+  on emit; inline errors come from the shared `validateFieldEntries`, so an error
+  shown here is exactly an error the server would 400. Same
+  controlled-on-load/uncontrolled-after-mount contract as the cutoffs editor: the
+  parent binds its SERVER entries, never the draft from `(entriesChange)`.
+- `field-picker.component.ts` — `<sp-field-picker>`, a `wa-input` text filter over
+  an `<sp-option-select>` of ALL the site's Jira fields. Deliberately NOT a
+  hand-rolled combobox — `sp-option-select` stays the single owner of the
+  wa-select contract; this component only decides which options to feed it
+  (`filterFieldOptions` + `allFieldOptions`, capped at `FIELD_PICKER_CAP` with a
+  counted "keep typing" sentinel option it swallows rather than emits).
 - `cutoffs-editor.component.ts` — `<sp-risk-cutoffs>`, the threshold editor that
   replaced the raw-JSON textarea. A tab per metric, rules **grouped by column**, a
   pinned undeletable "Everything else" fallback rule, a work-hours↔work-days toggle
@@ -106,14 +127,17 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   (`parseSizeValue` returns `undefined` for a non-bucket; `Number(null) === 0` was
   the original bug).
 - `select-options.ts` — pure, Angular-free `SelectOption[]` builders
-  (`columnOptions`/`sizeOptions`/`fieldOptions`/`statusOptions`/`ensureValuePresent`/
-  `hasDoneColumnRule`/`boardColumnsKnown`). Unit tested in
-  `client/test/select-options.test.ts`.
-  **"None"/"Default" is an OPTION, never the absence of one.** `fieldOptions` leads
-  with a real `''` option and `statusOptions` with `Default — <shipped default>`,
-  because a bound `''` with no `''` option is exactly the value WA filters away —
-  which is why the Fields panel's raw `<wa-select>`s used to read as though the
-  first discovered candidate were configured when nothing was.
+  (`columnOptions`/`sizeOptions`/`filterFieldOptions`/`allFieldOptions`/
+  `statusOptions`/`ensureValuePresent`/`hasDoneColumnRule`/`boardColumnsKnown`).
+  Unit tested in `client/test/select-options.test.ts`.
+  **"None"/"Default" is an OPTION, never the absence of one.** `allFieldOptions`
+  leads with a real `''` option ("Pick a field…") and `statusOptions` with
+  `Default — <shipped default>`, because a bound `''` with no `''` option is
+  exactly the value WA filters away — which is why the Fields panel's raw
+  `<wa-select>`s used to read as though the first discovered candidate were
+  configured when nothing was. The field list is capped (`FIELD_PICKER_CAP`) with
+  a counted `MORE_FIELDS_VALUE` sentinel — a real option (rule 2: never disable)
+  the picker component swallows on pick.
   **An option's `note` is a CLAIM, and is only made when we can support it.**
   `ensureValuePresent` must always make the bound value selectable (rule 1), but its
   note is optional: `columnOptions` attaches "not on any configured board" only when
@@ -128,9 +152,13 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
 - `dom-events.ts` — `targetValue` / `targetChecked` / `selectValue`, the one place a
   value is read off a DOM or custom element. Pure functions, no class, no DI.
 - `composite-editor.component.ts` — `<sp-risk-composite>`, the power-mean `p` as a
-  labeled slider plus the five weights, where `0` renders as an explicit
+  labeled slider plus the four core weights, where `0` renders as an explicit
   **Excluded** badge (weight ≤ 0 drops the metric entirely; an *absent* weight
-  defaults to 1 — not the same thing).
+  defaults to 1 — not the same thing). `normalize()` copies only the four known
+  ids, which is what strips a legacy `rejections` weight on load. Mapped-field
+  weights appear as READ-ONLY rows (via the `fields` input, bound to the DRAFT
+  entries) so the whole score story reads in one place; they're edited in the
+  Fields panel and are not governed by the built-in-defaults switch.
 - `impact-preview.component.ts` — `<sp-risk-impact>`, the anti-footgun that answers
   "what would these settings do?": per saved board, "12 at risk / 9 warning / 40
   healthy" with a signed delta per tier, a Now/After composition bar, and a sample
@@ -145,6 +173,10 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
 - `format.ts` — pure display helpers (`fmtWorkHM`, `fmtThreshold` — the same number
   the units toggle is showing, so the cutoff editor's collapsed summaries and its
   inputs cannot disagree — firing-metric pills, band variants).
+  `firingMetrics(t, fields)` takes the SNAPSHOT'S `fields ?? []` and appends the
+  mapped-field pills (count → "3 Rejections", flag → the label) after the core
+  four; every `t.fieldMetrics` read is null-guarded, so a pre-fields snapshot
+  degrades to core pills only (tier stripe stays correct — it's stored).
   `HOURS_PER_WORKDAY` now re-exports `WORK_HOURS_PER_DAY` from `@shared/risk-cutoffs`.
   **No SCORING of ticket data happens client-side** — the snapshot carries every
   value, band and threshold (see `worker/src/risk/`). The narrowed rule, since the

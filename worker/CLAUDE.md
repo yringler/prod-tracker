@@ -166,22 +166,51 @@ each tick (each isolated).
     `source:'unavailable'` with a `probeError` rather than failing the endpoint.
     `doneColumn` comes from `logic/health.ts`'s `isDoneColumn`, not a re-derived "last
     element".
+  - **Generic field metrics (the admin field-mapping list).** The four fixed
+    custom-field slots (flagged/rejections/implementor/codeReviewer) are gone;
+    `fields_json` now holds `RiskFieldConfigEntry[]` — each entry maps one Jira
+    field, under an admin label, into its OWN metric in `RiskTicket.fieldMetrics`
+    (keyed by field id; labels ride on `snapshot.fields`). `kind` is derived from
+    Jira's `schema.type` (`number` → `count`, banded by per-entry warn/risk — the
+    old hardcoded `REJ={2,4}` is dead; else → `flag`, binary) via the shared
+    `kindForSchemaType`, resolved at pick time and STORED on the entry so scoring
+    can't drift with discovery. Field weights live on the entry (`?? 1`; 0 =
+    excluded), joining the composite as extra `{score, weight}` terms —
+    `compositeScore` takes a term array now, and `RiskMetricId` is only the four
+    built-ins. `blocked` is **link-only** (an open inward Blocks link); a flag
+    field never ORs into it. Three degrade rules to keep: a fieldValues KEY absent
+    (old snapshot / field added since) evaluates to band `'none'`/score null —
+    never 0; a count key present-but-null reads 0 and bands ok; legacy `fields_json`
+    OBJECT rows convert at read time (`store.fieldEntriesFromStored`: flagged →
+    flag "Flagged", rejections → count "Rejections" 2/4, the two display-only user
+    fields dropped) and re-save as the array — **no migration**, the column stayed
+    TEXT. Entry validation is `@shared/risk-fields`'s `validateFieldEntries`, wired
+    into `candidateConfigError` (same structured-issues 400 on PUT and preview).
+    NOTE: a legacy composite blob still carrying a `rejections` weight 400s on a
+    raw re-PUT; the client editor strips it on load, so editor saves are fine.
+    `alerts.ts` drivers append firing field metrics under the admin's label.
   - **`GET /api/admin/risk/fields`** (admin tier) serves the Fields panel's whole
-    vocabulary: the name-regex custom-field candidates (`listRiskFieldCandidates`)
-    **and** the site's status names (`listStatusCandidates`), for the In Progress
-    status picker. This is the one admin endpoint that must hit Jira — neither list
-    is in any snapshot — and it uses the ADMIN'S own token. Statuses are deduped BY
-    NAME (Jira lists one per project; the config stores a name, and `logic/timers.ts`
-    matches on the name) and carry Jira's `statusCategory` key, so the picker can
-    offer `indeterminate` — Jira's own "in progress" — first. The status half
-    **degrades to `[]`** rather than failing the endpoint: the field pickers still
-    work without it, and the client keeps a stored status selectable regardless.
+    vocabulary: **ALL of the site's Jira fields** (`listAllFields` — system fields
+    included, since `labels`/`priority` are legitimate flag signals; each carries
+    `schemaType` + the derived `kind`; the client text-filters the list — this
+    replaced the old name-regex `listRiskFieldCandidates` buckets) **and** the
+    site's status names (`listStatusCandidates`), for the In Progress status
+    picker, plus the stored entries as `current`. This is the one admin endpoint
+    that must hit Jira — neither list is in any snapshot — and it uses the ADMIN'S
+    own token. Statuses are deduped BY NAME (Jira lists one per project; the
+    config stores a name, and `logic/timers.ts` matches on the name) and carry
+    Jira's `statusCategory` key, so the picker can offer `indeterminate` — Jira's
+    own "in progress" — first. The status half **degrades to `[]`** rather than
+    failing the endpoint: the field picker still works without it, and the client
+    keeps a stored status selectable regardless.
   - **`POST /api/admin/risk/preview`** (admin tier) is the editor's IMPACT preview:
     "12 at risk / 9 warning / 40 healthy (was 6 / 8 / 47)", per board, before the
-    save. Body is the candidate `{cutoffs, composite, schedule}` with the same
-    `null = inherit the shipped default` semantics as the `PUT` — which is why the
-    handler substitutes `DEFAULT_CUTOFFS` explicitly: `resolveCutoff(null)` is the
-    HARD FLOOR, not the defaults. Four load-bearing properties:
+    save. Body is the candidate `{cutoffs, composite, schedule, fields}` with the
+    same `null = inherit` semantics as the `PUT` — for cutoffs/composite/schedule
+    that means the shipped default (which is why the handler substitutes
+    `DEFAULT_CUTOFFS` explicitly: `resolveCutoff(null)` is the HARD FLOOR, not the
+    defaults); for `fields` it means the STORED entries, since there is no code
+    default to inherit. Four load-bearing properties:
     - **Zero Jira calls.** `RiskTicket` carries every field of `HealthInput`, so
       `store.listSnapshots` + `logic/preview.ts` re-score the STORED snapshots in
       place. Cheap enough to debounce on typing (the client does, 500 ms).

@@ -68,8 +68,12 @@ Small on purpose — a handful of source files under `src/`, one test under `tes
     like `workdayPace` (not the UTCDate rule). Used only by the client's local
     "today/yesterday" & per-day groupings — the UTC trend buckets don't use it.
 
-- **`src/risk.ts`** — WIRE TYPES for the Sprint Risk Board (`RiskBand`, `RiskMetricId`,
-  `RiskCutoffs`, `RiskWorkSchedule`, `RiskTicket`, `RiskBoardSnapshot`, `RiskConfigIssue`,
+- **`src/risk.ts`** — WIRE TYPES for the Sprint Risk Board (`RiskBand`, `RiskMetricId`
+  — the FOUR built-ins only; admin-mapped fields score as separate metrics keyed by
+  field id in `RiskTicket.fieldMetrics`, with raw values in `fieldValues` and the
+  entries echoed on `RiskBoardSnapshot.fields` — `RiskFieldKind` /
+  `RiskFieldConfigEntry` / `RiskFieldMeta`, `RiskCutoffs`, `RiskWorkSchedule`,
+  `RiskTicket`, `RiskBoardSnapshot`, `RiskConfigIssue`,
   `RiskColumnsResponse`, the impact-preview shapes (`RiskPreviewRequest` /
   `RiskPreviewBoard` / `RiskPreviewResponse` — the preview's arithmetic is
   server-side in `worker/src/risk/logic/preview.ts`; only its wire shape is here),
@@ -120,7 +124,21 @@ Small on purpose — a handful of source files under `src/`, one test under `tes
     `client/src/app/risk/select-options.ts`.
   - Delete this file (and its barrel line) with the feature.
 
-- **`src/index.ts`** — barrel; re-exports `./domain`, `./contracts`, `./notifications`, `./risk` and `./risk-cutoffs`. Import from
+- **`src/risk-fields.ts`** — the field-mapping twin of `validateCutoffs`, under the
+  same narrowed rule (config-editing math is shared; no ticket scoring here).
+  `validateFieldEntries(entries)` → `{ errors, warnings }` of `RiskConfigIssue`
+  anchored by entry `index` — non-empty unique trimmed label, non-empty unique
+  fieldId, known kind, count entries need finite `0 < warn < risk`, flag entries
+  must omit them, weight absent-or-finite-≥0 (0 warns: excluded from the
+  composite), `MAX_FIELD_ENTRIES` (20) cap. Run by BOTH the worker route
+  (PUT + preview, via `candidateConfigError`) and the client's Fields editor, so
+  an inline error is exactly a would-be 400. Also `kindForSchemaType` — the ONE
+  place Jira's `schema.type` maps to a `RiskFieldKind` (`number` → `count`, else
+  `flag`); worker discovery (`listAllFields`) copies its output onto the picker
+  metas, and the entry stores the kind at pick time. Tested in
+  `test/risk-fields.test.ts` (one case per rule). Deletable with the feature.
+
+- **`src/index.ts`** — barrel; re-exports `./domain`, `./contracts`, `./notifications`, `./risk`, `./risk-cutoffs` and `./risk-fields`. Import from
   `@shared/domain` / `@shared/contracts` (or the barrel) — never deep-import `dist/`.
 
 ## The dependency boundary (load-bearing)
@@ -160,6 +178,8 @@ Shared code must stay **pure and isomorphic** so both runtimes can run it:
   Note it uses **local fixtures**, not `DEFAULT_CUTOFFS`/`DEFAULT_SCHEDULE`: those live in
   `worker/src/risk/logic/defaults.ts` and shared/ may not import worker/. The assertions
   over the real shipped tables are in `worker/test/risk-cutoff-editor.test.ts`.
+- `test/risk-fields.test.ts` — `validateFieldEntries` one case per rule (errors vs
+  warnings, index anchoring) + the `kindForSchemaType` mapping.
 - Both sides depend on this logic, so **any new pure calc/constant in `domain.ts` should get
   a unit test here.** (Contracts are types-only; they're checked by `npm run typecheck`.)
 
