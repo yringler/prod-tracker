@@ -75,7 +75,7 @@ function config(over: Partial<RiskOrgConfigInput> = {}): RiskOrgConfigInput {
     cutoffs: null,
     composite: null,
     schedule: null,
-    fields: {},
+    fields: [],
     inProgressStatus: null,
     devStatusAvailable: false,
     refresherAccountId: REFRESHER,

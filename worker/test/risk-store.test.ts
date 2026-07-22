@@ -7,6 +7,7 @@ import type { RiskBoardSnapshot } from '@shared/risk';
 import type { Env } from '../src/env';
 import {
   MAX_CONSECUTIVE_FAILURES,
+  fieldEntriesFromStored,
   claimAlertFiring,
   claimDegradedNotice,
   clearDegradedNotice,
@@ -55,7 +56,7 @@ function config(over: Partial<RiskOrgConfigInput> = {}): RiskOrgConfigInput {
     cutoffs: null,
     composite: null,
     schedule: null,
-    fields: {},
+    fields: [],
     inProgressStatus: null,
     devStatusAvailable: null,
     refresherAccountId: 'acct-refresher',
@@ -74,6 +75,7 @@ function snapshot(boardId: number, computedAt: string): RiskBoardSnapshot {
     cutoffs: DEFAULT_CUTOFFS,
     composite: DEFAULT_COMPOSITE,
     schedule: DEFAULT_SCHEDULE,
+    fields: [],
     computedAt,
   };
 }
@@ -97,7 +99,10 @@ describe('risk store: config', () => {
         cutoffs: DEFAULT_CUTOFFS,
         composite: { p: 3, weights: { idle: 2 } },
         schedule: DEFAULT_SCHEDULE,
-        fields: { flagged: 'customfield_10002', rejections: null },
+        fields: [
+          { label: 'Flagged', fieldId: 'customfield_10002', kind: 'flag' },
+          { label: 'Rejections', fieldId: 'customfield_10003', kind: 'count', warn: 2, risk: 4, weight: 2 },
+        ],
         inProgressStatus: 'Doing',
       }),
     );
@@ -106,9 +111,48 @@ describe('risk store: config', () => {
     expect(cfg?.cutoffs).toEqual(DEFAULT_CUTOFFS);
     expect(cfg?.composite).toEqual({ p: 3, weights: { idle: 2 } });
     expect(cfg?.schedule).toEqual(DEFAULT_SCHEDULE);
-    expect(cfg?.fields).toEqual({ flagged: 'customfield_10002', rejections: null });
+    expect(cfg?.fields).toEqual([
+      { label: 'Flagged', fieldId: 'customfield_10002', kind: 'flag' },
+      { label: 'Rejections', fieldId: 'customfield_10003', kind: 'count', warn: 2, risk: 4, weight: 2 },
+    ]);
     expect(cfg?.inProgressStatus).toBe('Doing');
     expect(await listConfigs(env)).toHaveLength(1); // upsert, not insert
+  });
+
+  it('converts a legacy fields_json OBJECT at read time (flagged/rejections; rest dropped)', async () => {
+    await putConfig(env, config());
+    await env.DB.prepare(`UPDATE risk_board_config SET fields_json = ? WHERE cloud_id = ?`)
+      .bind(
+        JSON.stringify({
+          flagged: 'customfield_10002',
+          rejections: 'customfield_10005',
+          implementor: 'customfield_10006',
+          codeReviewer: null,
+        }),
+        CLOUD,
+      )
+      .run();
+
+    const cfg = await getConfig(env, CLOUD);
+    expect(cfg?.fields).toEqual([
+      { label: 'Flagged', fieldId: 'customfield_10002', kind: 'flag' },
+      { label: 'Rejections', fieldId: 'customfield_10005', kind: 'count', warn: 2, risk: 4 },
+    ]);
+
+    // A re-save persists the ARRAY shape (the conversion happens exactly once).
+    await putConfig(env, config({ fields: cfg!.fields }));
+    const raw = await env.DB.prepare(`SELECT fields_json FROM risk_board_config WHERE cloud_id = ?`)
+      .bind(CLOUD)
+      .first<{ fields_json: string }>();
+    expect(JSON.parse(raw!.fields_json)).toEqual(cfg?.fields);
+  });
+
+  it('degrades a corrupt fields_json to [] instead of throwing', async () => {
+    await putConfig(env, config());
+    await env.DB.prepare(`UPDATE risk_board_config SET fields_json = '{oops' WHERE cloud_id = ?`)
+      .bind(CLOUD)
+      .run();
+    expect((await getConfig(env, CLOUD))?.fields).toEqual([]);
   });
 
   it('records the dev-status probe verdict once', async () => {
@@ -134,6 +178,37 @@ describe('risk store: config', () => {
     expect(cfg?.inProgressStatus).toBe('Doing'); // the save landed...
     expect(cfg?.degradedNotifiedAt).toBe(AT); // ...without wiping the episode
     expect(cfg?.degradedNotifiedReason).toBe('needs_reauth');
+  });
+});
+
+describe('fieldEntriesFromStored (the tolerant read-side converter)', () => {
+  it('drops malformed array entries and strips non-finite numbers', () => {
+    expect(
+      fieldEntriesFromStored([
+        { label: 'Ok', fieldId: 'customfield_1', kind: 'flag' },
+        { label: '', fieldId: 'customfield_2', kind: 'flag' }, // empty label
+        { label: 'NoField', fieldId: '', kind: 'flag' }, // empty fieldId
+        { label: 'BadKind', fieldId: 'customfield_3', kind: 'user' }, // unknown kind
+        'nope',
+        null,
+        { label: 'Counts', fieldId: 'customfield_4', kind: 'count', warn: 1, risk: Infinity, weight: 2 },
+      ]),
+    ).toEqual([
+      { label: 'Ok', fieldId: 'customfield_1', kind: 'flag' },
+      { label: 'Counts', fieldId: 'customfield_4', kind: 'count', warn: 1, weight: 2 },
+    ]);
+  });
+
+  it('converts the legacy object shape and ignores everything else', () => {
+    expect(fieldEntriesFromStored({ flagged: 'customfield_1' })).toEqual([
+      { label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' },
+    ]);
+    expect(fieldEntriesFromStored({ rejections: 'customfield_2', implementor: 'customfield_3' })).toEqual([
+      { label: 'Rejections', fieldId: 'customfield_2', kind: 'count', warn: 2, risk: 4 },
+    ]);
+    expect(fieldEntriesFromStored({})).toEqual([]);
+    expect(fieldEntriesFromStored(null)).toEqual([]);
+    expect(fieldEntriesFromStored('customfield_1')).toEqual([]);
   });
 });
 

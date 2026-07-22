@@ -18,7 +18,7 @@
 // persist the latch, then deliver, accepting "lost, never duplicated" — a crash
 // costs one missed nudge, not a duplicate. See 2_notifications-plan.md §5.
 
-import type { RiskBoardRef, RiskMetricId, RiskTicket } from '@shared/risk';
+import type { RiskBoardRef, RiskFieldConfigEntry, RiskMetricId, RiskTicket } from '@shared/risk';
 import type { Dao } from '../db/dao';
 import type { Env } from '../env';
 import { errFields, type Logger } from '../log';
@@ -175,22 +175,36 @@ export function isWorkOpen(clock: WorkClock, nowMs: number): boolean {
 
 // --- Drivers + formatting (pure) ----------------------------------------------
 
-/** One firing metric of a ticket, in triage priority order, with a formatted value. */
+/** One firing metric of a ticket, in triage priority order, with a formatted
+ *  value. `metric` is a core id, 'composite', or a mapped field's fieldId. */
 export interface AlertDriver {
-  metric: RiskMetricId | 'composite';
+  metric: RiskMetricId | 'composite' | string;
   label: string;
 }
 
-/** Triage priority (arch §11): which firing metric to read first. */
-const DRIVER_ORDER: RiskMetricId[] = ['blocked', 'idle', 'timeInColumn', 'cycle', 'rejections'];
+/** Triage priority (arch §11): which firing metric to read first. Admin-mapped
+ *  field metrics follow, in config order. */
+const DRIVER_ORDER: RiskMetricId[] = ['blocked', 'idle', 'timeInColumn', 'cycle'];
 
 /** Firing metrics of one ticket (band 'risk'), in priority order — mirrors the
  *  triage row. When only the composite is at risk, a single 'overall risk score'. */
-export function alertDrivers(t: RiskTicket): AlertDriver[] {
+export function alertDrivers(
+  t: RiskTicket,
+  fields: readonly RiskFieldConfigEntry[] = [],
+): AlertDriver[] {
   const out: AlertDriver[] = [];
   for (const id of DRIVER_ORDER) {
     if (t.metrics[id].band !== 'risk') continue;
     out.push({ metric: id, label: driverLabel(id, t) });
+  }
+  for (const entry of fields) {
+    const m = t.fieldMetrics?.[entry.fieldId];
+    if (m?.band !== 'risk') continue;
+    const label =
+      entry.kind === 'count' && typeof m.value === 'number'
+        ? `${m.value} ${entry.label}`
+        : entry.label;
+    out.push({ metric: entry.fieldId, label });
   }
   if (out.length === 0 && t.composite.band === 'risk') {
     out.push({ metric: 'composite', label: 'overall risk score' });
@@ -208,10 +222,6 @@ function driverLabel(id: RiskMetricId, t: RiskTicket): string {
       return `in ${t.column} ${fmtWorkHours(t.timeInColumnHours ?? 0)}`;
     case 'cycle':
       return `cycle ${fmtWorkHours(t.cycleHours ?? 0)}`;
-    case 'rejections': {
-      const n = typeof t.metrics.rejections.value === 'number' ? t.metrics.rejections.value : 0;
-      return `${n} rejection${n === 1 ? '' : 's'}`;
-    }
   }
 }
 
@@ -418,7 +428,7 @@ export async function processBoardAlerts(
   let unreachable = 0;
   for (const r of resolved) {
     const { ticket, prev, next } = r.candidate;
-    const drivers = alertDrivers(ticket);
+    const drivers = alertDrivers(ticket, cfg.fields);
     const singleHash = alertPayloadHash([{ key: ticket.key, drivers }]);
     const prevPhase = prev.phase === 'recovered' ? 'recovered' : 'armed';
     const won = await claimAlertFiring(env, cloudId, boardId, ticket.key, prevPhase, prev.lastNotifiedAt, {

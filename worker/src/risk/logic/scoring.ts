@@ -4,10 +4,10 @@
 //
 // One deliberate change: compositeScore no longer consults the viewer's
 // metric-enable/order toggles (`state.on` / `state.order`). The server always
-// scores all five metrics in a fixed order, so every viewer sees the same number
+// scores every metric in a fixed order, so every viewer sees the same number
 // and the snapshot can carry it.
 
-import type { RiskBand, RiskCompositeConfig, RiskMetricId } from '@shared/risk';
+import type { RiskBand, RiskMetricId } from '@shared/risk';
 import type { Cutoff } from '@shared/risk-cutoffs';
 
 // Cutoff RESOLUTION moved to @shared/risk-cutoffs so the admin editor's "which rule
@@ -23,47 +23,48 @@ export {
   type CutoffMetricId,
 } from '@shared/risk-cutoffs';
 
-/** The five metrics, in the order the server evaluates them. */
+/** The four built-in metrics, in the order the server evaluates them.
+ *  Admin-mapped field metrics score after these, in config order. */
 export const METRIC_ORDER: readonly RiskMetricId[] = [
-  'rejections',
   'blocked',
   'idle',
   'timeInColumn',
   'cycle',
 ];
 
-/** Fixed thresholds for the two metrics with no config table. */
-export const REJ: Cutoff = { warn: 2, risk: 4 }; // code-review rejections (count)
-export const COMP: Cutoff = { warn: 0.7, risk: 1.0 }; // composite: 1.0 = "at the risk line"
+/** Fixed thresholds for the composite: 1.0 = "at the risk line". */
+export const COMP: Cutoff = { warn: 0.7, risk: 1.0 };
 
 /** The blob's `tband`: at-or-past risk → 'risk', at-or-past warn → 'warn', else 'ok'. */
 export function band(v: number, t: Cutoff): Exclude<RiskBand, 'none'> {
   return v >= t.risk ? 'risk' : v >= t.warn ? 'warn' : 'ok';
 }
 
+/** One contribution to the composite: a metric's score and its configured weight.
+ *  Callers pass core metrics with `cfg.weights[id] ?? 1` and field metrics with
+ *  `entry.weight ?? 1`. */
+export interface CompositeTerm {
+  score: number | null;
+  weight: number;
+}
+
 /**
  * Weighted power mean of the per-metric scores: `(Σ w·max(0,s)^p / Σw)^(1/p)`.
  * Each score is value/risk (1.0 = at the risk line), so size/column sensitivity
- * is already baked in. Null scores (no data) are excluded; a metric weighted <= 0
+ * is already baked in. Null scores (no data) are excluded; a term weighted <= 0
  * is excluded too. Null when nothing contributed.
  */
-export function compositeScore(
-  scores: Partial<Record<RiskMetricId, number | null>>,
-  cfg: RiskCompositeConfig,
-): number | null {
-  const p = cfg.p > 0 ? cfg.p : 1;
+export function compositeScore(terms: readonly CompositeTerm[], p: number): number | null {
+  const exp = p > 0 ? p : 1;
   let wsum = 0;
   let acc = 0;
   let any = false;
-  for (const id of METRIC_ORDER) {
-    const s = scores[id];
-    if (s == null) continue;
-    const w = cfg.weights[id] ?? 1;
-    if (w <= 0) continue;
+  for (const t of terms) {
+    if (t.score == null || t.weight <= 0) continue;
     any = true;
-    wsum += w;
-    acc += w * Math.pow(Math.max(0, s), p);
+    wsum += t.weight;
+    acc += t.weight * Math.pow(Math.max(0, t.score), exp);
   }
   if (!any || wsum === 0) return null;
-  return Math.pow(acc / wsum, 1 / p);
+  return Math.pow(acc / wsum, 1 / exp);
 }

@@ -476,14 +476,8 @@ export async function refreshBoard(
   await pace();
 
   const fields = [...BASE_FIELDS];
-  for (const id of [
-    opts.storyPointsFieldId,
-    cfg.fields.flagged,
-    cfg.fields.rejections,
-    cfg.fields.implementor,
-    cfg.fields.codeReviewer,
-  ]) {
-    if (id) fields.push(id);
+  for (const id of [opts.storyPointsFieldId, ...cfg.fields.map((e) => e.fieldId)]) {
+    if (id && !fields.includes(id)) fields.push(id);
   }
   const issues = await pageBoardIssues(client, board.boardId, fields);
   await pace();
@@ -528,7 +522,7 @@ export async function refreshBoard(
         composite,
         inProgressStatus,
         storyPointsFieldId: opts.storyPointsFieldId,
-        fieldIds: cfg.fields,
+        fields: cfg.fields,
         clock,
         nowMs: opts.nowMs,
       }),
@@ -547,6 +541,7 @@ export async function refreshBoard(
     cutoffs,
     composite,
     schedule,
+    fields: cfg.fields,
     computedAt: new Date(opts.nowMs).toISOString(),
   };
 
@@ -582,7 +577,7 @@ interface MapContext {
   composite: RiskBoardSnapshot['composite'];
   inProgressStatus: string;
   storyPointsFieldId: string | null;
-  fieldIds: RiskOrgConfig['fields'];
+  fields: RiskOrgConfig['fields'];
   clock: ReturnType<typeof makeWorkClock>;
   nowMs: number;
 }
@@ -619,8 +614,9 @@ export function mapIssue(issue: RawIssue, ctx: MapContext): RiskTicket {
   const isDone = st.statusCategory?.key === 'done';
   const column = ctx.maps.statusToColumn[statusId] ?? statusName;
 
-  // Blocked = the configured "flagged" field is set OR an open inward Blocks link
-  // (blocker neither in a done category nor in the board's done column).
+  // Blocked = an open inward Blocks link (blocker neither in a done category nor
+  // in the board's done column). Link-only: an admin-mapped flag field (e.g.
+  // Flagged) is its own labeled metric in fieldMetrics, never OR'd in here.
   const blockedByOpen: string[] = [];
   for (const l of (f['issuelinks'] as IssueLink[] | undefined) ?? []) {
     if (!l.inwardIssue || l.type?.name !== 'Blocks') continue;
@@ -630,8 +626,7 @@ export function mapIssue(issue: RawIssue, ctx: MapContext): RiskTicket {
     const catDone = bs?.statusCategory?.key === 'done';
     if (!inDoneCol && !catDone && l.inwardIssue.key) blockedByOpen.push(l.inwardIssue.key);
   }
-  const flagged = ctx.fieldIds.flagged ? !!f[ctx.fieldIds.flagged] : false;
-  const blocked = flagged || blockedByOpen.length > 0;
+  const blocked = blockedByOpen.length > 0;
 
   const boardMaps = {
     statusToColumn: ctx.maps.statusToColumn,
@@ -667,25 +662,32 @@ export function mapIssue(issue: RawIssue, ctx: MapContext): RiskTicket {
     ctx.clock.workMsWithin,
   );
 
-  const rejections = ctx.fieldIds.rejections ? num(f[ctx.fieldIds.rejections]) : null;
+  // Raw value per configured field — the key is ALWAYS present for every
+  // configured entry (an issue without the field reads null), which is what
+  // separates "no value" from "not measured" (absent key) downstream.
+  const fieldValues: Record<string, number | boolean | null> = {};
+  for (const entry of ctx.fields) {
+    fieldValues[entry.fieldId] =
+      entry.kind === 'count' ? num(f[entry.fieldId]) : !!f[entry.fieldId];
+  }
+
   const health = evaluateTicket(
     {
       column,
       points,
-      rejections,
       blocked,
       started: timers.started,
       idleHours: timers.idleHours,
       timeInColumnHours: timers.timeInColumnHours,
       cycleHours: timers.cycleHours,
+      fieldValues,
     },
     ctx.cutoffs,
     ctx.composite,
     ctx.maps.columnNames,
+    ctx.fields,
   );
 
-  const userName = (fieldId: string | null | undefined): string | null =>
-    fieldId ? ((f[fieldId] as UserField | null | undefined)?.displayName ?? null) : null;
   const issueType = f['issuetype'] as { name?: string } | undefined;
   const parent = f['parent'] as { key?: string } | undefined;
 
@@ -700,9 +702,6 @@ export function mapIssue(issue: RawIssue, ctx: MapContext): RiskTicket {
     assigneeAccountId: assigneeField?.accountId ?? null,
     points,
     parentKey: parent?.key ?? null,
-    implementor: userName(ctx.fieldIds.implementor),
-    codeReviewer: userName(ctx.fieldIds.codeReviewer),
-    rejections,
     blocked,
     blockedByOpen,
     unassignedInProgress: assignee == null && column !== ctx.maps.firstCol && !isDone,
@@ -711,6 +710,8 @@ export function mapIssue(issue: RawIssue, ctx: MapContext): RiskTicket {
     idleHours: timers.idleHours,
     timeInColumnHours: timers.timeInColumnHours,
     cycleHours: timers.cycleHours,
+    fieldValues,
+    fieldMetrics: health.fieldMetrics,
     metrics: health.metrics,
     composite: health.composite,
     tier: health.tier,

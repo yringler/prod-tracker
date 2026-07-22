@@ -17,6 +17,7 @@ import type {
   RiskBoardSnapshot,
   RiskCompositeConfig,
   RiskCutoffs,
+  RiskFieldConfigEntry,
   RiskPreviewMover,
   RiskTierCounts,
   RiskTicket,
@@ -32,6 +33,7 @@ export interface PreviewCandidate {
   cutoffs: RiskCutoffs;
   composite: RiskCompositeConfig;
   schedule: RiskWorkSchedule;
+  fields: RiskFieldConfigEntry[];
 }
 
 export interface PreviewDiff {
@@ -70,20 +72,25 @@ export function previewSnapshot(
   let movedToOk = 0;
 
   for (const t of tickets) {
+    // `blocked` is the STORED verdict: a legacy snapshot's blocked still includes
+    // the old flag-OR (one refresh stale, self-healing). A field with no key in
+    // `fieldValues` (legacy snapshot / field added since) bands 'none' and
+    // contributes nothing — that IS the graceful-degrade path.
     const { tier } = evaluateTicket(
       {
         column: t.column,
         points: t.points,
-        rejections: t.rejections,
         blocked: t.blocked,
         started: t.started,
         idleHours: t.idleHours,
         timeInColumnHours: t.timeInColumnHours,
         cycleHours: t.cycleHours,
+        fieldValues: t.fieldValues ?? {},
       },
       candidate.cutoffs,
       candidate.composite,
       columns,
+      candidate.fields,
     );
     afterTiers.push(tier);
     if (tier === t.tier) continue;

@@ -7,11 +7,12 @@
 // refresh tests can hand it canned JSON without minting an OAuth grant.
 //
 // Custom-field ids are never hardcoded here (repo invariant): the caller passes
-// the ids discovered by the app (Story Points) or picked by an admin (the optional
-// flagged/rejections/implementor/codeReviewer fields).
+// the ids discovered by the app (Story Points) or picked by an admin (the
+// generic field-mapping entries).
 
 import { JiraApiError } from '../jira/client';
-import type { RiskPr, RiskStatusCategory, RiskStatusOption } from '@shared/risk';
+import type { RiskFieldMeta, RiskPr, RiskStatusCategory, RiskStatusOption } from '@shared/risk';
+import { kindForSchemaType } from '@shared/risk-fields';
 import type { AssigneeChange, ChangelogEvent, StatusChange } from './logic/timers';
 
 /** The only capability the risk board needs from a Jira client. */
@@ -409,31 +410,31 @@ export async function fetchPullRequests(
   return uniq;
 }
 
-// --- Optional custom-field discovery (admin picker) ---------------------------
+// --- Field discovery (admin field-mapping picker) ------------------------------
 
-interface FieldMeta {
+interface FieldMetaRaw {
   id?: string;
   name?: string;
-  custom?: boolean;
+  schema?: { type?: string };
 }
 
-/** Name-matched candidates for the board's four OPTIONAL custom fields. Risk-owned
- *  on purpose: jira/fields.ts is the app's Story-Points/Sprint discovery and stays
- *  untouched. Ids are always chosen by an admin from this list, never hardcoded. */
-export async function listRiskFieldCandidates(
-  client: RiskJiraClient,
-): Promise<Record<'flagged' | 'rejections' | 'implementor' | 'codeReviewer', { id: string; name: string }[]>> {
-  const all = await client.get<FieldMeta[]>('/rest/api/3/field');
-  const custom = (all ?? []).filter(
-    (f): f is { id: string; name: string; custom?: boolean } =>
-      typeof f.id === 'string' && typeof f.name === 'string' && f.id.startsWith('customfield_'),
-  );
-  const match = (re: RegExp): { id: string; name: string }[] =>
-    custom.filter((f) => re.test(f.name)).map((f) => ({ id: f.id, name: f.name }));
-  return {
-    flagged: match(/flag/i),
-    rejections: match(/reject/i),
-    implementor: match(/implement|developer/i),
-    codeReviewer: match(/review/i),
-  };
+/** ALL of the site's Jira fields for the admin's field-mapping picker, sorted by
+ *  name — system fields included (`labels`/`priority` are legitimate flag
+ *  signals); the client text-filters the list. Each carries the `kind` an entry
+ *  picking it would get (`schema.type` via the shared rule, so the stored kind
+ *  can't drift from what the picker showed). Risk-owned on purpose: jira/fields.ts
+ *  is the app's Story-Points/Sprint discovery and stays untouched. Ids are always
+ *  chosen by an admin from this list, never hardcoded. */
+export async function listAllFields(client: RiskJiraClient): Promise<RiskFieldMeta[]> {
+  const all = await client.get<FieldMetaRaw[]>('/rest/api/3/field');
+  return (all ?? [])
+    .filter(
+      (f): f is FieldMetaRaw & { id: string; name: string } =>
+        typeof f.id === 'string' && f.id.length > 0 && typeof f.name === 'string' && f.name.length > 0,
+    )
+    .map((f) => {
+      const schemaType = typeof f.schema?.type === 'string' ? f.schema.type : null;
+      return { id: f.id, name: f.name, schemaType, kind: kindForSchemaType(schemaType) };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }

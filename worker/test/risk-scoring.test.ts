@@ -2,7 +2,7 @@
 // (evaluateTicket / cardTier / tierCounts) — the rules that decide what the board
 // flags. Pure functions, no clock, no Jira.
 import { describe, expect, it } from 'vitest';
-import type { RiskCompositeConfig, RiskCutoffs } from '@shared/risk';
+import type { RiskCutoffs, RiskFieldConfigEntry } from '@shared/risk';
 import {
   HARD_FALLBACK,
   compositeScore,
@@ -95,28 +95,25 @@ describe('resolveCutoff', () => {
 });
 
 describe('compositeScore', () => {
-  const cfg = (over: Partial<RiskCompositeConfig> = {}): RiskCompositeConfig => ({
-    p: 2,
-    weights: {},
-    ...over,
+  const t = (score: number | null, weight = 1): { score: number | null; weight: number } => ({
+    score,
+    weight,
   });
 
   it('is a weighted power mean over the non-null scores', () => {
     // p=2: sqrt((0.5^2 + 1^2) / 2) = sqrt(0.625)
-    expect(compositeScore({ idle: 0.5, cycle: 1 }, cfg())).toBeCloseTo(Math.sqrt(0.625), 12);
+    expect(compositeScore([t(0.5), t(1)], 2)).toBeCloseTo(Math.sqrt(0.625), 12);
     // p=1 is the plain weighted average of the same two.
-    expect(compositeScore({ idle: 0.5, cycle: 1 }, cfg({ p: 1 }))).toBeCloseTo(0.75, 12);
-    // Weighting cycle 3:1 pulls it toward the worse metric.
-    expect(
-      compositeScore({ idle: 0.5, cycle: 1 }, cfg({ p: 1, weights: { cycle: 3 } })),
-    ).toBeCloseTo(0.875, 12);
+    expect(compositeScore([t(0.5), t(1)], 1)).toBeCloseTo(0.75, 12);
+    // Weighting the worse term 3:1 pulls the mean toward it.
+    expect(compositeScore([t(0.5), t(1, 3)], 1)).toBeCloseTo(0.875, 12);
   });
 
-  it('excludes null scores and zero-weighted metrics, and returns null with no contributors', () => {
-    expect(compositeScore({ idle: 1, cycle: null }, cfg())).toBe(1);
-    expect(compositeScore({ idle: 1, cycle: 0 }, cfg({ p: 1, weights: { cycle: 0 } }))).toBe(1);
-    expect(compositeScore({ idle: null, cycle: null }, cfg())).toBeNull();
-    expect(compositeScore({}, cfg())).toBeNull();
+  it('excludes null scores and zero-weighted terms, and returns null with no contributors', () => {
+    expect(compositeScore([t(1), t(null)], 2)).toBe(1);
+    expect(compositeScore([t(1), t(0, 0)], 1)).toBe(1);
+    expect(compositeScore([t(null), t(null)], 2)).toBeNull();
+    expect(compositeScore([], 2)).toBeNull();
   });
 });
 
@@ -125,49 +122,122 @@ describe('evaluateTicket', () => {
   const ticket = (over: Partial<HealthInput> = {}): HealthInput => ({
     column: 'In Progress',
     points: 3,
-    rejections: 0,
     blocked: false,
     started: true,
     idleHours: 1,
     timeInColumnHours: 1,
     cycleHours: 1,
+    fieldValues: {},
     ...over,
   });
+  // The old hardcoded rejections metric, expressed as what it now is: a count
+  // field entry with the same warn 2 / risk 4.
+  const REJ_ENTRY: RiskFieldConfigEntry = {
+    label: 'Rejections',
+    fieldId: 'customfield_9001',
+    kind: 'count',
+    warn: 2,
+    risk: 4,
+  };
+  const FLAG_ENTRY: RiskFieldConfigEntry = {
+    label: 'Flagged',
+    fieldId: 'customfield_9002',
+    kind: 'flag',
+  };
 
   it('bands each metric against the ticket’s own resolved thresholds', () => {
     const r = evaluateTicket(
-      ticket({ idleHours: 10, timeInColumnHours: 7, rejections: 3 }),
+      ticket({
+        idleHours: 10,
+        timeInColumnHours: 7,
+        fieldValues: { [REJ_ENTRY.fieldId]: 3 },
+      }),
       DEFAULT_CUTOFFS,
       DEFAULT_COMPOSITE,
       COLUMNS,
+      [REJ_ENTRY],
     );
     // idle in In Progress @3pt: warn 4 / risk 9 -> 10h is risk.
     expect(r.metrics.idle).toMatchObject({ band: 'risk', warn: 4, risk: 9 });
     expect(r.metrics.idle.score).toBeCloseTo(10 / 9, 12);
     // in-column in In Progress @3pt: warn 3 / risk 6 -> 7h is risk too.
     expect(r.metrics.timeInColumn).toMatchObject({ band: 'risk', warn: 3, risk: 6 });
-    expect(r.metrics.rejections).toMatchObject({ value: 3, band: 'warn' });
+    expect(r.fieldMetrics[REJ_ENTRY.fieldId]).toMatchObject({
+      value: 3,
+      band: 'warn',
+      warn: 2,
+      risk: 4,
+    });
     expect(r.metrics.blocked).toMatchObject({ value: false, band: 'ok', score: 0 });
     expect(r.tier).toBe('risk');
   });
 
-  it('bands rejections ok at zero and blocked as a binary risk', () => {
-    const r = evaluateTicket(ticket({ blocked: true }), DEFAULT_CUTOFFS, DEFAULT_COMPOSITE, COLUMNS);
-    expect(r.metrics.rejections).toMatchObject({ value: 0, band: 'ok', score: 0 });
+  it('bands a count field ok at zero and blocked as a binary risk', () => {
+    const r = evaluateTicket(
+      ticket({ blocked: true, fieldValues: { [REJ_ENTRY.fieldId]: null } }),
+      DEFAULT_CUTOFFS,
+      DEFAULT_COMPOSITE,
+      COLUMNS,
+      [REJ_ENTRY],
+    );
+    // Key present but null on the issue: reads 0, bands ok (the old semantics).
+    expect(r.fieldMetrics[REJ_ENTRY.fieldId]).toMatchObject({ value: 0, band: 'ok', score: 0 });
     expect(r.metrics.blocked).toMatchObject({ value: true, band: 'risk', score: 1 });
     expect(r.tier).toBe('risk');
   });
 
-  it('keeps showing but stops flagging a done-column ticket', () => {
+  it('bands a flag field as a binary risk, and its own metric — not blocked', () => {
     const r = evaluateTicket(
-      ticket({ column: 'Done', idleHours: 500, rejections: 9, blocked: true }),
+      ticket({ fieldValues: { [FLAG_ENTRY.fieldId]: true } }),
       DEFAULT_CUTOFFS,
       DEFAULT_COMPOSITE,
       COLUMNS,
+      [FLAG_ENTRY],
     );
-    expect(Object.values(r.metrics).map((m) => m.band)).toEqual(['none', 'none', 'none', 'none', 'none']);
+    expect(r.fieldMetrics[FLAG_ENTRY.fieldId]).toMatchObject({ value: true, band: 'risk', score: 1 });
+    expect(r.metrics.blocked).toMatchObject({ value: false, band: 'ok' });
+    expect(r.tier).toBe('risk');
+
+    const off = evaluateTicket(
+      ticket({ fieldValues: { [FLAG_ENTRY.fieldId]: false } }),
+      DEFAULT_CUTOFFS,
+      DEFAULT_COMPOSITE,
+      COLUMNS,
+      [FLAG_ENTRY],
+    );
+    expect(off.fieldMetrics[FLAG_ENTRY.fieldId]).toMatchObject({ value: false, band: 'ok', score: 0 });
+  });
+
+  it('degrades a field with NO fieldValues key to none/null (old snapshot, new field)', () => {
+    const r = evaluateTicket(
+      ticket({ fieldValues: {} }),
+      DEFAULT_CUTOFFS,
+      DEFAULT_COMPOSITE,
+      COLUMNS,
+      [REJ_ENTRY, FLAG_ENTRY],
+    );
+    expect(r.fieldMetrics[REJ_ENTRY.fieldId]).toEqual({ value: null, band: 'none', score: null });
+    expect(r.fieldMetrics[FLAG_ENTRY.fieldId]).toEqual({ value: null, band: 'none', score: null });
+    // ...and it contributes nothing to the composite or the tier.
+    expect(r.tier).toBe('ok');
+  });
+
+  it('keeps showing but stops flagging a done-column ticket', () => {
+    const r = evaluateTicket(
+      ticket({
+        column: 'Done',
+        idleHours: 500,
+        blocked: true,
+        fieldValues: { [REJ_ENTRY.fieldId]: 9 },
+      }),
+      DEFAULT_CUTOFFS,
+      DEFAULT_COMPOSITE,
+      COLUMNS,
+      [REJ_ENTRY],
+    );
+    expect(Object.values(r.metrics).map((m) => m.band)).toEqual(['none', 'none', 'none', 'none']);
     expect(Object.values(r.metrics).every((m) => m.score === null)).toBe(true);
-    expect(r.metrics.rejections.value).toBe(9); // raw values still display
+    expect(r.fieldMetrics[REJ_ENTRY.fieldId]).toMatchObject({ value: 9, band: 'none', score: null });
     expect(r.metrics.idle.value).toBe(500);
     expect(r.composite).toEqual({ score: null, band: 'none' });
     expect(r.tier).toBeNull();
@@ -183,16 +253,16 @@ describe('evaluateTicket', () => {
     expect(r.metrics.idle.band).toBe('none');
     expect(r.metrics.timeInColumn.band).toBe('none');
     expect(r.metrics.cycle.band).toBe('none');
-    // rejections/blocked still score, so the composite is still a number.
-    expect(r.metrics.rejections.band).toBe('ok');
+    // blocked still scores, so the composite is still a number.
+    expect(r.metrics.blocked.band).toBe('ok');
     expect(r.composite.score).toBe(0);
     expect(r.tier).toBe('ok');
   });
 
   it('pins a hand-computed composite', () => {
     // Unpointed ticket in To Do: idle warn 16 / risk 48, cycle warn 19 / risk 32,
-    // in-column warn 16 / risk 48. Scores: rejections 0, blocked 0,
-    // idle 24/48 = .5, inCol 24/48 = .5, cycle 16/32 = .5 -> p=2, equal weights.
+    // in-column warn 16 / risk 48. Scores: blocked 0, idle 24/48 = .5,
+    // inCol 24/48 = .5, cycle 16/32 = .5 -> p=2, equal weights over 4 terms.
     const r = evaluateTicket(
       ticket({
         column: 'To Do',
@@ -205,9 +275,28 @@ describe('evaluateTicket', () => {
       DEFAULT_COMPOSITE,
       COLUMNS,
     );
-    expect(r.composite.score).toBeCloseTo(Math.sqrt((0.25 * 3) / 5), 12);
-    expect(r.composite.band).toBe('ok'); // sqrt(0.15) ~ 0.387, under COMP.warn (0.7)
+    expect(r.composite.score).toBeCloseTo(Math.sqrt((0.25 * 3) / 4), 12);
+    expect(r.composite.band).toBe('ok'); // sqrt(0.1875) ~ 0.433, under COMP.warn (0.7)
     expect(r.tier).toBe('warn'); // idle 24 >= warn 16
+
+    // The same ticket with a weighted count field at its risk line: the field's
+    // score 1 joins the mean under entry.weight (2), pushing it past COMP.warn.
+    const withField = evaluateTicket(
+      ticket({
+        column: 'To Do',
+        points: null,
+        idleHours: 24,
+        timeInColumnHours: 24,
+        cycleHours: 16,
+        fieldValues: { [REJ_ENTRY.fieldId]: 4 },
+      }),
+      DEFAULT_CUTOFFS,
+      DEFAULT_COMPOSITE,
+      COLUMNS,
+      [{ ...REJ_ENTRY, weight: 2 }],
+    );
+    expect(withField.composite.score).toBeCloseTo(Math.sqrt((0.25 * 3 + 2 * 1) / 6), 12);
+    expect(withField.tier).toBe('risk'); // the field metric itself is at risk
   });
 });
 

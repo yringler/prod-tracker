@@ -13,8 +13,10 @@ import type { ApiIssue } from './contracts';
 /** Band a metric is currently in. `none` = not applicable (done / not started). */
 export type RiskBand = 'ok' | 'warn' | 'risk' | 'none';
 
-/** The five scored metrics, in the order the server evaluates them. */
-export type RiskMetricId = 'rejections' | 'blocked' | 'idle' | 'timeInColumn' | 'cycle';
+/** The four built-in metrics, in the order the server evaluates them. Admin-mapped
+ *  Jira fields score as ADDITIONAL metrics, keyed by field id in
+ *  `RiskTicket.fieldMetrics` — a separate map so this union stays exact. */
+export type RiskMetricId = 'blocked' | 'idle' | 'timeInColumn' | 'cycle';
 
 /** One cutoff rule. Matched most-specific-first (column+size beats column-only
  *  beats size-only beats the `default` rule), independent of table order. */
@@ -27,8 +29,8 @@ export interface RiskCutoffRule {
   default?: boolean;
 }
 
-/** Per-metric cutoff tables. Only the three time-based metrics are configurable;
- *  rejections/blocked use fixed constants (see logic/scoring.ts). */
+/** Per-metric cutoff tables. Only the three time-based metrics have them; blocked
+ *  is binary, and admin-mapped fields carry their own per-entry warn/risk. */
 export interface RiskCutoffs {
   idle: RiskCutoffRule[];
   cycle: RiskCutoffRule[];
@@ -130,9 +132,8 @@ export interface RiskTicket {
   assigneeAccountId: string | null;
   points: number | null;
   parentKey: string | null;
-  implementor: string | null;
-  codeReviewer: string | null;
-  rejections: number | null;
+  /** Open inward "Blocks" links only — an admin-mapped flag field is its own
+   *  labeled metric in `fieldMetrics`, never OR'd in here. */
   blocked: boolean;
   blockedByOpen: string[];
   unassignedInProgress: boolean;
@@ -141,6 +142,13 @@ export interface RiskTicket {
   idleHours: number | null;
   timeInColumnHours: number | null;
   cycleHours: number | null;
+  /** Raw value per configured field id (count → number|null, flag → boolean) —
+   *  what the impact preview re-scores from. A key absent here (old snapshot, or
+   *  a field added since) degrades that field's metric to band 'none'. */
+  fieldValues: Record<string, number | boolean | null>;
+  /** One computed metric per configured field id, under the admin's label
+   *  (labels ride on `RiskBoardSnapshot.fields`). */
+  fieldMetrics: Record<string, RiskMetricState>;
   metrics: Record<RiskMetricId, RiskMetricState>;
   composite: { score: number | null; band: RiskBand };
   /** Worst firing band across the metrics + composite; null = nothing firing
@@ -172,6 +180,10 @@ export interface RiskBoardSnapshot {
   cutoffs: RiskCutoffs;
   composite: RiskCompositeConfig;
   schedule: RiskWorkSchedule;
+  /** The field entries in force when this snapshot was computed — echoed like
+   *  `cutoffs`/`composite`, and how the client learns each field's label.
+   *  Old snapshots (pre-fields) read as `[]`. */
+  fields: RiskFieldConfigEntry[];
   computedAt: string;
 }
 
@@ -234,22 +246,13 @@ export interface RiskFieldMeta {
   kind: RiskFieldKind;
 }
 
-/** Optional per-org custom-field ids. All discovered/admin-picked — never
- *  hardcoded (repo invariant). Absent/null = that feature degrades quietly. */
-export interface RiskFieldIds {
-  flagged?: string | null;
-  rejections?: string | null;
-  implementor?: string | null;
-  codeReviewer?: string | null;
-}
-
 export interface RiskAdminConfig {
   boards: RiskBoardRef[];
   /** null = the code defaults (echoed separately as `defaults`). */
   cutoffs: RiskCutoffs | null;
   composite: RiskCompositeConfig | null;
   schedule: RiskWorkSchedule | null;
-  fields: RiskFieldIds;
+  fields: RiskFieldConfigEntry[];
   inProgressStatus: string | null;
   refresherAccountId: string | null;
   /** null = unprobed; false = the dev-status endpoint isn't available (no PRs). */
@@ -273,7 +276,8 @@ export interface PutRiskConfigRequest {
   cutoffs?: RiskCutoffs | null;
   composite?: RiskCompositeConfig | null;
   schedule?: RiskWorkSchedule | null;
-  fields?: RiskFieldIds | null;
+  /** Absent/null = no mapped fields (there is no code default to inherit). */
+  fields?: RiskFieldConfigEntry[] | null;
   inProgressStatus?: string | null;
   refresherAccountId?: string | null;
 }
@@ -324,6 +328,10 @@ export interface RiskPreviewRequest {
   /** Only used to detect staleness (see `scheduleStale`) — the preview cannot
    *  re-measure the clocks. */
   schedule?: RiskWorkSchedule | null;
+  /** Candidate field entries, so threshold/weight edits preview live. Absent/null
+   *  = the stored config's entries. A field with no `fieldValues` key in a stored
+   *  snapshot bands 'none' and contributes nothing (graceful degrade). */
+  fields?: RiskFieldConfigEntry[] | null;
 }
 
 /** A ticket whose tier changes under the candidate config. */
@@ -406,12 +414,11 @@ export interface RiskStatusOption {
 }
 
 export interface RiskFieldCandidatesResponse {
-  flagged: RiskFieldOption[];
-  rejections: RiskFieldOption[];
-  implementor: RiskFieldOption[];
-  codeReviewer: RiskFieldOption[];
+  /** ALL of the site's Jira fields (system fields included — `labels`/`priority`
+   *  are legitimate flag signals), sorted by name; the picker text-filters. */
+  fields: RiskFieldMeta[];
   /** The site's status vocabulary, for the In Progress status picker. Empty when
    *  the status read failed — the picker then still offers the stored value. */
   statuses: RiskStatusOption[];
-  current: RiskFieldIds;
+  current: RiskFieldConfigEntry[];
 }

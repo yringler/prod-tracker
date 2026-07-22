@@ -26,8 +26,8 @@ import type {
   RiskCompositeConfig,
   RiskCutoffs,
   RiskFieldCandidatesResponse,
+  RiskFieldConfigEntry,
   RiskStatusOption,
-  RiskFieldIds,
   RiskMetricId,
   RiskPreviewBoard,
   RiskPreviewRequest,
@@ -37,6 +37,7 @@ import type {
   RiskWorkSchedule,
 } from '@shared/risk';
 import { validateCutoffs } from '@shared/risk-cutoffs';
+import { validateFieldEntries } from '@shared/risk-fields';
 import { type AuthedCtx, error, json, readJson } from '../http';
 import { JiraClient } from '../jira/client';
 import { listBoards } from '../jira/search';
@@ -50,7 +51,7 @@ import {
 } from './logic/defaults';
 import { isDoneColumn } from './logic/health';
 import { PREVIEW_SAMPLE_LIMIT, addCounts, previewSnapshot } from './logic/preview';
-import { fetchBoardMaps, listRiskFieldCandidates, listStatusCandidates } from './jira';
+import { fetchBoardMaps, listAllFields, listStatusCandidates } from './jira';
 import { refreshOrg } from './refresh';
 import {
   deleteBoardState,
@@ -204,7 +205,7 @@ async function getRiskConfig(ctx: AuthedCtx): Promise<Response> {
           cutoffs: null,
           composite: null,
           schedule: null,
-          fields: {},
+          fields: [],
           inProgressStatus: null,
           refresherAccountId: null,
           devStatusAvailable: null,
@@ -231,11 +232,9 @@ async function putRiskConfig(req: Request, ctx: AuthedCtx): Promise<Response> {
   const cutoffs = body.cutoffs ?? null;
   const composite = body.composite ?? null;
   const schedule = body.schedule ?? null;
-  const bad = candidateConfigError(cutoffs, composite, schedule);
+  const fields = body.fields ?? [];
+  const bad = candidateConfigError(cutoffs, composite, schedule, fields);
   if (bad) return bad;
-
-  const fields = body.fields ?? {};
-  if (!validFields(fields)) return error(400, 'invalid field ids');
 
   const existing = await getConfig(ctx.env, ctx.cloudId);
   // Default the refresher to whoever configured it first (mirrors configureChannel's
@@ -370,10 +369,15 @@ async function previewRiskConfig(req: Request, ctx: AuthedCtx): Promise<Response
   const body = await readJson<RiskPreviewRequest>(req);
   if (!body || typeof body !== 'object') return error(400, 'a preview body is required');
 
+  const cfg = await getConfig(ctx.env, ctx.cloudId);
+
   const cutoffs = body.cutoffs ?? null;
   const composite = body.composite ?? null;
   const schedule = body.schedule ?? null;
-  const bad = candidateConfigError(cutoffs, composite, schedule);
+  // fields: null/absent = the STORED entries (there is no code default to
+  // inherit) — the client sends its draft so threshold/weight edits preview live.
+  const fields = body.fields ?? cfg?.fields ?? [];
+  const bad = candidateConfigError(cutoffs, composite, schedule, fields);
   if (bad) return bad;
 
   // null on the wire = "inherit the shipped default", exactly as PUT stores it —
@@ -383,9 +387,8 @@ async function previewRiskConfig(req: Request, ctx: AuthedCtx): Promise<Response
     cutoffs: cutoffs ?? DEFAULT_CUTOFFS,
     composite: composite ?? DEFAULT_COMPOSITE,
     schedule: schedule ?? DEFAULT_SCHEDULE,
+    fields,
   };
-
-  const cfg = await getConfig(ctx.env, ctx.cloudId);
   const stored = new Map(
     (await listSnapshots(ctx.env, ctx.cloudId)).map((s) => [s.boardId, s] as const),
   );
@@ -452,27 +455,28 @@ function withDoneColumn(columns: string[]): { columns: string[]; doneColumn: str
 }
 
 /**
- * The Fields panel's whole vocabulary: the custom-field candidates AND the site's
- * status names, both read live with the ADMIN'S own token (this is the one admin
- * endpoint that has to hit Jira — a field/status list is not in any snapshot).
+ * The Fields panel's whole vocabulary: ALL of the site's Jira fields (the picker
+ * text-filters) AND the site's status names, both read live with the ADMIN'S own
+ * token (this is the one admin endpoint that has to hit Jira — a field/status
+ * list is not in any snapshot).
  *
  * The status read degrades to `[]` rather than failing the endpoint: the field
- * pickers are still useful without it, and the client keeps the stored status
+ * picker is still useful without it, and the client keeps the stored status
  * selectable regardless (`statusOptions` → `ensureValuePresent`).
  */
 async function listRiskFields(ctx: AuthedCtx): Promise<Response> {
   const token = await ctx.dao.getToken(ctx.accountId);
   if (!token) return error(409, 'no Jira grant for this admin', 'NO_GRANT');
   const client = new JiraClient(ctx.env, ctx.dao, token, ctx.cloudId);
-  const [candidates, statuses, cfg] = await Promise.all([
-    listRiskFieldCandidates(client),
+  const [fields, statuses, cfg] = await Promise.all([
+    listAllFields(client),
     listStatusCandidates(client).catch(() => [] as RiskStatusOption[]),
     getConfig(ctx.env, ctx.cloudId),
   ]);
   const body: RiskFieldCandidatesResponse = {
-    ...candidates,
+    fields,
     statuses,
-    current: cfg?.fields ?? {},
+    current: cfg?.fields ?? [],
   };
   return json(body);
 }
@@ -480,7 +484,10 @@ async function listRiskFields(ctx: AuthedCtx): Promise<Response> {
 // --- Validation ---------------------------------------------------------------
 
 const WEEKDAYS: RiskWeekday[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const METRIC_IDS: RiskMetricId[] = ['rejections', 'blocked', 'idle', 'timeInColumn', 'cycle'];
+// The four core ids only: a legacy composite blob still carrying a `rejections`
+// weight 400s on a raw re-PUT (the client editor strips it on load, so editor
+// saves are fine — release-noted). Field weights live on the entries, not here.
+const METRIC_IDS: RiskMetricId[] = ['blocked', 'idle', 'timeInColumn', 'cycle'];
 
 // Cutoff validation now lives in @shared/risk-cutoffs (`validateCutoffs`) — one
 // implementation, run by both the editor and this route, returning structured
@@ -489,19 +496,22 @@ const METRIC_IDS: RiskMetricId[] = ['rejections', 'blocked', 'idle', 'timeInColu
 // duplicated `default` are now errors (see its BACK-COMPAT CAVEAT).
 
 /**
- * The three config blocks a candidate can get wrong, validated once for BOTH the
+ * The four config blocks a candidate can get wrong, validated once for BOTH the
  * save and the preview. Sharing it is the point: a config the preview accepts must
  * be a config the save accepts, or the preview would be showing an admin the
  * consequences of something they can't store. Returns a ready 400, or null.
  *
- * Cutoffs run through `@shared/risk-cutoffs`'s `validateCutoffs` — the same
- * function the editor runs — minus the board-column context (that would cost Jira
- * calls). Warnings are advisory and deliberately never block; the client shows them.
+ * Cutoffs run through `@shared/risk-cutoffs`'s `validateCutoffs` and field
+ * entries through `@shared/risk-fields`'s `validateFieldEntries` — the same
+ * functions the editors run — minus the board-column context (that would cost
+ * Jira calls). Warnings are advisory and deliberately never block; the client
+ * shows them.
  */
 function candidateConfigError(
   cutoffs: RiskCutoffs | null,
   composite: RiskCompositeConfig | null,
   schedule: RiskWorkSchedule | null,
+  fields: RiskFieldConfigEntry[],
 ): Response | null {
   if (cutoffs) {
     const { errors } = validateCutoffs(cutoffs);
@@ -511,6 +521,10 @@ function candidateConfigError(
   if (schedule) {
     const bad = scheduleError(schedule);
     if (bad) return error(400, bad);
+  }
+  const { errors: fieldErrors } = validateFieldEntries(fields);
+  if (fieldErrors.length) {
+    return error(400, 'invalid field entries', 'INVALID_FIELDS', { issues: fieldErrors });
   }
   return null;
 }
@@ -549,8 +563,4 @@ function scheduleError(s: RiskWorkSchedule): string | null {
     }
   }
   return null;
-}
-
-function validFields(f: RiskFieldIds): boolean {
-  return Object.values(f).every((v) => v === null || v === undefined || typeof v === 'string');
 }

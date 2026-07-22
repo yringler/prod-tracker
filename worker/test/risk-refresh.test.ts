@@ -191,7 +191,7 @@ function orgConfig(over: Partial<RiskOrgConfig> = {}): RiskOrgConfig {
     cutoffs: DEFAULT_CUTOFFS,
     composite: null,
     schedule: ALWAYS_OPEN,
-    fields: {},
+    fields: [],
     inProgressStatus: null,
     // Off: the dev-status probe is exercised separately, not in every golden.
     devStatusAvailable: false,
@@ -276,6 +276,57 @@ describe('refreshBoard', () => {
     expect(t.blocked).toBe(true);
     expect(t.blockedByOpen).toEqual(['RB-9']); // the done blocker doesn't count
     expect(t.metrics.blocked).toMatchObject({ band: 'risk', score: 1 });
+  });
+
+  it('fetches configured fields, builds fieldValues/fieldMetrics and echoes the entries', async () => {
+    const FLAG = { label: 'Flagged', fieldId: 'customfield_flag', kind: 'flag' as const };
+    const REJ = { label: 'Rejections', fieldId: 'customfield_rej', kind: 'count' as const, warn: 2, risk: 4 };
+    const flaggedIssue = issue('105', 'RB-5', '2', 'In Progress', {
+      customfield_flag: [{ value: 'Impediment' }], // truthy -> flag on
+      customfield_rej: 3,
+    });
+    const calls: string[] = [];
+    const base = stubClient(calls);
+    const client: RiskJiraClient = {
+      async get<T>(path: string): Promise<T> {
+        if (path.includes('/issue?')) {
+          calls.push(path);
+          return { issues: [flaggedIssue, issue('102', 'RB-2', '2', 'In Progress')], total: 2 } as T;
+        }
+        const cl = path.match(/\/rest\/api\/3\/issue\/(\d+)\/changelog/);
+        if (cl) return (CHANGELOGS[cl[1]!] ?? { total: 0, values: [] }) as T;
+        return base.get<T>(path);
+      },
+    };
+    const cfg = orgConfig({ fields: [FLAG, REJ] });
+    const snap = await refreshBoard(env, client, cfg, cfg.boards[0]!, {
+      storyPointsFieldId: 'customfield_pts',
+      nowMs: NOW,
+      pacingMs: 0,
+      dao,
+    });
+
+    // The issue fetch asked Jira for both configured field ids.
+    const issueCall = calls.find((p) => p.includes('/issue?'))!;
+    expect(decodeURIComponent(issueCall)).toContain('customfield_flag');
+    expect(decodeURIComponent(issueCall)).toContain('customfield_rej');
+
+    // The snapshot echoes the entries (how the client learns the labels).
+    expect(snap.fields).toEqual([FLAG, REJ]);
+
+    const flagged = snap.tickets.find((t) => t.key === 'RB-5')!;
+    // Blocked is LINK-only now: the flag field is its own metric, never OR'd in.
+    expect(flagged.blocked).toBe(false);
+    expect(flagged.metrics.blocked.band).toBe('ok');
+    expect(flagged.fieldValues).toEqual({ customfield_flag: true, customfield_rej: 3 });
+    expect(flagged.fieldMetrics['customfield_flag']).toMatchObject({ value: true, band: 'risk', score: 1 });
+    expect(flagged.fieldMetrics['customfield_rej']).toMatchObject({ value: 3, band: 'warn', warn: 2, risk: 4 });
+    expect(flagged.tier).toBe('risk');
+
+    // An issue without the fields still gets BOTH keys (null-count reads 0/false).
+    const plain = snap.tickets.find((t) => t.key === 'RB-2')!;
+    expect(plain.fieldValues).toEqual({ customfield_flag: false, customfield_rej: null });
+    expect(plain.fieldMetrics['customfield_rej']).toMatchObject({ value: 0, band: 'ok' });
   });
 
   it('is idempotent: two runs produce one identical row', async () => {

@@ -9,6 +9,7 @@
 import type {
   RiskCompositeConfig,
   RiskCutoffs,
+  RiskFieldConfigEntry,
   RiskWorkSchedule,
 } from '@shared/risk';
 
@@ -179,13 +180,16 @@ export const DEFAULT_CUTOFFS: RiskCutoffs = {
 export const DEFAULT_COMPOSITE: RiskCompositeConfig = {
   p: 2,
   weights: {
-    rejections: 1,
     blocked: 1,
     idle: 1,
     timeInColumn: 1,
     cycle: 1,
   },
 };
+
+/** No field mappings by default — the panel starts empty and each org maps its
+ *  own Jira fields. (Field weights live on the entries, not in `weights` above.) */
+export const DEFAULT_FIELDS: RiskFieldConfigEntry[] = [];
 
 /** Mon-Thu 09:00-18:00, Fri 09:00-13:00, America/New_York (the userscript's RB_WORK). */
 export const DEFAULT_SCHEDULE: RiskWorkSchedule = {

@@ -71,9 +71,6 @@ function mkTicket(over: Partial<RiskTicket> & { key: string }): RiskTicket {
     assigneeAccountId: ASSIGNEE,
     points: 3,
     parentKey: null,
-    implementor: null,
-    codeReviewer: null,
-    rejections: null,
     blocked: false,
     blockedByOpen: [],
     unassignedInProgress: false,
@@ -82,8 +79,9 @@ function mkTicket(over: Partial<RiskTicket> & { key: string }): RiskTicket {
     idleHours: 40,
     timeInColumnHours: 27,
     cycleHours: 60,
+    fieldValues: {},
+    fieldMetrics: {},
     metrics: {
-      rejections: metric('ok'),
       blocked: metric('ok'),
       idle: metric('risk'),
       timeInColumn: metric('ok'),
@@ -216,7 +214,6 @@ describe('alertDrivers', () => {
       blockedByOpen: ['PROJ-9', 'PROJ-8'],
       idleHours: 49, // 6d 1h
       metrics: {
-        rejections: metric('ok'),
         blocked: metric('risk'),
         idle: metric('risk'),
         timeInColumn: metric('warn'), // warn, not risk -> excluded
@@ -229,11 +226,38 @@ describe('alertDrivers', () => {
     ]);
   });
 
+  it('appends firing field metrics under the admin label, in config order', () => {
+    const t = mkTicket({
+      key: 'A',
+      blockedByOpen: ['PROJ-9'],
+      metrics: {
+        blocked: metric('risk'),
+        idle: metric('ok'),
+        timeInColumn: metric('ok'),
+        cycle: metric('ok'),
+      },
+      fieldMetrics: {
+        customfield_1: { value: 3, band: 'risk', score: 1.5, warn: 1, risk: 2 },
+        customfield_2: { value: true, band: 'risk', score: 1 },
+        customfield_3: { value: 1, band: 'warn', score: 0.5, warn: 1, risk: 2 }, // excluded
+      },
+    });
+    const fields = [
+      { label: 'Rejections', fieldId: 'customfield_1', kind: 'count' as const, warn: 1, risk: 2 },
+      { label: 'Flagged', fieldId: 'customfield_2', kind: 'flag' as const },
+      { label: 'Bounces', fieldId: 'customfield_3', kind: 'count' as const, warn: 1, risk: 2 },
+    ];
+    expect(alertDrivers(t, fields)).toEqual([
+      { metric: 'blocked', label: 'blocked by PROJ-9' },
+      { metric: 'customfield_1', label: '3 Rejections' },
+      { metric: 'customfield_2', label: 'Flagged' },
+    ]);
+  });
+
   it('falls back to the composite when only it is at risk', () => {
     const t = mkTicket({
       key: 'A',
       metrics: {
-        rejections: metric('ok'),
         blocked: metric('ok'),
         idle: metric('warn'),
         timeInColumn: metric('warn'),
@@ -349,7 +373,7 @@ function cfg(): RiskOrgConfig {
     cutoffs: null,
     composite: null,
     schedule: null,
-    fields: {},
+    fields: [],
     inProgressStatus: null,
     devStatusAvailable: false,
     refresherAccountId: 'acct-refresher',

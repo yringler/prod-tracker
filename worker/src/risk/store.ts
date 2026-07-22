@@ -14,7 +14,7 @@ import type {
   RiskCompositeConfig,
   RiskCutoffs,
   RiskDegradedReason,
-  RiskFieldIds,
+  RiskFieldConfigEntry,
   RiskWorkSchedule,
 } from '@shared/risk';
 import { runChanges } from '../db/driver';
@@ -32,7 +32,7 @@ export interface RiskOrgConfig {
   cutoffs: RiskCutoffs | null;
   composite: RiskCompositeConfig | null;
   schedule: RiskWorkSchedule | null;
-  fields: RiskFieldIds;
+  fields: RiskFieldConfigEntry[];
   inProgressStatus: string | null;
   devStatusAvailable: boolean | null;
   refresherAccountId: string | null;
@@ -103,6 +103,58 @@ function parseJson<T>(raw: string | null, fallback: T): T {
   }
 }
 
+/**
+ * `fields_json` across its three historical shapes, tolerantly (read-side twin of
+ * the strict shared `validateFieldEntries` — reads never 400):
+ *   - the current array of `RiskFieldConfigEntry` (malformed entries dropped);
+ *   - the legacy `RiskFieldIds` object — flagged/rejections become the entries
+ *     that preserve their old behavior (flag "Flagged"; count "Rejections" with
+ *     the old hardcoded warn 2 / risk 4), implementor/codeReviewer are dropped
+ *     (they were display-only and too org-specific to generalize);
+ *   - anything else (NULL, corrupt JSON) → [].
+ * Exported for direct testing; `putConfig` always writes the array shape, so the
+ * conversion happens exactly once per legacy org — on its first re-save.
+ */
+export function fieldEntriesFromStored(raw: unknown): RiskFieldConfigEntry[] {
+  if (Array.isArray(raw)) {
+    const out: RiskFieldConfigEntry[] = [];
+    for (const e of raw) {
+      if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
+      const r = e as Record<string, unknown>;
+      const label = typeof r['label'] === 'string' ? r['label'].trim() : '';
+      const fieldId = typeof r['fieldId'] === 'string' ? r['fieldId'].trim() : '';
+      const kind = r['kind'];
+      if (!label || !fieldId || (kind !== 'count' && kind !== 'flag')) continue;
+      const numOr = (v: unknown): number | undefined =>
+        typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+      const warn = numOr(r['warn']);
+      const risk = numOr(r['risk']);
+      const weight = numOr(r['weight']);
+      out.push({
+        label,
+        fieldId,
+        kind,
+        ...(kind === 'count' && warn !== undefined ? { warn } : {}),
+        ...(kind === 'count' && risk !== undefined ? { risk } : {}),
+        ...(weight !== undefined ? { weight } : {}),
+      });
+    }
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    const legacy = raw as Record<string, unknown>;
+    const out: RiskFieldConfigEntry[] = [];
+    if (typeof legacy['flagged'] === 'string' && legacy['flagged']) {
+      out.push({ label: 'Flagged', fieldId: legacy['flagged'], kind: 'flag' });
+    }
+    if (typeof legacy['rejections'] === 'string' && legacy['rejections']) {
+      out.push({ label: 'Rejections', fieldId: legacy['rejections'], kind: 'count', warn: 2, risk: 4 });
+    }
+    return out;
+  }
+  return [];
+}
+
 function mapConfig(r: ConfigRow): RiskOrgConfig {
   return {
     cloudId: r.cloud_id,
@@ -110,7 +162,7 @@ function mapConfig(r: ConfigRow): RiskOrgConfig {
     cutoffs: parseJson<RiskCutoffs | null>(r.cutoffs_json, null),
     composite: parseJson<RiskCompositeConfig | null>(r.composite_json, null),
     schedule: parseJson<RiskWorkSchedule | null>(r.work_schedule_json, null),
-    fields: parseJson<RiskFieldIds>(r.fields_json, {}),
+    fields: fieldEntriesFromStored(parseJson<unknown>(r.fields_json, null)),
     inProgressStatus: r.in_progress_status,
     devStatusAvailable: r.dev_status_available == null ? null : r.dev_status_available === 1,
     refresherAccountId: r.refresher_account_id,
@@ -179,7 +231,7 @@ export async function putConfig(env: Env, cfg: RiskOrgConfigInput): Promise<void
       cfg.cutoffs ? JSON.stringify(cfg.cutoffs) : null,
       cfg.composite ? JSON.stringify(cfg.composite) : null,
       cfg.schedule ? JSON.stringify(cfg.schedule) : null,
-      JSON.stringify(cfg.fields ?? {}),
+      JSON.stringify(cfg.fields ?? []),
       cfg.inProgressStatus,
       cfg.devStatusAvailable == null ? null : cfg.devStatusAvailable ? 1 : 0,
       cfg.refresherAccountId,

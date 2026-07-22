@@ -68,7 +68,7 @@ async function seedConfig(boards = [{ boardId: 5, name: 'Sites' }]): Promise<voi
     cutoffs: null,
     composite: null,
     schedule: null,
-    fields: {},
+    fields: [],
     inProgressStatus: null,
     devStatusAvailable: null,
     refresherAccountId: ADMIN,
@@ -261,6 +261,64 @@ describe('admin config', () => {
     });
   });
 
+  // Same shape for the field-mapping entries: shared validateFieldEntries findings
+  // ride the 400 so the Fields panel can point at the offending row.
+  describe('structured field-entry issues', () => {
+    const fieldIssuesFor = async (fields: unknown) => {
+      const res = await put({ boards: [], fields });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { code?: string; issues?: RiskConfigIssue[] };
+      expect(body.code).toBe('INVALID_FIELDS');
+      return body.issues ?? [];
+    };
+
+    it('rejects a duplicate fieldId, addressed by entry index', async () => {
+      const issues = await fieldIssuesFor([
+        { label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' },
+        { label: 'Also flagged', fieldId: 'customfield_1', kind: 'flag' },
+      ]);
+      expect(issues).toEqual([
+        expect.objectContaining({ index: 1, field: 'fieldId', code: 'DUPLICATE_FIELD_ID' }),
+      ]);
+    });
+
+    it('rejects a count entry without thresholds, and warn >= risk', async () => {
+      const missing = await fieldIssuesFor([
+        { label: 'Rejections', fieldId: 'customfield_2', kind: 'count' },
+      ]);
+      expect(missing.map((i) => i.code)).toEqual(['INVALID_THRESHOLD', 'INVALID_THRESHOLD']);
+      const inverted = await fieldIssuesFor([
+        { label: 'Rejections', fieldId: 'customfield_2', kind: 'count', warn: 4, risk: 4 },
+      ]);
+      expect(inverted.map((i) => i.code)).toContain('INVERTED_THRESHOLD');
+    });
+
+    it('rejects a flag entry carrying thresholds', async () => {
+      const issues = await fieldIssuesFor([
+        { label: 'Flagged', fieldId: 'customfield_1', kind: 'flag', warn: 1, risk: 2 },
+      ]);
+      expect(issues.map((i) => i.code)).toContain('FLAG_WITH_THRESHOLDS');
+    });
+
+    it('saves valid entries and echoes them back on GET', async () => {
+      const entries = [
+        { label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' as const },
+        { label: 'Rejections', fieldId: 'customfield_2', kind: 'count' as const, warn: 2, risk: 4, weight: 2 },
+      ];
+      expect((await put({ boards: [], fields: entries })).status).toBe(200);
+      const body = (await (await getConfigRes()).json()) as RiskAdminConfigResponse;
+      expect(body.config.fields).toEqual(entries);
+    });
+
+    it('400s a legacy composite blob still carrying a rejections weight (release-noted)', async () => {
+      const res = await put({
+        boards: [],
+        composite: { p: 2, weights: { rejections: 1, blocked: 1, idle: 1, timeInColumn: 1, cycle: 1 } },
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
   describe('GET /api/admin/risk/columns', () => {
     const columns = async (accountId = ADMIN) =>
       riskAdminRoutes(
@@ -337,9 +395,11 @@ describe('admin config', () => {
         const url = String(input instanceof Request ? input.url : input);
         if (url.includes('/rest/api/3/field')) {
           return Response.json([
-            { id: 'customfield_1', name: 'Flagged', custom: true },
-            { id: 'customfield_2', name: 'Rejection count', custom: true },
-            { id: 'summary', name: 'Flagged summary' }, // not a customfield_*
+            { id: 'customfield_1', name: 'Flagged', schema: { type: 'option' } },
+            { id: 'customfield_2', name: 'Rejection count', schema: { type: 'number' } },
+            { id: 'labels', name: 'Labels', schema: { type: 'array' } }, // system fields included
+            { id: 'issuekey', name: 'Key' }, // no schema at all
+            { id: '', name: 'Nameless' }, // malformed -> dropped
           ]);
         }
         if (url.includes('/rest/api/3/status')) return statusRes();
@@ -362,12 +422,18 @@ describe('admin config', () => {
         { name: 'Odd', statusCategory: {} },
       ]);
 
-    it('serves the field candidates and the site statuses, in-progress first', async () => {
+    it('serves ALL fields (kind from schema.type) and the site statuses, in-progress first', async () => {
       const restore = stubJira(okStatuses);
       try {
         const body = (await (await fields()).json()) as RiskFieldCandidatesResponse;
-        expect(body.flagged).toEqual([{ id: 'customfield_1', name: 'Flagged' }]);
-        expect(body.rejections).toEqual([{ id: 'customfield_2', name: 'Rejection count' }]);
+        // Sorted by name; number -> count, everything else (incl. no schema) -> flag.
+        expect(body.fields).toEqual([
+          { id: 'customfield_1', name: 'Flagged', schemaType: 'option', kind: 'flag' },
+          { id: 'issuekey', name: 'Key', schemaType: null, kind: 'flag' },
+          { id: 'labels', name: 'Labels', schemaType: 'array', kind: 'flag' },
+          { id: 'customfield_2', name: 'Rejection count', schemaType: 'number', kind: 'count' },
+        ]);
+        expect(body.current).toEqual([]); // nothing configured yet
         expect(body.statuses).toEqual([
           { name: 'In Progress', category: 'indeterminate' },
           { name: 'In Review', category: 'indeterminate' },
@@ -380,6 +446,20 @@ describe('admin config', () => {
       }
     });
 
+    it('echoes the stored entries as `current` (a legacy object row converted)', async () => {
+      await seedConfig();
+      await env.DB.prepare(`UPDATE risk_board_config SET fields_json = ? WHERE cloud_id = ?`)
+        .bind(JSON.stringify({ flagged: 'customfield_1', implementor: 'customfield_9' }), CLOUD)
+        .run();
+      const restore = stubJira(okStatuses);
+      try {
+        const body = (await (await fields()).json()) as RiskFieldCandidatesResponse;
+        expect(body.current).toEqual([{ label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' }]);
+      } finally {
+        restore();
+      }
+    });
+
     it('degrades the status list to [] rather than failing the panel', async () => {
       const restore = stubJira(() => new Response('nope', { status: 403 }));
       try {
@@ -387,7 +467,7 @@ describe('admin config', () => {
         expect(res.status).toBe(200);
         const body = (await res.json()) as RiskFieldCandidatesResponse;
         expect(body.statuses).toEqual([]);
-        expect(body.flagged).toHaveLength(1);
+        expect(body.fields.length).toBeGreaterThan(0);
       } finally {
         restore();
       }
@@ -517,7 +597,7 @@ describe('org isolation', () => {
       cutoffs: null,
       composite: null,
       schedule: null,
-      fields: {},
+      fields: [],
       inProgressStatus: null,
       devStatusAvailable: null,
       refresherAccountId: ADMIN,

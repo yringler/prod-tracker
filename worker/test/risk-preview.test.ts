@@ -12,6 +12,7 @@ import type {
   RiskCompositeConfig,
   RiskConfigIssue,
   RiskCutoffs,
+  RiskFieldConfigEntry,
   RiskPreviewRequest,
   RiskPreviewResponse,
   RiskTicket,
@@ -63,7 +64,7 @@ function ctxFor(accountId: string): AuthedCtx {
 /** Only the idle metric is scored, so the fixture's tiers are readable by eye. */
 const ONLY_IDLE: RiskCompositeConfig = {
   p: 1,
-  weights: { rejections: 0, blocked: 0, idle: 1, timeInColumn: 0, cycle: 0 },
+  weights: { blocked: 0, idle: 1, timeInColumn: 0, cycle: 0 },
 };
 const STORED_CUTOFFS: RiskCutoffs = {
   idle: [{ default: true, warn: 24, risk: 72 }],
@@ -79,23 +80,29 @@ interface Raw {
   timeInColumnHours?: number | null;
   cycleHours?: number | null;
   started?: boolean;
+  fieldValues?: Record<string, number | boolean | null>;
 }
 
 /** A full RiskTicket whose STORED tier is computed by the real scorer under
  *  `cutoffs`/`composite` — the same path the cron takes, so "before" in the
  *  preview is exactly what /risk shows today. */
-function ticket(raw: Raw, cutoffs: RiskCutoffs, composite: RiskCompositeConfig): RiskTicket {
+function ticket(
+  raw: Raw,
+  cutoffs: RiskCutoffs,
+  composite: RiskCompositeConfig,
+  fields: RiskFieldConfigEntry[] = [],
+): RiskTicket {
   const input = {
     column: raw.column ?? 'In Progress',
     points: raw.points ?? null,
-    rejections: 0,
     blocked: false,
     started: raw.started ?? true,
     idleHours: raw.idleHours ?? null,
     timeInColumnHours: raw.timeInColumnHours ?? null,
     cycleHours: raw.cycleHours ?? null,
+    fieldValues: raw.fieldValues ?? {},
   };
-  const health = evaluateTicket(input, cutoffs, composite, COLUMNS);
+  const health = evaluateTicket(input, cutoffs, composite, COLUMNS, fields);
   return {
     key: raw.key,
     summary: `${raw.key} summary`,
@@ -106,9 +113,6 @@ function ticket(raw: Raw, cutoffs: RiskCutoffs, composite: RiskCompositeConfig):
     avatarUrl: null,
     points: input.points,
     parentKey: null,
-    implementor: null,
-    codeReviewer: null,
-    rejections: input.rejections,
     blocked: input.blocked,
     blockedByOpen: [],
     unassignedInProgress: false,
@@ -117,6 +121,8 @@ function ticket(raw: Raw, cutoffs: RiskCutoffs, composite: RiskCompositeConfig):
     idleHours: input.idleHours,
     timeInColumnHours: input.timeInColumnHours,
     cycleHours: input.cycleHours,
+    fieldValues: input.fieldValues,
+    fieldMetrics: health.fieldMetrics,
     metrics: health.metrics,
     composite: health.composite,
     tier: health.tier,
@@ -133,11 +139,13 @@ function snapshotOf(
     cutoffs?: RiskCutoffs;
     composite?: RiskCompositeConfig;
     schedule?: RiskWorkSchedule;
+    fields?: RiskFieldConfigEntry[];
   } = {},
 ): RiskBoardSnapshot {
   const cutoffs = opts.cutoffs ?? STORED_CUTOFFS;
   const composite = opts.composite ?? ONLY_IDLE;
-  const tickets = raws.map((r) => ticket(r, cutoffs, composite));
+  const fields = opts.fields ?? [];
+  const tickets = raws.map((r) => ticket(r, cutoffs, composite, fields));
   return {
     boardId,
     boardName: `Board ${boardId}`,
@@ -147,6 +155,7 @@ function snapshotOf(
     cutoffs,
     composite,
     schedule: opts.schedule ?? DEFAULT_SCHEDULE,
+    fields,
     computedAt: '2026-07-01T10:00:00.000Z',
   };
 }
@@ -158,7 +167,7 @@ async function seedConfig(boards: { boardId: number; name: string }[]): Promise<
     cutoffs: null,
     composite: null,
     schedule: null,
-    fields: {},
+    fields: [],
     inProgressStatus: null,
     devStatusAvailable: null,
     refresherAccountId: ADMIN,
@@ -452,6 +461,125 @@ describe('POST /api/admin/risk/preview', () => {
         composite: null,
       });
       expect(res.status).toBe(200);
+    });
+  });
+
+  // The generic field metrics: candidate entries re-band the stored fieldValues,
+  // and snapshots from before this feature (no fieldValues, extra legacy ticket
+  // keys) degrade instead of erroring.
+  describe('candidate field entries', () => {
+    const REJ: RiskFieldConfigEntry = {
+      label: 'Rejections',
+      fieldId: 'customfield_rej',
+      kind: 'count',
+      warn: 2,
+      risk: 4,
+    };
+
+    const seedWithFieldSnapshot = async (): Promise<void> => {
+      await seedConfig([{ boardId: 5, name: 'Sites' }]);
+      await overwriteSnapshot(
+        env,
+        CLOUD,
+        snapshotOf(
+          5,
+          [
+            { key: 'A-1', idleHours: 10, fieldValues: { customfield_rej: 3 } }, // warn under 2/4
+            { key: 'B-2', idleHours: 10, fieldValues: { customfield_rej: 0 } }, // ok
+          ],
+          { fields: [REJ] },
+        ),
+      );
+    };
+
+    it('moves tiers in both directions when a field threshold changes', async () => {
+      await seedWithFieldSnapshot();
+
+      // Tighten: warn 1 / risk 3 -> A-1 (value 3) becomes risk. Cutoffs/composite
+      // pinned to the stored ones so the ONLY change under preview is the field.
+      const tightened = await previewOk({
+        cutoffs: STORED_CUTOFFS,
+        composite: ONLY_IDLE,
+        schedule: null,
+        fields: [{ ...REJ, warn: 1, risk: 3 }],
+      });
+      expect(tightened.boards[0]).toMatchObject({
+        before: { risk: 0, warn: 1, ok: 1 },
+        after: { risk: 1, warn: 0, ok: 1 },
+        movedToRisk: 1,
+      });
+
+      // Loosen: warn 10 / risk 20 -> A-1 falls back to ok.
+      const loosened = await previewOk({
+        cutoffs: STORED_CUTOFFS,
+        composite: ONLY_IDLE,
+        schedule: null,
+        fields: [{ ...REJ, warn: 10, risk: 20 }],
+      });
+      expect(loosened.boards[0]).toMatchObject({
+        before: { risk: 0, warn: 1, ok: 1 },
+        after: { risk: 0, warn: 0, ok: 2 },
+        movedToOk: 1,
+      });
+    });
+
+    it('falls back to the STORED entries when the request omits fields', async () => {
+      await seedWithFieldSnapshot();
+      await putConfig(env, {
+        cloudId: CLOUD,
+        boards: [{ boardId: 5, name: 'Sites' }],
+        cutoffs: null,
+        composite: null,
+        schedule: null,
+        fields: [{ ...REJ, warn: 1, risk: 3 }], // stored config tighter than the snapshot's
+        inProgressStatus: null,
+        devStatusAvailable: null,
+        refresherAccountId: ADMIN,
+        configuredBy: ADMIN,
+      });
+      const body = await previewOk({ cutoffs: STORED_CUTOFFS, composite: ONLY_IDLE, schedule: null });
+      expect(body.boards[0]).toMatchObject({ movedToRisk: 1 });
+    });
+
+    it('degrades a legacy snapshot (no fieldValues, legacy ticket keys) instead of 500ing', async () => {
+      await seedConfig([{ boardId: 5, name: 'Sites' }]);
+      const snap = snapshotOf(5, [{ key: 'A-1', idleHours: 100 }]) as unknown as {
+        tickets: Record<string, unknown>[];
+        fields?: unknown;
+      };
+      // Make it look pre-fields: legacy keys present, new ones absent.
+      delete snap.fields;
+      for (const t of snap.tickets) {
+        delete t['fieldValues'];
+        delete t['fieldMetrics'];
+        t['rejections'] = 2;
+        t['implementor'] = 'Ann A';
+        t['codeReviewer'] = 'Bob B';
+      }
+      await overwriteSnapshot(env, CLOUD, snap as unknown as RiskBoardSnapshot);
+
+      const body = await previewOk({
+        cutoffs: null,
+        composite: null,
+        schedule: null,
+        fields: [REJ], // a field the snapshot never measured
+      });
+      // The clock change still previews; the unmeasured field contributes nothing.
+      expect(body.boards[0]?.status).toBe('previewed');
+      expect(body.boards[0]?.before).toEqual({ risk: 1, warn: 0, ok: 0 });
+    });
+
+    it('400s invalid field entries with the same structured issues as the save', async () => {
+      await seedConfig([{ boardId: 5, name: 'Sites' }]);
+      const res = await preview({
+        cutoffs: null,
+        composite: null,
+        fields: [{ label: 'Rejections', fieldId: 'customfield_rej', kind: 'count', warn: 4, risk: 4 }],
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { code?: string; issues?: RiskConfigIssue[] };
+      expect(body.code).toBe('INVALID_FIELDS');
+      expect(body.issues?.map((i) => i.code)).toContain('INVERTED_THRESHOLD');
     });
   });
 
