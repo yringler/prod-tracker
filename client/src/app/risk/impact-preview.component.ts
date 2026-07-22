@@ -13,6 +13,7 @@ import type {
   RiskBand,
   RiskCompositeConfig,
   RiskCutoffs,
+  RiskFieldConfigEntry,
   RiskPreviewBoard,
   RiskPreviewResponse,
   RiskTierCounts,
@@ -80,7 +81,9 @@ const TIERS: { key: TierKey; label: string; icon: string; worseWhenUp: 1 | -1 }[
       <p class="muted" style="font-size:12px">
         What these settings would do to the boards you've already saved, scored from
         each board's last snapshot with the server's own scorer. Nothing is saved
-        until you press Save.
+        until you press Save. Fields added since the last refresh aren't previewable
+        yet — their values were never fetched, so they contribute nothing here until
+        the next refresh.
       </p>
 
       @if (errorText(); as err) {
@@ -337,6 +340,10 @@ export class RiskImpactPreviewComponent {
   /** The candidate schedule — sent only so the server can tell us the stored clock
    *  values are stale relative to it (it cannot re-measure them). */
   readonly schedule = input<RiskWorkSchedule | null>(null);
+  /** The DRAFT field entries, so threshold/weight edits in the Fields panel
+   *  preview live. Note a field added since the last refresh has no stored
+   *  values to re-score — it previews as contributing nothing until a refresh. */
+  readonly fields = input<RiskFieldConfigEntry[] | null>(null);
   /** Flipped by the parent after a save, to re-run against the fresh config. */
   readonly reloadKey = input(0);
 
@@ -353,6 +360,7 @@ export class RiskImpactPreviewComponent {
         cutoffs: this.cutoffs(),
         composite: this.composite(),
         schedule: this.schedule(),
+        fields: this.fields(),
       };
       this.reloadKey();
       const timer = setTimeout(() => this.run(body), DEBOUNCE_MS);
@@ -364,6 +372,7 @@ export class RiskImpactPreviewComponent {
     cutoffs: RiskCutoffs | null;
     composite: RiskCompositeConfig | null;
     schedule: RiskWorkSchedule | null;
+    fields: RiskFieldConfigEntry[] | null;
   }): void {
     const mine = ++this.seq;
     this.loading.set(true);

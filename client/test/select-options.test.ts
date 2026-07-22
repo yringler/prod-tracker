@@ -17,7 +17,10 @@ import {
   boardColumnsKnown,
   columnOptions,
   ensureValuePresent,
-  fieldOptions,
+  FIELD_PICKER_CAP,
+  MORE_FIELDS_VALUE,
+  allFieldOptions,
+  filterFieldOptions,
   hasDoneColumnRule,
   sizeOptions,
   statusOptions,
@@ -149,29 +152,71 @@ describe('hasDoneColumnRule', () => {
   });
 });
 
-// The Fields panel's two pickers. Both exist because a bound `''` with no `''`
-// OPTION is the exact case WA filters away: the control then reads as though the
-// first discovered candidate were configured when nothing is. "None" and
-// "Default" have to be things you can PICK.
-describe('fieldOptions', () => {
-  const cands = [
-    { id: 'customfield_1', name: 'Flagged' },
-    { id: 'customfield_2', name: 'Flag reason' },
+// The field-mapping picker. It exists because a bound `''` with no `''` OPTION is
+// the exact case WA filters away: the control then reads as though the first
+// field were configured when nothing is. "Pick a field…" has to be PICKable.
+describe('filterFieldOptions', () => {
+  const fields = [
+    { id: 'customfield_1002', name: 'Flagged' },
+    { id: 'customfield_2', name: 'Rejection count' },
+    { id: 'labels', name: 'Labels' },
   ];
 
-  it("leads with a real, selectable 'None' option", () => {
-    const out = fieldOptions(cands, '');
-    expect(out[0]?.value).toBe('');
-    expect(out.some((o) => o.value === '' )).toBe(true);
-    expect(out[1]).toEqual({ value: 'customfield_1', label: 'Flagged' });
+  it('matches case-insensitively over name AND id', () => {
+    expect(filterFieldOptions(fields, 'FLAG').map((f) => f.id)).toEqual(['customfield_1002']);
+    expect(filterFieldOptions(fields, '1002').map((f) => f.id)).toEqual(['customfield_1002']);
+    expect(filterFieldOptions(fields, 'label').map((f) => f.id)).toEqual(['labels']);
   });
 
-  it('keeps a stored id selectable even when the regex no longer surfaces it', () => {
-    const out = fieldOptions(cands, 'customfield_99');
-    const opt = out.find((o) => o.value === 'customfield_99');
+  it('keeps everything on a blank or whitespace query', () => {
+    expect(filterFieldOptions(fields, '')).toHaveLength(3);
+    expect(filterFieldOptions(fields, '   ')).toHaveLength(3);
+  });
+});
+
+describe('allFieldOptions', () => {
+  const fields = [
+    { id: 'customfield_1002', name: 'Flagged' },
+    { id: 'customfield_2', name: 'Rejection count' },
+  ];
+
+  it("leads with a selectable 'Pick a field…' option and labels name (id)", () => {
+    const out = allFieldOptions(fields, '');
+    expect(out[0]?.value).toBe('');
+    expect(out[1]).toEqual({ value: 'customfield_1002', label: 'Flagged (customfield_1002)' });
+  });
+
+  it('caps the list and counts the overflow out loud', () => {
+    const many = Array.from({ length: FIELD_PICKER_CAP + 7 }, (_, i) => ({
+      id: `customfield_${i}`,
+      name: `Field ${i}`,
+    }));
+    const out = allFieldOptions(many, '');
+    // leading '' + cap + the sentinel
+    expect(out).toHaveLength(1 + FIELD_PICKER_CAP + 1);
+    const last = out[out.length - 1]!;
+    expect(last.value).toBe(MORE_FIELDS_VALUE);
+    expect(last.label).toBe('7 more — keep typing to narrow');
+  });
+
+  it('keeps a stored id selectable, annotated only when we hold the field list', () => {
+    const stored = allFieldOptions(fields, 'customfield_99');
+    expect(stored.find((o) => o.value === 'customfield_99')?.note).toBe(
+      "not in this site's field list",
+    );
+    // With no field data at all (fetch failed / still loading), presence without
+    // the claim — same evidence discipline as columnOptions.
+    const unknown = allFieldOptions([], 'customfield_99');
+    const opt = unknown.find((o) => o.value === 'customfield_99');
     expect(opt).toBeDefined();
-    // Not "no such field" — this list is a name-regex SUBSET of the site's fields.
-    expect(opt?.note).toBe('not among the discovered candidates');
+    expect(opt?.note).toBeUndefined();
+  });
+
+  it('keeps the bound value selectable even when the filter has hidden it', () => {
+    // The picker filters BEFORE building options; a value filtered out must
+    // still be present or WA blanks the control (contract rule 1).
+    const out = allFieldOptions(filterFieldOptions(fields, 'reject'), 'customfield_1002');
+    expect(out.some((o) => o.value === 'customfield_1002')).toBe(true);
   });
 });
 

@@ -396,10 +396,6 @@ export interface PutRiskAlertPrefsRequest {
   muted: boolean;
 }
 
-export interface RiskFieldOption {
-  id: string;
-  name: string;
-}
 /** Jira's own `statusCategory.key`, plus `unknown` for a status Jira reports
  *  without one. `indeterminate` is what Jira means by "in progress", so it is the
  *  group the In Progress picker offers first. */

@@ -127,7 +127,11 @@ import { bandVariant, firingMetrics, sinceLabel, type MetricPill } from './forma
       }
     }
 
-    <sp-risk-detail [ticket]="selectedTicket()" (closed)="selectedTicket.set(null)" />
+    <sp-risk-detail
+      [ticket]="selectedTicket()"
+      [fields]="snapshotFields()"
+      (closed)="selectedTicket.set(null)"
+    />
   `,
   styles: [
     `
@@ -166,6 +170,8 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
   muted = signal(false);
 
   snapshot = computed(() => this.board()?.snapshot ?? null);
+  /** Pre-fields snapshots ship no `fields`; degrade to none (no pills, no rows). */
+  snapshotFields = computed(() => this.snapshot()?.fields ?? []);
   degradedReason = computed(() => this.board()?.degradedReason ?? null);
   updatedLabel = computed(() => sinceLabel(this.board()?.computedAt ?? null));
   selectedTicket = signal<RiskTicket | null>(null);
@@ -265,7 +271,7 @@ export class RiskBoardComponent implements OnInit, OnDestroy {
   }
 
   firing(t: RiskTicket): MetricPill[] {
-    return firingMetrics(t);
+    return firingMetrics(t, this.snapshotFields());
   }
   variant(band: string): string {
     return bandVariant(band as 'ok' | 'warn' | 'risk' | 'none');

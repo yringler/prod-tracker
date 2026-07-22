@@ -8,16 +8,21 @@ import {
   output,
   signal,
 } from '@angular/core';
-import type { RiskCompositeConfig, RiskMetricId, RiskWorkSchedule } from '@shared/risk';
+import type {
+  RiskCompositeConfig,
+  RiskFieldConfigEntry,
+  RiskMetricId,
+  RiskWorkSchedule,
+} from '@shared/risk';
 import { scheduleDaysSummary, workHoursPerDay, workHoursPerWeek } from '@shared/risk-cutoffs';
 import { targetChecked, targetValue } from './dom-events';
 import { METRIC_LABELS } from './format';
 
 /** The order the server evaluates in (worker/src/risk/logic/scoring.ts METRIC_ORDER). */
-const METRIC_IDS: RiskMetricId[] = ['rejections', 'blocked', 'idle', 'timeInColumn', 'cycle'];
+const METRIC_IDS: RiskMetricId[] = ['blocked', 'idle', 'timeInColumn', 'cycle'];
 
 /**
- * The composite half of the risk config: how the five per-metric scores collapse
+ * The composite half of the risk config: how the per-metric scores collapse
  * into the one number the board ranks by.
  *
  * Two footguns get first-class UI here:
@@ -98,12 +103,29 @@ const METRIC_IDS: RiskMetricId[] = ['rejections', 'blocked', 'idle', 'timeInColu
               </td>
             </tr>
           }
+          @for (f of fields(); track f.fieldId) {
+            <tr class="muted">
+              <td>{{ f.label }}</td>
+              <td>{{ fieldWeight(f) }}</td>
+              <td>
+                @if (fieldWeight(f) <= 0) {
+                  <wa-badge variant="neutral">Excluded — not scored at all</wa-badge>
+                } @else {
+                  <span class="muted" style="font-size:12px">edit in Fields, above</span>
+                }
+              </td>
+            </tr>
+          }
         </tbody>
       </table>
       <p class="muted" style="font-size:12px">
         A weight of <strong>0</strong> removes the metric from the score entirely —
         which is different from leaving it out of the config, where it defaults to 1.
         Excluded metrics still show on the board; they just stop ranking it.
+        @if (fields().length) {
+          Mapped-field weights live on their rows in the Fields panel and are shown
+          here read-only — the built-in-defaults switch above doesn't govern them.
+        }
       </p>
       @if (allExcluded()) {
         <wa-callout variant="danger" style="margin-top:8px">
@@ -146,6 +168,10 @@ export class RiskCompositeEditorComponent {
   readonly defaults = input.required<RiskCompositeConfig>();
   /** The effective work schedule — only to caption what the hours elsewhere mean. */
   readonly schedule = input.required<RiskWorkSchedule>();
+  /** The DRAFT field entries, read-only here — each mapped field is one more term
+   *  of the mean, weighted on its own row in the Fields panel. Bound to the draft
+   *  (not the server value) so a weight edit up there reads correctly down here. */
+  readonly fields = input<readonly RiskFieldConfigEntry[]>([]);
 
   /** null = inherit (stored NULL). */
   readonly compositeChange = output<RiskCompositeConfig | null>();
@@ -199,8 +225,17 @@ export class RiskCompositeEditorComponent {
     return String(this.weight(id));
   }
 
+  /** An ABSENT entry weight also means 1 (`entry.weight ?? 1` server-side). */
+  fieldWeight(f: RiskFieldConfigEntry): number {
+    return f.weight ?? 1;
+  }
+
+  /** Share of the FULL mean — field terms included, or the core percentages would
+   *  overstate themselves whenever a mapped field carries weight. */
   share(id: RiskMetricId): number {
-    const total = METRIC_IDS.reduce((sum, m) => sum + Math.max(0, this.weight(m)), 0);
+    const fieldTotal = this.fields().reduce((sum, f) => sum + Math.max(0, this.fieldWeight(f)), 0);
+    const total =
+      METRIC_IDS.reduce((sum, m) => sum + Math.max(0, this.weight(m)), 0) + fieldTotal;
     return total > 0 ? Math.round((this.weight(id) / total) * 100) : 0;
   }
 

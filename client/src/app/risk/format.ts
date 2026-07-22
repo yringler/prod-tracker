@@ -2,7 +2,7 @@
 // detail modal share them. No scoring or banding happens here: the snapshot ships
 // every value, band and threshold already computed (see worker/src/risk/logic).
 
-import type { RiskBand, RiskMetricId, RiskTicket } from '@shared/risk';
+import type { RiskBand, RiskFieldConfigEntry, RiskMetricId, RiskTicket } from '@shared/risk';
 import { WORK_HOURS_PER_DAY } from '@shared/risk-cutoffs';
 
 /** A "day" here is one 8-hour WORK day, matching the work-hours-only clock the
@@ -45,20 +45,15 @@ export const METRIC_LABELS: Record<RiskMetricId, string> = {
   idle: 'Last movement',
   timeInColumn: 'In column',
   cycle: 'Cycle',
-  rejections: 'Rejections',
 };
 
-/** Actionability order (arch §11): which firing metric to read first. */
-export const METRIC_PRIORITY: RiskMetricId[] = [
-  'blocked',
-  'idle',
-  'timeInColumn',
-  'cycle',
-  'rejections',
-];
+/** Actionability order (arch §11): which firing metric to read first. Field
+ *  metrics follow the core four, in config order. */
+export const METRIC_PRIORITY: RiskMetricId[] = ['blocked', 'idle', 'timeInColumn', 'cycle'];
 
 export interface MetricPill {
-  id: RiskMetricId;
+  /** A core metric id, or a mapped field's fieldId. */
+  id: RiskMetricId | string;
   label: string;
   text: string;
   band: RiskBand;
@@ -75,25 +70,47 @@ export function metricText(id: RiskMetricId, t: RiskTicket): string {
       return `in ${t.column} ${fmtWorkHM(t.timeInColumnHours) ?? '—'}`;
     case 'cycle':
       return `cycle ${fmtWorkHM(t.cycleHours) ?? '—'}`;
-    case 'rejections': {
-      const n = typeof t.metrics.rejections.value === 'number' ? t.metrics.rejections.value : 0;
-      return `${n} rejection${n === 1 ? '' : 's'}`;
-    }
   }
 }
 
-/** Only the metrics currently firing (warn/risk), worst-actionable first. A healthy
- *  row shows none — the list's length is the signal. */
-export function firingMetrics(t: RiskTicket): MetricPill[] {
-  return METRIC_PRIORITY.filter((id) => {
-    const b = t.metrics[id].band;
-    return b === 'warn' || b === 'risk';
-  }).map((id) => ({
-    id,
-    label: METRIC_LABELS[id],
-    text: metricText(id, t),
-    band: t.metrics[id].band,
-  }));
+/** A mapped field's pill text: count → "3 Rejections", flag → the label alone. */
+export function fieldMetricText(entry: RiskFieldConfigEntry, t: RiskTicket): string {
+  const m = t.fieldMetrics?.[entry.fieldId];
+  if (entry.kind === 'count' && typeof m?.value === 'number') {
+    return `${m.value} ${entry.label}`;
+  }
+  return entry.label;
+}
+
+/**
+ * Only the metrics currently firing (warn/risk), worst-actionable first — core
+ * four, then the admin-mapped field metrics in config order. `fields` comes off
+ * the SNAPSHOT (`snapshot.fields ?? []` — old snapshots have none, and their
+ * tickets have no `fieldMetrics` either, so both sides degrade together). A
+ * healthy row shows none — the list's length is the signal.
+ */
+export function firingMetrics(
+  t: RiskTicket,
+  fields: readonly RiskFieldConfigEntry[] = [],
+): MetricPill[] {
+  const firing = (b: RiskBand | undefined): b is 'warn' | 'risk' => b === 'warn' || b === 'risk';
+  const core: MetricPill[] = METRIC_PRIORITY.filter((id) => firing(t.metrics[id].band)).map(
+    (id) => ({
+      id,
+      label: METRIC_LABELS[id],
+      text: metricText(id, t),
+      band: t.metrics[id].band,
+    }),
+  );
+  const field: MetricPill[] = fields
+    .filter((e) => firing(t.fieldMetrics?.[e.fieldId]?.band))
+    .map((e) => ({
+      id: e.fieldId,
+      label: e.label,
+      text: fieldMetricText(e, t),
+      band: t.fieldMetrics[e.fieldId]!.band,
+    }));
+  return [...core, ...field];
 }
 
 /** Web Awesome variant for a band (used on wa-tag pills). */
@@ -117,7 +134,6 @@ export function sinceLabel(iso: string | null, nowMs: number = Date.now()): stri
 export function thresholdLabel(id: RiskMetricId, t: RiskTicket): string | null {
   const m = t.metrics[id];
   if (m.warn == null || m.risk == null) return null;
-  if (id === 'rejections') return `warn ≥ ${m.warn} · risk ≥ ${m.risk}`;
   return `warn ≥ ${fmtWorkHM(m.warn)} · risk ≥ ${fmtWorkHM(m.risk)}`;
 }
 
@@ -125,7 +141,23 @@ export function thresholdLabel(id: RiskMetricId, t: RiskTicket): string | null {
 export function metricValueLabel(id: RiskMetricId, t: RiskTicket): string {
   const m = t.metrics[id];
   if (id === 'blocked') return m.value ? 'Yes' : 'No';
-  if (id === 'rejections') return String(m.value ?? 0);
   if (!t.started) return 'not started';
   return fmtWorkHM(typeof m.value === 'number' ? m.value : null) ?? '—';
+}
+
+/** Detail-row value for a mapped field metric: counts as plain numbers (0 when
+ *  the key was present but empty on the issue), flags as Yes/No, and '—' for a
+ *  field the snapshot never measured (band 'none', value null). */
+export function fieldValueLabel(entry: RiskFieldConfigEntry, t: RiskTicket): string {
+  const m = t.fieldMetrics?.[entry.fieldId];
+  if (!m || m.value === null) return '—';
+  if (entry.kind === 'count') return String(m.value);
+  return m.value ? 'Yes' : 'No';
+}
+
+/** Threshold caption for a mapped count field — plain numbers, not work-hours. */
+export function fieldThresholdLabel(entry: RiskFieldConfigEntry, t: RiskTicket): string | null {
+  const m = t.fieldMetrics?.[entry.fieldId];
+  if (m?.warn == null || m.risk == null) return null;
+  return `warn ≥ ${m.warn} · risk ≥ ${m.risk}`;
 }

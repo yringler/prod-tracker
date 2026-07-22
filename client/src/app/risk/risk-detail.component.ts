@@ -5,18 +5,21 @@ import {
   input,
   output,
 } from '@angular/core';
-import type { RiskMetricId, RiskTicket } from '@shared/risk';
+import type { RiskFieldConfigEntry, RiskTicket } from '@shared/risk';
 import {
   METRIC_LABELS,
   METRIC_PRIORITY,
   bandVariant,
+  fieldThresholdLabel,
+  fieldValueLabel,
   fmtWorkHM,
   metricValueLabel,
   thresholdLabel,
 } from './format';
 
 interface MetricRow {
-  id: RiskMetricId;
+  /** A core metric id, or a mapped field's fieldId. */
+  id: string;
   label: string;
   value: string;
   band: string;
@@ -56,14 +59,6 @@ interface MetricRow {
               <wa-tag size="small" appearance="outlined">parent {{ t.parentKey }}</wa-tag>
             }
           </div>
-
-          @if (t.implementor || t.codeReviewer) {
-            <div class="muted" style="font-size:12px; margin-top:6px">
-              @if (t.implementor) { Developer: {{ t.implementor }} }
-              @if (t.implementor && t.codeReviewer) { · }
-              @if (t.codeReviewer) { Reviewer: {{ t.codeReviewer }} }
-            </div>
-          }
 
           <wa-divider></wa-divider>
 
@@ -164,18 +159,33 @@ interface MetricRow {
 export class RiskDetailComponent {
   /** null closes the dialog — the parent owns the selection signal. */
   ticket = input<RiskTicket | null>(null);
+  /** The snapshot's field entries — labels for the ticket's fieldMetrics rows.
+   *  `[]` on a pre-fields snapshot, whose tickets carry no fieldMetrics either. */
+  fields = input<readonly RiskFieldConfigEntry[]>([]);
   closed = output<void>();
 
   metrics = computed<MetricRow[]>(() => {
     const t = this.ticket();
     if (!t) return [];
-    return METRIC_PRIORITY.map((id) => ({
+    const core: MetricRow[] = METRIC_PRIORITY.map((id) => ({
       id,
       label: METRIC_LABELS[id],
       value: metricValueLabel(id, t),
       band: bandVariant(t.metrics[id].band),
       thresholds: thresholdLabel(id, t),
     }));
+    // Field rows render only when the snapshot actually measured them — a legacy
+    // snapshot has no fieldMetrics, and showing '—' rows would imply it did.
+    const field: MetricRow[] = this.fields()
+      .filter((e) => t.fieldMetrics?.[e.fieldId])
+      .map((e) => ({
+        id: e.fieldId,
+        label: e.label,
+        value: fieldValueLabel(e, t),
+        band: bandVariant(t.fieldMetrics[e.fieldId]!.band),
+        thresholds: fieldThresholdLabel(e, t),
+      }));
+    return [...core, ...field];
   });
 
   compositeLabel = computed(() => {

@@ -17,26 +17,20 @@ import type {
   RiskCompositeConfig,
   RiskCutoffs,
   RiskFieldCandidatesResponse,
+  RiskFieldConfigEntry,
   RiskWorkSchedule,
 } from '@shared/risk';
 import { scheduleDaysSummary, workHoursPerWeek } from '@shared/risk-cutoffs';
+import { validateFieldEntries } from '@shared/risk-fields';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth.service';
 import { RiskCompositeEditorComponent } from './composite-editor.component';
 import { RiskCutoffsEditorComponent } from './cutoffs-editor.component';
 import { targetChecked, targetValue } from './dom-events';
+import { RiskFieldsEditorComponent } from './fields-editor.component';
 import { RiskImpactPreviewComponent } from './impact-preview.component';
 import { OptionSelectComponent } from './option-select.component';
-import { fieldOptions, statusOptions, type SelectOption } from './select-options';
-
-type FieldKey = 'flagged' | 'rejections' | 'implementor' | 'codeReviewer';
-
-const FIELD_LABELS: Record<FieldKey, string> = {
-  flagged: 'Flagged (blocked)',
-  rejections: 'Code-review rejections',
-  implementor: 'Developer',
-  codeReviewer: 'Reviewer',
-};
+import { statusOptions, type SelectOption } from './select-options';
 
 // Per-site risk-board configuration. Nothing here is secret (board ids, cutoff
 // tables, an account id), so unlike the notification-channel panel the stored
@@ -54,6 +48,7 @@ const FIELD_LABELS: Record<FieldKey, string> = {
     RouterLink,
     RiskCompositeEditorComponent,
     RiskCutoffsEditorComponent,
+    RiskFieldsEditorComponent,
     RiskImpactPreviewComponent,
     OptionSelectComponent,
   ],
@@ -116,23 +111,17 @@ const FIELD_LABELS: Record<FieldKey, string> = {
       <div class="panel">
         <h3>Fields</h3>
         <p class="muted" style="font-size:12px">
-          All optional, and all discovered from your Jira instance — ids are never
-          hardcoded. Pick <em>None</em> and the board simply drops that signal —
-          which is also what every row starts at.
+          Map any of your Jira fields into its own scored metric, under your label.
+          Number fields count against warn/risk thresholds; everything else is an
+          on/off flag. All optional — an empty list just means the four built-in
+          metrics carry the score. Ids are discovered from your Jira instance,
+          never hardcoded.
         </p>
-        @for (k of fieldKeys; track k) {
-          <div class="row" style="margin-top:8px; align-items:center">
-            <label style="min-width:180px">{{ label(k) }}</label>
-            <span style="flex:1">
-              <sp-option-select
-                [value]="fields()[k] ?? ''"
-                [options]="fieldOptions(k)"
-                [ariaLabel]="label(k)"
-                (valueChange)="setField(k, $event)"
-              ></sp-option-select>
-            </span>
-          </div>
-        }
+        <sp-risk-fields
+          [entries]="serverFieldEntries()"
+          [fields]="fieldMetas()"
+          (entriesChange)="fieldEntries.set($event)"
+        ></sp-risk-fields>
         <div class="row" style="margin-top:8px; align-items:center">
           <label style="min-width:180px">In Progress status</label>
           <span style="flex:1">
@@ -169,6 +158,7 @@ const FIELD_LABELS: Record<FieldKey, string> = {
           [composite]="serverComposite()"
           [defaults]="dc"
           [schedule]="effectiveSchedule()"
+          [fields]="fieldEntries()"
           (compositeChange)="composite.set($event)"
         ></sp-risk-composite>
       }
@@ -198,6 +188,7 @@ const FIELD_LABELS: Record<FieldKey, string> = {
         [cutoffs]="cutoffs()"
         [composite]="composite()"
         [schedule]="effectiveSchedule()"
+        [fields]="fieldEntries()"
         [reloadKey]="savedAt()"
       ></sp-risk-impact>
 
@@ -231,8 +222,6 @@ export class RiskAdminComponent implements OnInit {
   private api = inject(ApiService);
   auth = inject(AuthService);
 
-  readonly fieldKeys: FieldKey[] = ['flagged', 'rejections', 'implementor', 'codeReviewer'];
-
   loading = signal(true);
   saving = signal(false);
   /** Bumped on a successful save so the impact preview re-runs against the config
@@ -247,12 +236,12 @@ export class RiskAdminComponent implements OnInit {
 
   picked = signal<RiskBoardRef[]>([]);
   refresherAccountId = signal<string | null>(null);
-  fields = signal<Record<FieldKey, string | null>>({
-    flagged: null,
-    rejections: null,
-    implementor: null,
-    codeReviewer: null,
-  });
+  // Same server/draft split as cutoffs below: `serverFieldEntries` feeds the
+  // editor's input (written on load + successful save only); `fieldEntries` is
+  // the draft `(entriesChange)` writes, read by save(), the composite editor's
+  // read-only rows, and the impact preview.
+  serverFieldEntries = signal<RiskFieldConfigEntry[]>([]);
+  fieldEntries = signal<RiskFieldConfigEntry[]>([]);
   inProgressStatus = signal('');
   scheduleJson = signal('');
   // The cutoff table is a structured model now, not text: null = follow the shipped
@@ -314,12 +303,8 @@ export class RiskAdminComponent implements OnInit {
       next: (r) => {
         this.picked.set(r.config.boards);
         this.refresherAccountId.set(r.config.refresherAccountId);
-        this.fields.set({
-          flagged: r.config.fields.flagged ?? null,
-          rejections: r.config.fields.rejections ?? null,
-          implementor: r.config.fields.implementor ?? null,
-          codeReviewer: r.config.fields.codeReviewer ?? null,
-        });
+        this.serverFieldEntries.set(r.config.fields);
+        this.fieldEntries.set(r.config.fields);
         this.inProgressStatus.set(r.config.inProgressStatus ?? '');
         this.defaultInProgress.set(r.defaults.inProgressStatus);
         // Only an org's OWN overrides go in the boxes. Prefilling the code defaults
@@ -378,28 +363,9 @@ export class RiskAdminComponent implements OnInit {
   value(e: Event): string {
     return targetValue(e);
   }
-  label(k: FieldKey): string {
-    return FIELD_LABELS[k];
-  }
-  /** Both pickers go through `<sp-option-select>` — the single owner of the Web
-   *  Awesome select contract — so "none"/"default" is an OPTION you can pick, not
-   *  the absence of one. Bound `''` with no `''` option is exactly the case WA
-   *  filters away, which is why these rows used to read as if the first discovered
-   *  candidate were configured when nothing was.
-   *
-   *  COMPUTED, not a method: `[options]` is a signal input, and a fresh array on
-   *  every change-detection pass would re-render the option list under the open
-   *  select. */
-  private fieldOptionsByKey = computed<Record<FieldKey, SelectOption[]>>(() => {
-    const cands = this.fieldCandidates();
-    const cur = this.fields();
-    const out = {} as Record<FieldKey, SelectOption[]>;
-    for (const k of this.fieldKeys) out[k] = fieldOptions(cands?.[k] ?? [], cur[k] ?? '');
-    return out;
-  });
-  fieldOptions(k: FieldKey): SelectOption[] {
-    return this.fieldOptionsByKey()[k];
-  }
+  /** COMPUTED, not a method (the open-select re-render trap — anything feeding an
+   *  `[options]`-shaped input must be referentially stable across CD passes). */
+  fieldMetas = computed(() => this.fieldCandidates()?.fields ?? []);
   statusOptions = computed<SelectOption[]>(() =>
     statusOptions(this.fieldCandidates()?.statuses ?? [], {
       value: this.inProgressStatus(),
@@ -423,13 +389,17 @@ export class RiskAdminComponent implements OnInit {
     if (on) this.loadCandidates(b.boardId); // probe #1 on the board just picked
   }
 
-  /** `''` is the "None" OPTION, and it stores as NULL — the same "blank = the
-   *  board simply drops that signal" contract the panel's caption promises. */
-  setField(k: FieldKey, v: string): void {
-    this.fields.update((f) => ({ ...f, [k]: v || null }));
-  }
-
   save(): void {
+    // Client-side gate with the SERVER'S OWN validator: a 400 would carry the
+    // same issues, so failing fast here just skips the round trip.
+    const fieldIssues = validateFieldEntries(this.fieldEntries()).errors;
+    if (fieldIssues.length) {
+      this.message.set({
+        ok: false,
+        text: fieldIssues.map((i) => i.message).join(' · '),
+      });
+      return;
+    }
     let body: PutRiskConfigRequest;
     try {
       body = {
@@ -437,7 +407,7 @@ export class RiskAdminComponent implements OnInit {
         cutoffs: this.cutoffs(),
         composite: this.composite(),
         schedule: parseOrNull(this.scheduleJson()),
-        fields: this.fields(),
+        fields: this.fieldEntries(),
         inProgressStatus: this.inProgressStatus().trim() || null,
         refresherAccountId: this.refresherAccountId(),
       };
@@ -452,9 +422,10 @@ export class RiskAdminComponent implements OnInit {
         this.savedAt.update((n) => n + 1);
         // The server now holds exactly what we sent, so re-baseline the editors'
         // inputs from the body (not from a refetch). This is the ONLY other write
-        // to serverCutoffs/serverComposite besides ngOnInit.
+        // to serverCutoffs/serverComposite/serverFieldEntries besides ngOnInit.
         this.serverCutoffs.set(body.cutoffs ?? null);
         this.serverComposite.set(body.composite ?? null);
+        this.serverFieldEntries.set(body.fields ?? []);
         // The only moment new columns can appear: `listRiskColumns` iterates the
         // SAVED cfg.boards, so a board ticked before this save had no columns to
         // offer until now.
