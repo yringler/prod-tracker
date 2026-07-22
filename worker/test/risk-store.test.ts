@@ -119,34 +119,6 @@ describe('risk store: config', () => {
     expect(await listConfigs(env)).toHaveLength(1); // upsert, not insert
   });
 
-  it('converts a legacy fields_json OBJECT at read time (flagged/rejections; rest dropped)', async () => {
-    await putConfig(env, config());
-    await env.DB.prepare(`UPDATE risk_board_config SET fields_json = ? WHERE cloud_id = ?`)
-      .bind(
-        JSON.stringify({
-          flagged: 'customfield_10002',
-          rejections: 'customfield_10005',
-          implementor: 'customfield_10006',
-          codeReviewer: null,
-        }),
-        CLOUD,
-      )
-      .run();
-
-    const cfg = await getConfig(env, CLOUD);
-    expect(cfg?.fields).toEqual([
-      { label: 'Flagged', fieldId: 'customfield_10002', kind: 'flag' },
-      { label: 'Rejections', fieldId: 'customfield_10005', kind: 'count', warn: 2, risk: 4 },
-    ]);
-
-    // A re-save persists the ARRAY shape (the conversion happens exactly once).
-    await putConfig(env, config({ fields: cfg!.fields }));
-    const raw = await env.DB.prepare(`SELECT fields_json FROM risk_board_config WHERE cloud_id = ?`)
-      .bind(CLOUD)
-      .first<{ fields_json: string }>();
-    expect(JSON.parse(raw!.fields_json)).toEqual(cfg?.fields);
-  });
-
   it('degrades a corrupt fields_json to [] instead of throwing', async () => {
     await putConfig(env, config());
     await env.DB.prepare(`UPDATE risk_board_config SET fields_json = '{oops' WHERE cloud_id = ?`)
@@ -199,13 +171,8 @@ describe('fieldEntriesFromStored (the tolerant read-side converter)', () => {
     ]);
   });
 
-  it('converts the legacy object shape and ignores everything else', () => {
-    expect(fieldEntriesFromStored({ flagged: 'customfield_1' })).toEqual([
-      { label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' },
-    ]);
-    expect(fieldEntriesFromStored({ rejections: 'customfield_2', implementor: 'customfield_3' })).toEqual([
-      { label: 'Rejections', fieldId: 'customfield_2', kind: 'count', warn: 2, risk: 4 },
-    ]);
+  it('degrades any non-array (object, NULL, string) to []', () => {
+    expect(fieldEntriesFromStored({ flagged: 'customfield_1' })).toEqual([]);
     expect(fieldEntriesFromStored({})).toEqual([]);
     expect(fieldEntriesFromStored(null)).toEqual([]);
     expect(fieldEntriesFromStored('customfield_1')).toEqual([]);

@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS risk_board_config (
   cutoffs_json         TEXT,    -- RiskCutoffs; NULL = code defaults
   composite_json       TEXT,    -- {p, weights}; NULL = code defaults
   work_schedule_json   TEXT,    -- RiskWorkSchedule; NULL = NY default
-  fields_json          TEXT,    -- RiskFieldConfigEntry[] (label/fieldId/kind/warn/risk/weight); legacy {flagged?, rejections?, ...} objects converted at read time (store.ts fieldEntriesFromStored)
+  fields_json          TEXT,    -- RiskFieldConfigEntry[] (label/fieldId/kind/warn/risk/weight)
   in_progress_status   TEXT,    -- NULL = 'In Progress'
   dev_status_available INTEGER, -- NULL = unprobed; 0/1 = probe result (gates the PR feature)
   refresher_account_id TEXT,    -- whose oauth_tokens row the cron refresher uses

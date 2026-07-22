@@ -446,15 +446,16 @@ describe('admin config', () => {
       }
     });
 
-    it('echoes the stored entries as `current` (a legacy object row converted)', async () => {
+    it('echoes the stored entries as `current`', async () => {
       await seedConfig();
+      const entries = [{ label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' }];
       await env.DB.prepare(`UPDATE risk_board_config SET fields_json = ? WHERE cloud_id = ?`)
-        .bind(JSON.stringify({ flagged: 'customfield_1', implementor: 'customfield_9' }), CLOUD)
+        .bind(JSON.stringify(entries), CLOUD)
         .run();
       const restore = stubJira(okStatuses);
       try {
         const body = (await (await fields()).json()) as RiskFieldCandidatesResponse;
-        expect(body.current).toEqual([{ label: 'Flagged', fieldId: 'customfield_1', kind: 'flag' }]);
+        expect(body.current).toEqual(entries);
       } finally {
         restore();
       }

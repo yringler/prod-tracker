@@ -104,16 +104,10 @@ function parseJson<T>(raw: string | null, fallback: T): T {
 }
 
 /**
- * `fields_json` across its three historical shapes, tolerantly (read-side twin of
- * the strict shared `validateFieldEntries` — reads never 400):
- *   - the current array of `RiskFieldConfigEntry` (malformed entries dropped);
- *   - the legacy `RiskFieldIds` object — flagged/rejections become the entries
- *     that preserve their old behavior (flag "Flagged"; count "Rejections" with
- *     the old hardcoded warn 2 / risk 4), implementor/codeReviewer are dropped
- *     (they were display-only and too org-specific to generalize);
- *   - anything else (NULL, corrupt JSON) → [].
- * Exported for direct testing; `putConfig` always writes the array shape, so the
- * conversion happens exactly once per legacy org — on its first re-save.
+ * `fields_json` as the current array of `RiskFieldConfigEntry`, read tolerantly
+ * (the read-side twin of the strict shared `validateFieldEntries` — reads never
+ * 400): malformed entries are dropped, and anything that isn't an array (NULL,
+ * corrupt JSON) → []. Exported for direct testing.
  */
 export function fieldEntriesFromStored(raw: unknown): RiskFieldConfigEntry[] {
   if (Array.isArray(raw)) {
@@ -138,17 +132,6 @@ export function fieldEntriesFromStored(raw: unknown): RiskFieldConfigEntry[] {
         ...(kind === 'count' && risk !== undefined ? { risk } : {}),
         ...(weight !== undefined ? { weight } : {}),
       });
-    }
-    return out;
-  }
-  if (raw && typeof raw === 'object') {
-    const legacy = raw as Record<string, unknown>;
-    const out: RiskFieldConfigEntry[] = [];
-    if (typeof legacy['flagged'] === 'string' && legacy['flagged']) {
-      out.push({ label: 'Flagged', fieldId: legacy['flagged'], kind: 'flag' });
-    }
-    if (typeof legacy['rejections'] === 'string' && legacy['rejections']) {
-      out.push({ label: 'Rejections', fieldId: legacy['rejections'], kind: 'count', warn: 2, risk: 4 });
     }
     return out;
   }

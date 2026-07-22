@@ -178,14 +178,17 @@ each tick (each isolated).
     excluded), joining the composite as extra `{score, weight}` terms —
     `compositeScore` takes a term array now, and `RiskMetricId` is only the four
     built-ins. `blocked` is **link-only** (an open inward Blocks link); a flag
-    field never ORs into it. Three degrade rules to keep: a fieldValues KEY absent
+    field never ORs into it. Two degrade rules to keep: a fieldValues KEY absent
     (old snapshot / field added since) evaluates to band `'none'`/score null —
-    never 0; a count key present-but-null reads 0 and bands ok; legacy `fields_json`
-    OBJECT rows convert at read time (`store.fieldEntriesFromStored`: flagged →
-    flag "Flagged", rejections → count "Rejections" 2/4, the two display-only user
-    fields dropped) and re-save as the array — **no migration**, the column stayed
-    TEXT. Entry validation is `@shared/risk-fields`'s `validateFieldEntries`, wired
-    into `candidateConfigError` (same structured-issues 400 on PUT and preview).
+    never 0; a count key present-but-null reads 0 and bands ok. `fields_json` is
+    read tolerantly by `store.fieldEntriesFromStored` (malformed entries dropped;
+    any non-array → []). The pre-generalization `{flagged?, rejections?, ...}`
+    OBJECT shape is no longer converted at read time — a one-off
+    `scripts/normalize-risk-fields.sql` (npm `db:cleanup:risk-fields[:remote]`)
+    migrated those rows to the array shape; run it before deploying if any org
+    might still hold the object. Entry validation is `@shared/risk-fields`'s
+    `validateFieldEntries`, wired into `candidateConfigError` (same
+    structured-issues 400 on PUT and preview).
     NOTE: a legacy composite blob still carrying a `rejections` weight 400s on a
     raw re-PUT; the client editor strips it on load, so editor saves are fine.
     `alerts.ts` drivers append firing field metrics under the admin's label.
