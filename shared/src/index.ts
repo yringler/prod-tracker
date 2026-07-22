@@ -3,3 +3,4 @@ export * from './contracts';
 export * from './notifications';
 export * from './risk';
 export * from './risk-cutoffs';
+export * from './risk-fields';

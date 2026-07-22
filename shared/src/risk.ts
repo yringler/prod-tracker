@@ -40,9 +40,10 @@ export interface RiskCutoffs {
  *  advisory. See `validateCutoffs` in `risk-cutoffs.ts`. */
 export interface RiskConfigIssue extends ApiIssue {
   metric?: 'idle' | 'cycle' | 'timeInColumn';
-  /** Index into that metric's rule array. */
+  /** Index into that metric's rule array — or, for field-entry issues, into the
+   *  `fields` entry array (see `risk-fields.ts`). */
   index?: number;
-  field?: 'column' | 'size' | 'warn' | 'risk' | 'default';
+  field?: 'column' | 'size' | 'warn' | 'risk' | 'default' | 'label' | 'fieldId' | 'kind' | 'weight';
 }
 
 /** Composite = weighted power-mean of the per-metric scores. p=1 → weighted
@@ -200,6 +201,37 @@ export interface RiskBoardResponse {
   degradedReason: RiskDegradedReason | null;
   /** True when no snapshot exists yet — the cron will produce one shortly. */
   refreshing: boolean;
+}
+
+/** How a configured Jira field is scored. Resolved from Jira's `schema.type` at
+ *  pick time (`number` → `count`, anything else → `flag`) and STORED on the entry,
+ *  so behavior stays stable even if field discovery later changes its mind. */
+export type RiskFieldKind = 'count' | 'flag';
+
+/** One admin-configured Jira field, scored as its own composite metric under the
+ *  admin's label. Field ids are discovered/admin-picked — never hardcoded (repo
+ *  invariant). Validated by `validateFieldEntries` in `risk-fields.ts`. */
+export interface RiskFieldConfigEntry {
+  /** Admin-given display label; non-empty, unique across entries. */
+  label: string;
+  /** Jira field id (e.g. `customfield_1002`, `labels`); unique across entries. */
+  fieldId: string;
+  kind: RiskFieldKind;
+  /** count kind only — required there, with 0 < warn < risk. Flag entries omit both. */
+  warn?: number;
+  risk?: number;
+  /** Composite weight; absent = 1, 0 = excluded from the composite. */
+  weight?: number;
+}
+
+/** One of the site's Jira fields, as offered by the admin field picker. */
+export interface RiskFieldMeta {
+  id: string;
+  name: string;
+  /** Jira's `schema.type`; null when Jira reports none. */
+  schemaType: string | null;
+  /** The kind an entry picking this field would get (derived from `schemaType`). */
+  kind: RiskFieldKind;
 }
 
 /** Optional per-org custom-field ids. All discovered/admin-picked — never
