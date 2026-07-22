@@ -63,7 +63,13 @@ Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` v
   on emit; inline errors come from the shared `validateFieldEntries`, so an error
   shown here is exactly an error the server would 400. Same
   controlled-on-load/uncontrolled-after-mount contract as the cutoffs editor: the
-  parent binds its SERVER entries, never the draft from `(entriesChange)`.
+  parent binds its SERVER entries, never the draft from `(entriesChange)`. The three
+  warn/risk/weight `wa-number-input`s carry `without-steppers` and their `.mini`
+  width floor is annotated arithmetic: `wa-number-input` spends ~58px of chrome
+  (host/base inline padding + the input's own 14+14px) before a digit renders, and
+  each stepper adds 34px — at the old 90px WITH steppers the content box was 0px and
+  every value was clipped. Sizing a `wa-number-input` in a narrow slot, keep
+  `width - 58 >= ~40px` (or budget 34px more per stepper if you keep them).
 - `field-picker.component.ts` — `<sp-field-picker>`, a pencil-opens-a-modal picker
   over ALL the site's Jira fields. The collapsed control is a one-line display of the
   current field (`resolveFieldDisplay`) plus a `pen-to-square` `<wa-button>`; the

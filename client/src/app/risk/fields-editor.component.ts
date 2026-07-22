@@ -79,6 +79,7 @@ const SEED_RISK = 4;
                 <wa-number-input
                   size="small"
                   min="0"
+                  without-steppers
                   aria-label="warn threshold"
                   [value]="row.warnText"
                   (input)="patch(i, { warnText: inputValue($event) })"
@@ -88,6 +89,7 @@ const SEED_RISK = 4;
                 <wa-number-input
                   size="small"
                   min="0"
+                  without-steppers
                   aria-label="risk threshold"
                   [value]="row.riskText"
                   (input)="patch(i, { riskText: inputValue($event) })"
@@ -98,6 +100,7 @@ const SEED_RISK = 4;
                   size="small"
                   min="0"
                   step="0.5"
+                  without-steppers
                   aria-label="composite weight"
                   [value]="row.weightText"
                   (input)="patch(i, { weightText: inputValue($event) })"
@@ -165,8 +168,13 @@ const SEED_RISK = 4;
         font-size: 12px;
         color: var(--muted);
       }
+      /* \`wa-number-input\` spends ~58px on chrome before a digit renders (host/base
+         inline padding + the input's own 14+14px), and each stepper button costs
+         another 34px. At the original 90px WITH steppers the input was squeezed to
+         exactly its own padding — a 0px content box, \`overflow: clip\`, every value
+         invisible. Keep \`without-steppers\` on these, and keep width - 58 >= ~40px. */
       .mini wa-number-input {
-        width: 90px;
+        width: 110px;
       }
       .err {
         color: var(--risk);
