@@ -3,8 +3,17 @@
 // better-sqlite3 (see worker/test/support/sqlite-d1.ts). Keeping the DAO behind
 // this interface is what lets the privacy-invariant tests run real SQL.
 
+/** The billing-relevant slice of D1's per-query `meta` (absent in the sqlite test
+ *  backing). Read by the usage meter (worker/src/usage/meter.ts). */
+export interface D1Meta {
+  changes?: number;
+  rows_read?: number;
+  rows_written?: number;
+}
+
 export interface D1Result<T> {
   results: T[];
+  meta?: D1Meta;
 }
 
 /**
@@ -13,7 +22,7 @@ export interface D1Result<T> {
  * top-level `changes`. `runChanges` reads whichever is present.
  */
 export interface D1RunResult {
-  meta?: { changes?: number };
+  meta?: D1Meta;
   changes?: number;
 }
 

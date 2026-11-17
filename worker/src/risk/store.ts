@@ -319,18 +319,28 @@ export async function getState(
   return r ? mapState(r) : null;
 }
 
-/** The demand signal: someone opened this board, so refresh it on the fast cadence. */
+/** How stale last_viewed_at must be before a view re-stamps it. The board page
+ *  polls every 20 s, and only "viewed within ACTIVE_VIEW_WINDOW_MS (30 min)"
+ *  matters to the scheduler, so stamping every poll was pure write volume. */
+export const VIEW_STAMP_INTERVAL_MS = 5 * 60_000;
+
+/** The demand signal: someone opened this board, so refresh it on the fast
+ *  cadence. Throttled in SQL: the conflict update is skipped (0 rows written)
+ *  while the stored stamp is younger than VIEW_STAMP_INTERVAL_MS. */
 export async function markViewed(
   env: Env,
   cloudId: string,
   boardId: number,
   atIso: string = nowIso(),
 ): Promise<void> {
+  const staleBefore = new Date(Date.parse(atIso) - VIEW_STAMP_INTERVAL_MS).toISOString();
   await env.DB.prepare(
     `INSERT INTO risk_board_state (cloud_id, board_id, last_viewed_at) VALUES (?, ?, ?)
-     ON CONFLICT(cloud_id, board_id) DO UPDATE SET last_viewed_at = excluded.last_viewed_at`,
+     ON CONFLICT(cloud_id, board_id) DO UPDATE SET last_viewed_at = excluded.last_viewed_at
+     WHERE risk_board_state.last_viewed_at IS NULL
+        OR risk_board_state.last_viewed_at <= ?`,
   )
-    .bind(cloudId, boardId, atIso)
+    .bind(cloudId, boardId, atIso, staleBefore)
     .run();
 }
 

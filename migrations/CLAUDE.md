@@ -14,7 +14,7 @@ and points rather than duplicating them.
   table, so each file runs **once, in order**.
 - Config lives in [`../wrangler.toml`](../wrangler.toml): the `[[d1_databases]]`
   binding (`DB`, database `storypoint-tracker`) sets `migrations_dir = "migrations"`.
-- Current files: `0001_initial_schema.sql` … `0013_channel_optin_and_email_org.sql`
+- Current files: `0001_initial_schema.sql` … `0014_usage_stats_and_last_active.sql`
   (zero-padded, one per change — see the folder listing).
 
 ## Current schema (what the migrations establish)
@@ -23,7 +23,7 @@ All timestamps are ISO-8601 **TEXT (UTC)**; points/money are `REAL`. One line pe
 
 - **`oauth_tokens`** — one Atlassian 3LO grant per `account_id` (rotating refresh token + cached access token).
 - **`user_sites`** — the sites (`cloud_id`s) a token can reach; the org/identity boundary for aggregates.
-- **`users`** — per-account profile: `display_name`, `cloud_id`, `needs_reauth`, plus `daily_goal` + `avatar_url` (added in 0004).
+- **`users`** — per-account profile: `display_name`, `cloud_id`, `needs_reauth`, plus `daily_goal` + `avatar_url` (added in 0004), `last_active_at` (added 0014; last authenticated request, hour resolution — stamped by `http.authenticate`, deleted with the row on erasure).
 - **`admins`** — who holds admin (`appointed_by` / `appointed_at`).
 - **`teams`** — team id + `cloud_id` + name.
 - **`team_memberships`** — effective-dated (`effective_from` / nullable `effective_to`); at most one open row per account.
@@ -41,6 +41,7 @@ All timestamps are ISO-8601 **TEXT (UTC)**; points/money are `REAL`. One line pe
 - **`email_links`** — email adapter-owned delivery addresses (added 0007).
 - **`email_org_config`** — per-org (cloud_id) admin-entered email transport config, the twin of `zulip_org_config`: AES-256-GCM `secrets_enc` over `{apiKey,fromAddress}` under the `SECRETS_KEY` worker secret, plus `from_address` **duplicated in the clear on purpose** (the one non-secret provisioning value, echoed back to the admin UI). Added 0013; the legacy `EMAIL_API_KEY`/`EMAIL_FROM` env pair remains a fallback for orgs with no row.
 - **`risk_board_config`** / **`risk_snapshots`** / **`risk_board_state`** — Sprint Risk Board, feature-owned (added 0010): per-org admin config (board ids, cutoff/composite/schedule JSON, the `RiskFieldConfigEntry[]` field-mapping list, the refresher account — nothing secret, so no encryption), one overwrite-only snapshot blob per board, and the demand-driven refresh state (last viewed/refreshed, consecutive failures, `degraded_reason`). `risk_board_config.degraded_notified_at` / `degraded_notified_reason` (added 0011) are the per-ORG "we already told the admins" stamp for a degraded episode, written only by the claim-before-send CAS in `store.ts` (`claimDegradedNotice` / `clearDegradedNotice`) and deliberately absent from `putConfig`'s upsert so an admin re-save can't wipe an open episode. Touched ONLY by [`../worker/src/risk/store.ts`](../worker/src/risk/store.ts) via `env.DB`, never by `dao.ts`; they hold Jira data, not effort ratings, so the privacy invariant is unaffected.
+- **`usage_stats`** — the D1 usage meter (added 0014): additive counters per `(bucket` = ISO UTC hour, `source` = route/cron job`)`; no account column. Written only by `worker/src/usage/store.ts` (raw binding), pruned to 30 days on each cron tick.
 - **`zulip_org_config`** — per-org (cloud_id) admin-entered Zulip credentials: AES-256-GCM `secrets_enc` under the `SECRETS_KEY` worker secret + `webhook_token_hash` (sha256; unique — routes inbound webhooks to the org). Added 0008.
 
 **Privacy-relevant columns:** `ratings.rater_account_id` is PD; `ratings.team_id_at_rating`

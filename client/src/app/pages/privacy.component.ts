@@ -57,6 +57,15 @@ import { RouterLink } from "@angular/router";
                     endpoint your browser provides so we can prompt you to rate
                     tickets as they change status.
                 </li>
+                <li>
+                    <strong>Activity and service usage.</strong> We record when
+                    you last used the app (to the nearest hour) and when you
+                    last signed in. The people who operate this service can see
+                    that, together with your name, account ID, sites and enabled
+                    notification channels, to understand how the service is used.
+                    They do not see your ratings or notes. We also keep
+                    anonymous, per-feature counts of database usage for 30 days.
+                </li>
             </ul>
 
             <h2>How we use your information</h2>

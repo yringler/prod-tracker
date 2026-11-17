@@ -1,6 +1,6 @@
 import { Dao } from './db/dao';
 import type { Env } from './env';
-import { authenticate, error, requireAdmin } from './http';
+import { authenticate, error, isGlobalAdmin, requireAdmin } from './http';
 import { runPoll } from './cron/poller';
 import { reportPersonalData } from './cron/pd-report';
 import { escalate } from './cron/escalate';
@@ -46,23 +46,41 @@ import {
 import { resolve } from './notifications/registry';
 import { refreshRiskBoards } from './risk/refresh';
 import { riskAdminRoutes, riskRoutes } from './risk/routes';
+import { globalOverview } from './routes/global';
+import { UsageMeter, meterD1, routeLabel } from './usage/meter';
+import { accumulate, maybeFlush } from './usage/store';
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  // `exec` is always supplied by the runtime; optional only so tests can call fetch(req, env).
+  async fetch(req: Request, env: Env, exec?: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) {
       // Everything else is the Angular SPA (static assets + SPA fallback).
       return env.ASSETS.fetch(req);
     }
+    // Every API request runs against a METERED binding so its D1 rows read /
+    // written are attributed to this route (see usage/meter.ts). The tallies
+    // flush lazily (usage/store.ts), off the response path via waitUntil.
+    const meter = new UsageMeter(routeLabel(req.method, url.pathname));
+    const menv: Env = { ...env, DB: meterD1(env.DB, meter) };
     try {
-      return await route(req, env, url);
+      return await route(req, menv, url);
     } catch (e) {
       log.error('route: unhandled error', { method: req.method, path: url.pathname, ...errFields(e) });
       return error(500, 'internal error');
+    } finally {
+      accumulate(meter);
+      const flush = maybeFlush(env.DB).catch((e) => log.warn('usage: flush failed', errFields(e)));
+      if (exec) exec.waitUntil(flush);
+      else await flush;
     }
   },
 
-  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+  async scheduled(_event: ScheduledController, rawEnv: Env): Promise<void> {
+    // Metered like fetch(); the source label is switched per job so the operator
+    // page can say WHICH cron job is spending the database's writes.
+    const meter = new UsageMeter('cron:poll');
+    const env: Env = { ...rawEnv, DB: meterD1(rawEnv.DB, meter) };
     const dao = new Dao(env.DB);
     // One id per tick so every poll line correlates in Logs Explorer.
     const tick = log.child({ runId: crypto.randomUUID() });
@@ -74,6 +92,7 @@ export default {
       tick.error('poll: runPoll threw', errFields(e));
     }
     // GDPR personal-data reporting. Must never break polling, so it's isolated.
+    meter.setSource('cron:pd-report');
     try {
       await reportPersonalData(env, dao);
     } catch (e) {
@@ -81,6 +100,7 @@ export default {
     }
     // Escalate un-acted pending prompts to fallback channels. Isolated so it can
     // never abort the poll or the pd-report job.
+    meter.setSource('cron:escalate');
     try {
       await escalate(env, dao, tick);
     } catch (e) {
@@ -88,10 +108,19 @@ export default {
     }
     // Sprint risk board: recompute the due boards' snapshots. Isolated like the
     // others — a Jira hiccup here must never abort the poll.
+    meter.setSource('cron:risk');
     try {
       await refreshRiskBoards(env, dao, tick);
     } catch (e) {
       tick.error('risk refresh failed', errFields(e));
+    }
+    // Usage meter: always flush on the tick (and prune old buckets). If this
+    // isolate also served requests, their buffered tallies drain here too.
+    accumulate(meter);
+    try {
+      await maybeFlush(rawEnv.DB, { force: true, prune: true });
+    } catch (e) {
+      tick.warn('usage: flush failed', errFields(e));
     }
     tick.info('tick: done', { ms: Date.now() - startedAt });
   },
@@ -180,6 +209,14 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (aggMatch && m === 'GET') return teamAggregate(ctx, decodeURIComponent(aggMatch[1]!));
 
   if (p === '/api/teams' && m === 'GET') return adminListTeams(ctx);
+
+  // --- Operator routes (GLOBAL_ADMIN_ACCOUNT_IDS secret) ---
+  // 404 rather than 403 for everyone else: don't advertise the endpoint.
+  if (p.startsWith('/api/global/')) {
+    if (!isGlobalAdmin(env, ctx.accountId)) return error(404, 'not found');
+    if (p === '/api/global/overview' && m === 'GET') return globalOverview(ctx);
+    return error(404, 'not found');
+  }
 
   // Sprint risk board (feature-owned; see worker/src/risk/). Reads stored
   // snapshots only — no Jira calls on this path.

@@ -30,6 +30,18 @@ import { NotificationChannelsComponent } from '../ui/notification-channels.compo
       </div>
 
       <div class="panel">
+        <h3 style="margin-top:0">Your account ID</h3>
+        <p class="muted">
+          Your Atlassian account ID. An admin or the operator of this app may ask for it
+          (e.g. to grant you access).
+        </p>
+        <div class="row" style="gap:8px;flex-wrap:nowrap">
+          <code style="word-break:break-all">{{ me.accountId }}</code>
+          <wa-copy-button [value]="me.accountId"></wa-copy-button>
+        </div>
+      </div>
+
+      <div class="panel">
         <h3 style="margin-top:0">Daily goal</h3>
         <p class="muted">
           How many claimed points make a full day for you? The tracker will show

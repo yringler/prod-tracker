@@ -111,6 +111,13 @@ Short pointers — read the referenced code/tests before changing anything nearb
   Software honors no classic scopes: see README "Atlassian app setup".
 - **Done events bucket by changelog timestamp**, into the sprint whose window contains
   that time — not the issue's current sprint.
+- **Write volume is a budget.** The cron runs every 3 minutes (480×/day), so any
+  unconditional write in the poll loop is multiplied by 480 × rows. Diff before
+  writing (`dao.upsertChangedSprints`) and throttle "touch" stamps in SQL
+  (`risk/store.ts:markViewed`, `users.last_active_at` in `http.ts:authenticate`).
+  Re-upserting every sprint per tick once burned ~100k writes/day — the D1 Free
+  daily cap. The operator page (`/admin/global`) shows rows written per route/job;
+  check it after touching anything that writes on a hot path.
 - **Schema mirroring:** `worker/src/db/schema.sql` mirrors the full migrated schema and
   backs the tests. Any migration change must keep it in sync — see `migrations/CLAUDE.md`.
 - **Angular templates are fully type-checked.** `client/tsconfig.app.json` sets
