@@ -221,3 +221,26 @@ describe('claimed-trends — same personal/team split', () => {
     expect(blob).not.toContain(BOB);
   });
 });
+
+describe('operator overview — cross-org, but no per-account effort data', () => {
+  const RATING_KEYS = /rating|claim|point|pending|done|sprint/i;
+
+  it('operatorUsers rows carry identity/activity only, never rating figures', async () => {
+    await dao.upsertSite(ALICE, { cloudId: CLOUD, name: 'Site', siteUrl: 'https://s' });
+    const users = await dao.operatorUsers(new Date().toISOString());
+    expect(users.map((u) => u.accountId).sort()).toEqual([ALICE, BOB]);
+    for (const u of users) {
+      for (const k of Object.keys(u)) expect(k).not.toMatch(RATING_KEYS);
+    }
+  });
+
+  it('operatorOrgs counts ratings per org with no account column', async () => {
+    await dao.upsertSite(ALICE, { cloudId: CLOUD, name: 'Site', siteUrl: 'https://s' });
+    await dao.upsertSite(BOB, { cloudId: CLOUD, name: 'Site', siteUrl: 'https://s' });
+    const orgs = await dao.operatorOrgs('2000-01-01T00:00:00.000Z');
+    expect(orgs).toHaveLength(1);
+    expect(orgs[0]!.ratingsTotal).toBe(2);
+    expect(orgs[0]!.users).toBe(2);
+    for (const k of Object.keys(orgs[0]!)) expect(k).not.toMatch(/account|rater/i);
+  });
+});

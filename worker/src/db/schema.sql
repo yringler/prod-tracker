@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS users (
   last_seen_at  TEXT,
   needs_reauth  INTEGER NOT NULL DEFAULT 0,
   daily_goal    REAL, -- self-set daily claimed-points goal; NULL = not set
-  avatar_url    TEXT  -- Atlassian profile picture captured at login
+  avatar_url    TEXT, -- Atlassian profile picture captured at login
+  last_active_at TEXT -- last authenticated request, hour-resolution (added 0014)
 );
 
 CREATE TABLE IF NOT EXISTS admins (
@@ -327,4 +328,17 @@ CREATE TABLE IF NOT EXISTS risk_alert_prefs (
   account_id  TEXT PRIMARY KEY,
   muted       INTEGER NOT NULL DEFAULT 0,   -- 1 = opted out of struggling-ticket nudges
   updated_at  TEXT NOT NULL
+);
+
+-- keep in sync with migrations/0014_usage_stats_and_last_active.sql
+-- Hourly D1 usage meter per source (route or cron job). No account column.
+-- Written ONLY by worker/src/usage/store.ts.
+CREATE TABLE IF NOT EXISTS usage_stats (
+  bucket        TEXT NOT NULL,
+  source        TEXT NOT NULL,
+  invocations   INTEGER NOT NULL DEFAULT 0,
+  queries       INTEGER NOT NULL DEFAULT 0,
+  rows_read     INTEGER NOT NULL DEFAULT 0,
+  rows_written  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, source)
 );

@@ -237,6 +237,21 @@ each tick (each isolated).
     the `worker/src/risk/**` entry in the `.eslintrc.cjs` registry-seam override +
     `shared/src/risk.ts` / `shared/src/risk-cutoffs.ts` and their barrel lines +
     a DROP TABLE migration.
+- [`src/usage/`](src/usage/) — the **D1 usage meter**. `meter.ts` (pure: `meterD1`
+  wraps a `D1Like` and tallies `meta.rows_read`/`rows_written` per source label;
+  `first()` is implemented over `all()` because D1's `first()` drops `meta`;
+  `routeLabel` collapses ids to `:id`), `store.ts` (the ONLY code touching
+  `usage_stats`, always via the RAW binding: per-isolate buffer, `maybeFlush` at most
+  every `FLUSH_INTERVAL_MS` or forced+pruned on each cron tick, plus the reads).
+  `index.ts` builds a metered `Env` per `fetch`/`scheduled` (`meter.setSource` per
+  cron job) — so everything downstream, `dao` and `env.DB` alike, is metered with no
+  call-site changes. Keep new DB access going through `env.DB`/`dao` and it is
+  metered for free.
+- [`src/routes/global.ts`](src/routes/global.ts) — the operator overview
+  (`GET /api/global/overview`), gated in `index.ts` by `http.isGlobalAdmin` (the
+  `GLOBAL_ADMIN_ACCOUNT_IDS` secret; 404 for non-operators, org admins included). Its
+  queries are the `operator*` methods in `dao.ts` — ratings counted per org only,
+  user rows identity/activity only (pinned in `privacy.test.ts`).
 - [`src/push/webpush.ts`](src/push/webpush.ts) — VAPID + RFC 8291 `aes128gcm` web
   push on WebCrypto (no Node `web-push` dependency).
 - [`src/notifications/`](src/notifications/) — the pluggable notification layer.
@@ -342,6 +357,20 @@ so the DB write happens once per token, not once per Jira call. Changing
 `OAUTH_SCOPE_LIST` therefore forces every existing user through one re-authorize —
 say so in the release notes, and tick the scope on the app in the Atlassian
 developer console first (listing it in code only changes the consent URL).
+
+### Write-volume discipline (D1 bills rows written)
+The cron fires 480×/day, so a per-row write inside the poll loop costs 480 × rows/day.
+- `refreshSprints` collects every board's sprints and calls
+  `dao.upsertChangedSprints`, which reads the stored rows once and writes only new or
+  changed sprints (deduped by id — a sprint on two boards keeps the last listing, so
+  it doesn't flip-flop). The old unconditional per-sprint upsert was ~all of the
+  database's ~100k writes/day.
+- "Touch" stamps are throttled **in SQL** so a skipped stamp writes 0 rows:
+  `risk/store.ts:markViewed` (`ON CONFLICT … DO UPDATE … WHERE last_viewed_at <= ?`,
+  `VIEW_STAMP_INTERVAL_MS` = 5 min; the board page polls every 20 s) and
+  `dao.touchLastActive` (hourly, `LAST_ACTIVE_RESOLUTION_MS`; `getSession` LEFT JOINs
+  `users.last_active_at` so `authenticate()` decides without an extra read).
+- Verify on `/admin/global` → "Where the database work comes from" after deploying.
 
 ### Admin guardrails
 [`src/routes/admin.ts`](src/routes/admin.ts) `revokeAdmin`; tested in

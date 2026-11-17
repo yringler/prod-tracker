@@ -22,6 +22,9 @@ export interface MeResponse {
   avatarUrl: string | null;
   /** Self-set daily claimed-points goal (drives the tracker's goal panel); null = not set. */
   dailyGoal: number | null;
+  /** Listed in the GLOBAL_ADMIN_ACCOUNT_IDS secret (an operator of this deployment):
+   *  unlocks /admin/global. Independent of `role`. */
+  isGlobalAdmin: boolean;
 }
 
 /** PUT /api/me/settings — self-scoped preferences. `dailyGoal: null` clears the goal. */
@@ -263,4 +266,84 @@ export interface ApiError {
   /** Present when the handler could say *which* parts of the payload were bad.
    *  Additive: every existing consumer that reads only `error`/`code` is fine. */
   issues?: ApiIssue[];
+}
+
+// --- Operator (global admin) overview: GET /api/global/overview -------------
+// Gated by the GLOBAL_ADMIN_ACCOUNT_IDS worker secret. Cross-org, but still
+// honours the privacy invariant: ratings appear only as per-ORG counts, never
+// per account — the user list carries identity + activity, no effort data.
+
+/** D1 usage for one source (a route like "GET /api/pending" or a cron job like
+ *  "cron:poll") summed over a window. rowsRead/rowsWritten are D1's billing units. */
+export interface UsageBySource {
+  source: string;
+  invocations: number;
+  queries: number;
+  rowsRead: number;
+  rowsWritten: number;
+}
+
+export interface UsageHourPoint {
+  /** ISO UTC hour start. */
+  bucket: string;
+  rowsRead: number;
+  rowsWritten: number;
+  invocations: number;
+}
+
+export interface GlobalOrgSummary {
+  cloudId: string;
+  name: string;
+  siteUrl: string | null;
+  users: number;
+  activeUsers7d: number;
+  ratingsTotal: number;
+  ratings7d: number;
+  pending: number;
+  teams: number;
+  sprints: number;
+  riskBoards: number;
+}
+
+export interface GlobalUserSummary {
+  accountId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  /** Names of the sites this account's grant reaches. */
+  sites: string[];
+  /** Last authenticated request (hour resolution); null = not since 0014. */
+  lastActiveAt: string | null;
+  /** Last login / GDPR profile refresh. */
+  lastSeenAt: string | null;
+  activeSessions: number;
+  needsReauth: boolean;
+  isOrgAdmin: boolean;
+  /** Enabled notification channels. */
+  channels: string[];
+}
+
+export interface GlobalOverviewResponse {
+  generatedAt: string;
+  totals: {
+    users: number;
+    activeUsers24h: number;
+    activeUsers7d: number;
+    orgs: number;
+    ratingsTotal: number;
+    ratings7d: number;
+    pending: number;
+    activeSessions: number;
+  };
+  usage: {
+    /** Earliest metered hour retained; null = meter has never flushed. */
+    trackingSince: string | null;
+    last24h: UsageBySource[];
+    last7d: UsageBySource[];
+    /** All sources summed, per hour, last 7 days. */
+    hourly: UsageHourPoint[];
+  };
+  /** Row count per table (sqlite_master), largest first. */
+  tables: Array<{ name: string; rows: number }>;
+  orgs: GlobalOrgSummary[];
+  users: GlobalUserSummary[];
 }

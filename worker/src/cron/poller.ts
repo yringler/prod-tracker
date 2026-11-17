@@ -4,7 +4,7 @@
 
 import { isDoneTransition, isStaleTransition, sprintForTimestamp } from '@shared/domain';
 import type { StatusTransition } from '@shared/domain';
-import type { Dao, OAuthTokenRow } from '../db/dao';
+import type { Dao, OAuthTokenRow, SprintRow } from '../db/dao';
 import type { Env } from '../env';
 import { extractStatusTransitions, diffNewTransitions, transitionOwnership } from '../jira/changelog';
 import { selectPushTransition } from '../pending';
@@ -215,7 +215,7 @@ async function refreshSprints(
   });
   if (!boards) return;
 
-  let n = 0;
+  const all: SprintRow[] = [];
   let skipped = 0;
   for (const board of boards) {
     // Only Scrum boards have sprints; the sprint endpoint 400s for Kanban (and
@@ -234,18 +234,21 @@ async function refreshSprints(
       continue;
     }
     for (const s of sprints) {
-      await dao.upsertSprint({
-        cloudId,
+      all.push({
         sprintId: s.id,
         boardId: board.id,
         name: s.name,
         startAt: s.startDate ?? null,
         endAt: s.endDate ?? null,
       });
-      n++;
     }
   }
-  log.info('poll: sprints refreshed', { boards: boards.length, sprints: n, skipped });
+  // Diff against what's stored and write only new/changed rows: re-upserting
+  // every (mostly closed, immutable) sprint each 3-minute tick was the bulk of
+  // the database's write volume.
+  const written = await dao.upsertChangedSprints(cloudId, all);
+  const n = all.length;
+  log.info('poll: sprints refreshed', { boards: boards.length, sprints: n, written, skipped });
 }
 
 async function pushPending(

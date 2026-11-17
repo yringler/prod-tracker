@@ -57,12 +57,37 @@ export interface AuthedCtx {
   env: Env;
 }
 
+/** Resolution of users.last_active_at: re-stamped at most once per this window,
+ *  so activity tracking costs ≤24 writes per user per day, not one per request. */
+export const LAST_ACTIVE_RESOLUTION_MS = 60 * 60_000;
+
 export async function authenticate(req: Request, env: Env, dao: Dao): Promise<AuthedCtx | null> {
   const sid = parseCookies(req)['sid'];
   if (!sid) return null;
   const session = await dao.getSession(sid);
   if (!session) return null;
+  const nowMs = Date.now();
+  const last = session.lastActiveAt ? Date.parse(session.lastActiveAt) : null;
+  if (last === null || nowMs - last >= LAST_ACTIVE_RESOLUTION_MS) {
+    await dao.touchLastActive(
+      session.accountId,
+      new Date(nowMs).toISOString(),
+      new Date(nowMs - LAST_ACTIVE_RESOLUTION_MS).toISOString(),
+    );
+  }
   return { accountId: session.accountId, cloudId: session.cloudId, sid, dao, env };
+}
+
+/** Operator check: is this account listed in the GLOBAL_ADMIN_ACCOUNT_IDS secret?
+ *  Deliberately NOT implied by org admin or BOOTSTRAP_ADMIN_ACCOUNT_ID. */
+export function isGlobalAdmin(env: Env, accountId: string): boolean {
+  const raw = env.GLOBAL_ADMIN_ACCOUNT_IDS;
+  if (!raw) return false;
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .includes(accountId);
 }
 
 export async function requireAdmin(ctx: AuthedCtx): Promise<boolean> {

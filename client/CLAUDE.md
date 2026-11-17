@@ -30,8 +30,9 @@ Pages — `src/app/pages/` (each a standalone route component):
 - `history.component.ts` — this-week personal history, grouped by local day.
 - `aggregates.component.ts` — stats: personal-vs-team claimed trends + per-team claimed-vs-done tables/charts.
 - `tools.component.ts` — client-side utilities; currently a copyable LLM standup prompt (`buildStandupPrompt`, pure/exported).
-- `settings.component.ts` — profile row + daily-goal editor (`MAX_DAILY_GOAL`).
+- `settings.component.ts` — profile row, **your account ID** (copyable — what an operator pastes into `GLOBAL_ADMIN_ACCOUNT_IDS`), daily-goal editor (`MAX_DAILY_GOAL`).
 - `admin.component.ts` — teams, effective-dated memberships, admin appointment, done-status set, custom-field pickers, and per-site notification-channel config (a vendor-agnostic panel driven by each descriptor's `requestedFields`; secret values are write-only). The channel panel also renders the server's non-secret `summary` echo + a "Configured <date>" line and a **Remove configuration** button (`DELETE /api/admin/notifications/{ch}/config`), which turns a channel off site-wide. Uses **Signal Forms** (`@angular/forms/signals`) for the static fields (plain signals for the dynamic channel fields) and `ChangeDetectionStrategy.OnPush`.
+- `global-admin.component.ts` — `/admin/global`, the OPERATOR page (nav "Global", gated on `auth.isGlobalAdmin()` ← `MeResponse.isGlobalAdmin` ← the `GLOBAL_ADMIN_ACCOUNT_IDS` worker secret; the server 404s everyone else). Read-only: totals tiles (incl. 24h D1 rows read/written vs the Free-plan daily caps), an hourly UTC rows-written/read chart, a per-source usage table (route or cron job, 24h/7d), per-site counts, the user list (identity + activity only) and table row counts. Route `admin/global` is declared before `admin`; the Admin nav link uses `exact` active matching so both don't highlight.
 - `privacy.component.ts` — public privacy policy (auth-free; keep in sync with actual data practices).
 
 Feature slice — `src/app/risk/` (Sprint Risk Board, lazily loaded at `/risk` via
@@ -243,7 +244,7 @@ UI / charts — `src/app/ui/` (reusable):
 
 Services — `src/app/` (all `@Injectable({ providedIn: 'root' })`):
 - `api.service.ts` — typed client for every `/api/*` endpoint; returns RxJS `Observable`s.
-- `auth.service.ts` — session state (`me`, `loaded`, `isAdmin` signals); `login`/`logout`/`switchSite`, local `me` patching.
+- `auth.service.ts` — session state (`me`, `loaded`, `isAdmin`, `isGlobalAdmin` signals); `login`/`logout`/`switchSite`, local `me` patching.
 - `theme.service.ts` — light/dark `theme` signal; `effect` toggles `wa-dark`/`wa-light` on `<html>`, persists to `localStorage`, updates `theme-color`.
 - `push.service.ts` — registers `sw-push.js`, requests notification permission, subscribes via VAPID key, POSTs the subscription server-side.
 

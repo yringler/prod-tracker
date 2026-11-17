@@ -60,7 +60,13 @@ const PUBLIC_ROUTES = ["/privacy"];
                         >
                         @if (auth.isAdmin()) {
                             <a routerLink="/admin" routerLinkActive="active"
+                                [routerLinkActiveOptions]="{ exact: true }"
                                 >Admin</a
+                            >
+                        }
+                        @if (auth.isGlobalAdmin()) {
+                            <a routerLink="/admin/global" routerLinkActive="active"
+                                >Global</a
                             >
                         }
                     </ng-template>

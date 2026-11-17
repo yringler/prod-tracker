@@ -69,6 +69,31 @@ re-aggregation stays honest when points/teams change later.
 set. `BOOTSTRAP_ADMIN_ACCOUNT_ID` is a permanent recovery hatch. Cannot revoke the
 last admin or self-revoke as sole admin (`worker/test/admin-guard.test.ts`).
 
+**Operator (global admin)** — whoever runs this deployment, across every site. Not a
+DB role: it's the optional `GLOBAL_ADMIN_ACCOUNT_IDS` worker secret (comma-separated
+Atlassian account ids; each user's id is shown on **Settings → Your account ID**):
+
+```
+npx wrangler secret put GLOBAL_ADMIN_ACCOUNT_IDS
+```
+
+It unlocks **`/admin/global`** (`GET /api/global/overview`, which 404s for everyone
+else, org admins included): users with last-active/last-login, per-site counts, table
+row counts, and the **D1 usage meter** — rows read/written per route and per cron job,
+hourly, kept 30 days. The page shows ratings only as per-site counts; per-user rows
+are identity + activity, never effort data (pinned in `privacy.test.ts`).
+
+### D1 usage meter
+
+Every `/api/*` request and cron tick runs against a metering wrapper around the D1
+binding (`worker/src/usage/meter.ts`) that reads each query's `meta.rows_read` /
+`rows_written` — the units D1 bills — and attributes them to a source label
+(`GET /api/risk/board/:id`, `cron:poll`, …). Tallies buffer per isolate and flush at
+most once a minute (plus on every cron tick) as one additive upsert per
+(hour, source) into `usage_stats` (`worker/src/usage/store.ts`), so the meter costs a
+handful of writes per minute, not one per request. Approximate by design: an evicted
+isolate can lose < 1 min of request tallies.
+
 ## Develop
 
 ```bash

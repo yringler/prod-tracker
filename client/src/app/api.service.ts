@@ -11,6 +11,7 @@ import type {
   CreateTeamRequest,
   DoneStatusConfigRequest,
   FieldCandidatesResponse,
+  GlobalOverviewResponse,
   MeResponse,
   MyRatingsResponse,
   OrgMembersResponse,
@@ -57,6 +58,11 @@ export class ApiService {
 
   me(): Observable<MeResponse> {
     return this.http.get<MeResponse>('/api/me');
+  }
+
+  /** Operator-only (GLOBAL_ADMIN_ACCOUNT_IDS); 404s for everyone else. */
+  globalOverview(): Observable<GlobalOverviewResponse> {
+    return this.http.get<GlobalOverviewResponse>('/api/global/overview');
   }
   switchSite(cloudId: string): Observable<unknown> {
     return this.http.post('/api/session/site', { cloudId } satisfies SwitchSiteRequest);

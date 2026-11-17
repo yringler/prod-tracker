@@ -23,6 +23,12 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/settings.component').then((m) => m.SettingsComponent),
   },
   {
+    // Operator page (GLOBAL_ADMIN_ACCOUNT_IDS secret). Before 'admin' for clarity.
+    path: 'admin/global',
+    loadComponent: () =>
+      import('./pages/global-admin.component').then((m) => m.GlobalAdminComponent),
+  },
+  {
     path: 'admin',
     loadComponent: () => import('./pages/admin.component').then((m) => m.AdminComponent),
   },

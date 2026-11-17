@@ -10,6 +10,12 @@ export interface Env {
   OAUTH_REDIRECT_PATH: string;
   VAPID_SUBJECT: string;
   BOOTSTRAP_ADMIN_ACCOUNT_ID: string;
+  // OPTIONAL secret: comma-separated Atlassian account ids of OPERATORS — the
+  // people who run this deployment. Unlocks /admin/global (cross-org usage + the
+  // D1 usage meter). Distinct from per-org admin: an org admin manages one site's
+  // teams; an operator sees every site. Set with
+  // `wrangler secret put GLOBAL_ADMIN_ACCOUNT_IDS`; users find their id on Settings.
+  GLOBAL_ADMIN_ACCOUNT_IDS?: string;
   // LEGACY FALLBACK (deprecated): the From: address for escalation emails. Email is
   // admin-provisioned per org since 0013 (Admin → Notification channels →
   // email_org_config); this var is only used for orgs with no row, so existing

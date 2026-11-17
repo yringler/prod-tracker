@@ -8,6 +8,8 @@ export class AuthService {
   readonly me = signal<MeResponse | null>(null);
   readonly loaded = signal(false);
   readonly isAdmin = computed(() => this.me()?.role === 'admin');
+  /** Operator of this deployment (GLOBAL_ADMIN_ACCOUNT_IDS) — unlocks /admin/global. */
+  readonly isGlobalAdmin = computed(() => this.me()?.isGlobalAdmin === true);
 
   load(): void {
     this.api.me().subscribe({

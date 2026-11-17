@@ -10,6 +10,7 @@ import {
   type AuthedCtx,
   authenticate,
   error,
+  isGlobalAdmin,
   json,
   parseCookies,
   readJson,
@@ -114,6 +115,7 @@ export async function me(req: Request, env: Env, dao: Dao): Promise<Response> {
     needsReauth,
     avatarUrl: settings.avatarUrl,
     dailyGoal: settings.dailyGoal,
+    isGlobalAdmin: isGlobalAdmin(env, ctx.accountId),
   };
   return json(body);
 }

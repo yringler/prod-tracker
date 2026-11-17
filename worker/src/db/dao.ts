@@ -36,6 +36,14 @@ export interface SiteRow {
   siteUrl: string;
 }
 
+export interface SprintRow {
+  sprintId: number;
+  boardId: number;
+  name: string;
+  startAt: string | null;
+  endAt: string | null;
+}
+
 export interface PendingRow {
   pendingId: string;
   cloudId: string;
@@ -541,24 +549,61 @@ export class Dao {
 
   // --- Sprints ---------------------------------------------------------------
 
-  async upsertSprint(s: {
-    cloudId: string;
-    sprintId: number;
-    boardId: number;
-    name: string;
-    startAt: string | null;
-    endAt: string | null;
-  }): Promise<void> {
-    await this.db
+  async upsertSprint(s: SprintRow & { cloudId: string }): Promise<void> {
+    await this.upsertChangedSprints(s.cloudId, [s]);
+  }
+
+  /**
+   * Write only the sprints that are new or whose fields changed, in one batch.
+   * The poller re-lists every board's sprints (active+closed+future, up to 50 per
+   * board) on EVERY 3-minute tick; an unconditional upsert per sprint made that
+   * the dominant D1 write cost (boards x sprints x 480 ticks/day) even though
+   * closed sprints never change. Returns the number of rows written.
+   */
+  async upsertChangedSprints(cloudId: string, sprints: SprintRow[]): Promise<number> {
+    if (sprints.length === 0) return 0;
+    const { results } = await this.db
       .prepare(
-        `INSERT INTO sprints (cloud_id, sprint_id, board_id, name, start_at, end_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(cloud_id, sprint_id) DO UPDATE SET
-           board_id = excluded.board_id, name = excluded.name,
-           start_at = excluded.start_at, end_at = excluded.end_at`,
+        `SELECT sprint_id, board_id, name, start_at, end_at FROM sprints WHERE cloud_id = ?`,
       )
-      .bind(s.cloudId, s.sprintId, s.boardId, s.name, s.startAt, s.endAt)
-      .run();
+      .bind(cloudId)
+      .all<{
+        sprint_id: number;
+        board_id: number;
+        name: string;
+        start_at: string | null;
+        end_at: string | null;
+      }>();
+    const existing = new Map(results.map((r) => [r.sprint_id, r]));
+    // A sprint shared by two boards is listed twice; keep the LAST listing (the
+    // old per-row upsert's winner) so the comparison is stable tick to tick
+    // instead of flip-flopping board_id and rewriting forever.
+    const deduped = [...new Map(sprints.map((sp) => [sp.sprintId, sp])).values()];
+    const changed = deduped.filter((sp) => {
+      const e = existing.get(sp.sprintId);
+      return (
+        !e ||
+        e.board_id !== sp.boardId ||
+        e.name !== sp.name ||
+        e.start_at !== sp.startAt ||
+        e.end_at !== sp.endAt
+      );
+    });
+    if (changed.length === 0) return 0;
+    await this.db.batch(
+      changed.map((sp) =>
+        this.db
+          .prepare(
+            `INSERT INTO sprints (cloud_id, sprint_id, board_id, name, start_at, end_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(cloud_id, sprint_id) DO UPDATE SET
+               board_id = excluded.board_id, name = excluded.name,
+               start_at = excluded.start_at, end_at = excluded.end_at`,
+          )
+          .bind(cloudId, sp.sprintId, sp.boardId, sp.name, sp.startAt, sp.endAt),
+      ),
+    );
+    return changed.length;
   }
 
   async sprintWindows(cloudId: string): Promise<SprintWindow[]> {
@@ -859,17 +904,42 @@ export class Dao {
     return sid;
   }
 
-  async getSession(sid: string): Promise<{ accountId: string; cloudId: string } | null> {
+  /** `lastActiveAt` rides along (LEFT JOIN, same query) so `authenticate()` can
+   *  decide whether to stamp activity without an extra read per request. */
+  async getSession(
+    sid: string,
+  ): Promise<{ accountId: string; cloudId: string; lastActiveAt: string | null } | null> {
     const r = await this.db
-      .prepare(`SELECT account_id, cloud_id, expires_at FROM sessions WHERE session_id = ?`)
+      .prepare(
+        `SELECT s.account_id, s.cloud_id, s.expires_at, u.last_active_at
+         FROM sessions s LEFT JOIN users u ON u.account_id = s.account_id
+         WHERE s.session_id = ?`,
+      )
       .bind(sid)
-      .first<{ account_id: string; cloud_id: string; expires_at: string }>();
+      .first<{
+        account_id: string;
+        cloud_id: string;
+        expires_at: string;
+        last_active_at: string | null;
+      }>();
     if (!r) return null;
     if (Date.parse(r.expires_at) < Date.now()) {
       await this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).bind(sid).run();
       return null;
     }
-    return { accountId: r.account_id, cloudId: r.cloud_id };
+    return { accountId: r.account_id, cloudId: r.cloud_id, lastActiveAt: r.last_active_at };
+  }
+
+  /** Self-scoped activity stamp. The WHERE re-checks staleness so two concurrent
+   *  requests can't both write. */
+  async touchLastActive(accountId: string, atIso: string, staleBeforeIso: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE users SET last_active_at = ?
+         WHERE account_id = ? AND (last_active_at IS NULL OR last_active_at < ?)`,
+      )
+      .bind(atIso, accountId, staleBeforeIso)
+      .run();
   }
 
   async deleteSession(sid: string): Promise<void> {
@@ -1011,6 +1081,157 @@ export class Dao {
       .prepare(`UPDATE users SET display_name = ?, last_seen_at = ? WHERE account_id = ?`)
       .bind(displayName, at, accountId)
       .run();
+  }
+
+  // --- OPERATOR OVERVIEW (GLOBAL_ADMIN_ACCOUNT_IDS only) -----------------------
+  // Cross-org, reachable ONLY from routes/global.ts behind isGlobalAdmin(). Still
+  // honours the privacy invariant: ratings are counted per ORG (cloud_id), never
+  // per account, and the per-user rows carry identity/activity only — no rating,
+  // pending or done-event figures. privacy.test.ts pins that shape.
+
+  /** Every user with identity + activity fields. No effort data by design. */
+  async operatorUsers(nowIso: string): Promise<
+    Array<{
+      accountId: string;
+      displayName: string;
+      avatarUrl: string | null;
+      lastActiveAt: string | null;
+      lastSeenAt: string | null;
+      needsReauth: boolean;
+      isOrgAdmin: boolean;
+      activeSessions: number;
+      sites: string[];
+      channels: string[];
+    }>
+  > {
+    const [users, sites, sessions, channels, admins] = await Promise.all([
+      this.db
+        .prepare(
+          `SELECT account_id, display_name, avatar_url, last_active_at, last_seen_at, needs_reauth
+           FROM users`,
+        )
+        .all<{
+          account_id: string;
+          display_name: string;
+          avatar_url: string | null;
+          last_active_at: string | null;
+          last_seen_at: string | null;
+          needs_reauth: number;
+        }>(),
+      this.db.prepare(`SELECT account_id, name FROM user_sites`).all<{ account_id: string; name: string }>(),
+      this.db
+        .prepare(`SELECT account_id, COUNT(*) AS c FROM sessions WHERE expires_at > ? GROUP BY account_id`)
+        .bind(nowIso)
+        .all<{ account_id: string; c: number }>(),
+      this.db
+        .prepare(`SELECT account_id, channel FROM user_channels WHERE enabled = 1`)
+        .all<{ account_id: string; channel: string }>(),
+      this.db.prepare(`SELECT account_id FROM admins`).all<{ account_id: string }>(),
+    ]);
+    const group = (pairs: Array<[string, string]>): Map<string, string[]> => {
+      const m = new Map<string, string[]>();
+      for (const [k, v] of pairs) m.set(k, [...(m.get(k) ?? []), v]);
+      return m;
+    };
+    const sitesBy = group(sites.results.map((r) => [r.account_id, r.name]));
+    const chBy = group(channels.results.map((r) => [r.account_id, r.channel]));
+    const sessBy = new Map(sessions.results.map((r) => [r.account_id, r.c]));
+    const adminSet = new Set(admins.results.map((r) => r.account_id));
+    return users.results
+      .map((u) => ({
+        accountId: u.account_id,
+        displayName: u.display_name,
+        avatarUrl: u.avatar_url,
+        lastActiveAt: u.last_active_at,
+        lastSeenAt: u.last_seen_at,
+        needsReauth: u.needs_reauth === 1,
+        isOrgAdmin: adminSet.has(u.account_id),
+        activeSessions: sessBy.get(u.account_id) ?? 0,
+        sites: sitesBy.get(u.account_id) ?? [],
+        channels: chBy.get(u.account_id) ?? [],
+      }))
+      .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''));
+  }
+
+  /** Per-org (cloud_id) counts. Ratings are COUNTED per org — no sums, no raters. */
+  async operatorOrgs(since7dIso: string): Promise<
+    Array<{
+      cloudId: string;
+      name: string;
+      siteUrl: string | null;
+      users: number;
+      activeUsers7d: number;
+      ratingsTotal: number;
+      ratings7d: number;
+      pending: number;
+      teams: number;
+      sprints: number;
+      riskBoards: number;
+    }>
+  > {
+    type C = { cloud_id: string; c: number };
+    const count = (sql: string, ...binds: unknown[]) =>
+      this.db
+        .prepare(sql)
+        .bind(...binds)
+        .all<C>()
+        .then((r) => new Map(r.results.map((x) => [x.cloud_id, x.c])));
+    const [orgs, active, ratingsTotal, ratings7d, pending, teams, sprints, risk] = await Promise.all([
+      this.db
+        .prepare(
+          `SELECT us.cloud_id, MAX(us.name) AS name, MAX(us.site_url) AS site_url,
+                  COUNT(DISTINCT us.account_id) AS users
+           FROM user_sites us GROUP BY us.cloud_id`,
+        )
+        .all<{ cloud_id: string; name: string; site_url: string | null; users: number }>(),
+      count(
+        `SELECT us.cloud_id, COUNT(DISTINCT us.account_id) AS c
+         FROM user_sites us JOIN users u ON u.account_id = us.account_id
+         WHERE u.last_active_at >= ? GROUP BY us.cloud_id`,
+        since7dIso,
+      ),
+      count(`SELECT cloud_id, COUNT(*) AS c FROM ratings GROUP BY cloud_id`),
+      count(`SELECT cloud_id, COUNT(*) AS c FROM ratings WHERE rated_at >= ? GROUP BY cloud_id`, since7dIso),
+      count(`SELECT cloud_id, COUNT(*) AS c FROM pending_ratings GROUP BY cloud_id`),
+      count(`SELECT cloud_id, COUNT(*) AS c FROM teams GROUP BY cloud_id`),
+      count(`SELECT cloud_id, COUNT(*) AS c FROM sprints GROUP BY cloud_id`),
+      count(`SELECT cloud_id, json_array_length(boards_json) AS c FROM risk_board_config`),
+    ]);
+    return orgs.results
+      .map((o) => ({
+        cloudId: o.cloud_id,
+        name: o.name,
+        siteUrl: o.site_url,
+        users: o.users,
+        activeUsers7d: active.get(o.cloud_id) ?? 0,
+        ratingsTotal: ratingsTotal.get(o.cloud_id) ?? 0,
+        ratings7d: ratings7d.get(o.cloud_id) ?? 0,
+        pending: pending.get(o.cloud_id) ?? 0,
+        teams: teams.get(o.cloud_id) ?? 0,
+        sprints: sprints.get(o.cloud_id) ?? 0,
+        riskBoards: risk.get(o.cloud_id) ?? 0,
+      }))
+      .sort((a, b) => b.users - a.users);
+  }
+
+  /** Row count of every user table (excludes sqlite_/_cf_/d1_ internals). */
+  async operatorTableCounts(): Promise<Array<{ name: string; rows: number }>> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table'
+           AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'`,
+      )
+      .all<{ name: string }>();
+    // Names come from sqlite_master itself, never from input; still, refuse
+    // anything that isn't a plain identifier before interpolating it.
+    const names = results.map((r) => r.name).filter((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n));
+    if (names.length === 0) return [];
+    const counts = await Promise.all(
+      names.map((n) => this.db.prepare(`SELECT COUNT(*) AS c FROM "${n}"`).first<{ c: number }>()),
+    );
+    return names
+      .map((name, i) => ({ name, rows: counts[i]?.c ?? 0 }))
+      .sort((a, b) => b.rows - a.rows);
   }
 
   // --- AGGREGATES (team-grouped, sums only; never per-account) ---------------
